@@ -20,16 +20,16 @@ struct alignas(8) BootList {
 };
 static_assert(alignof(BootList) >= 8 && sizeof(BootList) % 8 == 0, "an aligned display-list buffer without padding");
 
-// "  o3sdk " and the build id, cut at kBootBuildChars, into `out`.
-constexpr char kLead[] = "  o3sdk ";
+// Two spaces and the build line, cut at kBootBuildChars, into `out`.
+constexpr char kLead[] = "  ";
 constexpr std::size_t kRestChars = sizeof(kLead) - 1 + kBootBuildChars;
 
-void compose_rest(const char* build_id, char (&out)[kRestChars + 1]) noexcept {
+void compose_rest(const char* build, char (&out)[kRestChars + 1]) noexcept {
   std::size_t n = 0;
   for (const char* p = kLead; *p != '\0'; ++p) {
     out[n++] = *p;
   }
-  for (const char* p = build_id != nullptr ? build_id : ""; *p != '\0' && n < kRestChars; ++p) {
+  for (const char* p = build != nullptr ? build : ""; *p != '\0' && n < kRestChars; ++p) {
     out[n++] = *p;
   }
   out[n] = '\0';
@@ -37,7 +37,7 @@ void compose_rest(const char* build_id, char (&out)[kRestChars + 1]) noexcept {
 
 }  // namespace
 
-void draw_boot_screen(Renderer& r, const char* name, const char* build_id) noexcept {
+void draw_boot_screen(Renderer& r, const char* name, const char* build) noexcept {
   // The logo: one raw section, so that the bitmap handle, the transform and the colour leave nothing behind for what follows
   // (RESTORE_CONTEXT brings the transform and the colour back; BITMAP_TRANSFORM is part of the graphics context, guide 4.1).
   r.begin_raw();
@@ -58,21 +58,21 @@ void draw_boot_screen(Renderer& r, const char* name, const char* build_id) noexc
   // The line, centred as a whole: the name bright, the rest dim.
   name = name != nullptr ? name : "";
   char rest[kRestChars + 1];
-  compose_rest(build_id, rest);
+  compose_rest(build, rest);
   const int name_w = r.text_width(name, Face::Micro);
   const int x = (kScreenW - name_w - r.text_width(rest, Face::Micro)) / 2;
   r.text(x, kBootTextY, name, Color::Text, Face::Micro);
   r.text(x + name_w, kBootTextY, rest, Color::TextDim, Face::Micro);
 }
 
-bool show_boot_screen(hal::Display& display, const char* name, const char* build_id) noexcept {
+bool show_boot_screen(hal::Display& display, const char* name, const char* build) noexcept {
   BootList list;
   eve::DisplayListBuilder builder(display, list.words, kBootScreenMaxWords);
   Renderer r(builder, boot_theme());
   if (!r.begin(Color::Pane)) {
     return false;
   }
-  draw_boot_screen(r, name, build_id);
+  draw_boot_screen(r, name, build);
   return r.end();
 }
 

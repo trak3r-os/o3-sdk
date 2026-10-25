@@ -12,8 +12,10 @@
 //     so of the 124 blocks of 3 px one is 4 px wide and the last is 2 px wide (tests/raster_transform_test.cpp works it out);
 //     which columns they are depends on how the chip rounds, which only a unit can say (the hardware checklist, README of
 //     platform/mk66).
-//   * The line is the device name (the app name) in Text and "o3sdk <build id>" in TextDim, centred, 14 px under
-//     the logo. The caller passes both: the build id is the platform's (the one `diag version` prints), and ui does not see usb.
+//   * The line is the device name (the app name) in Text and the build line in TextDim, centred, 14 px under the logo. The caller
+//     passes both: the build line is the platform's (O3SDK_IMAGE_LABEL, the identity `diag version` prints) and ui does not see
+//     usb: "o3sdk d8c4ede2c609" in o3sdk's own apps, "<app label> / o3sdk <kit label>" in an app of another repository (ASCII: the
+//     faces stop at '~'; the app's identity first, because the name before it is the app's).
 //   * The bitmap must be in RAM_G, where ui::upload_assets() puts it (ui/plot/ram_g_map.h kRamGBootLogo), and the Micro face too.
 //   * How long it stays is core::BootHold's business (core/boot_hold.h), driven by the platform.
 
@@ -40,20 +42,24 @@ inline constexpr std::int32_t kBootLogoTransform = 256 / static_cast<std::int32_
 static_assert(kBootLogoX >= 0 && kBootLogoY >= 0 && kBootTextY + 12 <= kScreenH, "the logo and its line fit the panel");
 static_assert(kBootLogoScale >= 1 && kBootLogoScale <= 16, "the transform coefficient 256 / scale is at least 16");
 
-// The longest build id the line shows (the rest is cut): the platform's is a 12-digit hash and "-dirty".
-inline constexpr std::size_t kBootBuildChars = 24;
+// The longest build line shown (the rest is cut). Two labels of 18 characters ("0123456789ab-dirty") joined by " / o3sdk " are 45
+// characters, two with a version tag and a describe suffix ("v0.5.0-3-g0271ab6-dirty (0271ab60bea6-dirty)", 44) are 97, so 100 shows
+// every form whole; that is 600 px in the Micro face, and a glyph is a word of the list (tests/boot_screen_test.cpp measures the
+// longest line against kBootScreenMaxWords and the panel's width).
+inline constexpr std::size_t kBootBuildChars = 100;
 
 // Draws the content of the boot frame into a renderer that has been begun (the registry's convention, sim/screens.h): the logo,
-// then the line. `name` and `build_id` are ASCII, not null.
-void draw_boot_screen(Renderer& r, const char* name, const char* build_id) noexcept;
+// then the line. `name` and `build` (the build line) are ASCII, not null.
+void draw_boot_screen(Renderer& r, const char* name, const char* build) noexcept;
 
-// The display-list words of the boot frame, DISPLAY included, are far below this (tests/boot_screen_test.cpp measures it in
-// both translate modes); it is the size of the buffer show_boot_screen() builds in.
+// The display-list words of the boot frame, DISPLAY included, are 171 at the most (a 16-character name and a line of kBootBuildChars
+// glyphs, in the worse of the two translate modes; tests/boot_screen_test.cpp measures it); this is the size of the buffer
+// show_boot_screen() builds in.
 inline constexpr std::size_t kBootScreenMaxWords = 192;
 
 // Builds the boot frame with boot_theme() and commits it to `display`: begin_frame(), the frame, end_frame(). Main loop only,
 // no heap (the list is built in a buffer on the stack, 768 bytes). false: the display refused a frame (the previous swap is
 // pending: try again) or the list did not fit; nothing is committed and the screen is as it was.
-bool show_boot_screen(hal::Display& display, const char* name, const char* build_id) noexcept;
+bool show_boot_screen(hal::Display& display, const char* name, const char* build) noexcept;
 
 }  // namespace o3sdk::ui

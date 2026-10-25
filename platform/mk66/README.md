@@ -40,7 +40,8 @@ SP `0x20030000`, a Thumb reset vector inside the image, every vector in flash or
 (bytes `0x400..0x40F` exactly `ffffffffffffffffffffffffdef9ffff`, the test's own literal: a wrong value can lock the MCU for good),
 `<name>_ramfunc` (the SRAM_L code calls nothing outside itself, no veneer), `mk66_ld` (the generated linker script against
 `mem_map.h`), `mk66_noinit_guard` (an initialised noinit, DMA-ring or `O3SDK_BIG` object does not compile), `mk66_dma_owner` (only
-`boot::dma_init()` writes DMA_CR and the DCHPRIs), and the tools' self-tests. The host build runs the self-tests, `mk66_dma_owner`,
+`boot::dma_init()` writes DMA_CR and the DCHPRIs), `mk66_build_info` (`gen_build_info.cmake`: the kit's and the app's identity, "unknown",
+"-dirty", the version tag), and the tools' self-tests. The host build runs the self-tests, `mk66_dma_owner`, `mk66_build_info`,
 `mk66_ld` and the base suite (`mk66_base_tests`).
 
 ## Memory map (`include/o3sdk/platform/mk66/mem_map.h` is the single source; `tools/gen_ld.py` generates `mk66.ld` from it)

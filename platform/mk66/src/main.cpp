@@ -53,8 +53,9 @@ constexpr std::uint32_t kAudioStallMs = 300;  // a boundary count standing still
 // Seconds since boot, counted by the main loop; the loop is the only writer. Meant for a debugger.
 volatile std::uint32_t g_heartbeat = 0;
 
-// Which tree the image was built from ("o3sdk 0123456789ab-dirty"), for `strings` on a HEX and for a debugger.
-const char* volatile const g_build_label = "o3sdk " O3SDK_BUILD_LABEL;
+// Which trees the image was built from ("o3sdk 0123456789ab-dirty"; in an app's image "ba9876543210 / o3sdk 0123456789ab", the app's
+// identity first), for `strings` on the `.bin` or the `.elf` (the HEX stores hex digits) and for a debugger.
+const char* volatile const g_build_label = O3SDK_IMAGE_LABEL;
 
 // The app's engine: 23 KB, in SRAM_U's .bss (the render reads it every block). Built by the static constructors.
 o3sdk::dsp::Engine g_engine;
@@ -109,7 +110,7 @@ int main() {
   if (rt.start()) {
     // The first frame: the kit's boot screen (the logo the upload just put in RAM_G, the app's name and the build), on screen through
     // the blink codes and the audio start below, until the loop's first rt.poll() draws the app. Its swap starts the backlight ramp.
-    (void)o3sdk::ui::show_boot_screen(display::display(), o3sdk_app().info().name, O3SDK_BUILD_LABEL);
+    (void)o3sdk::ui::show_boot_screen(display::display(), o3sdk_app().info().name, O3SDK_IMAGE_LABEL);
   } else if (shown.up) {
     // The safe state for an app that cannot start (its bitmaps did not go up): the display is held dark, never a lit black screen
     // that looks like a quiet success. The app and its sound still run.

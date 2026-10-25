@@ -1,41 +1,82 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-# Writes the build identity header the `diag version` command prints (OS-006b): the short git hash of HEAD, with "-dirty" when a tracked file
-# in the source directory differs from it, or "unknown" outside a git checkout. It also defines the release version (OS-RELEASE-ptf):
-# `git describe --tags --match 'v[0-9]*' --dirty --always --abbrev=7` ("v0.5.0" on the tagged commit, "v0.5.0-3-g0271ab6" after it, the bare hash with no
-# tag), and the label the device shows where it showed the build id: "v0.5.0 (0271ab60bea6)" when a version tag is in the history, else the id. Run at BUILD time by a custom target (a configure-time hash would go stale
-# with the next commit), and writes the file only when its content changed, so an unchanged identity rebuilds nothing. No date and no host
-# name: the same source state gives the same bytes (the image stays reproducible). The hash length is fixed: git's default grows with the
-# number of objects in the clone, so two clones of the same commit gave different versions.
-#   cmake -DSRC=<os dir> -DOUT=<header> -P gen_build_info.cmake
+# Writes the build identity header the `diag version` command prints (OS-006b), for two trees: the KIT's (o3sdk's own source directory,
+# SRC) and the APP's (the top-level project, APP_SRC; the same directory when the app is one of o3sdk's own). For each tree it is the
+# short git hash of HEAD, with "-dirty" when a tracked file in that directory differs from it, or "unknown" outside a git checkout. It
+# also defines the release version (OS-RELEASE-ptf): `git describe --tags --match 'v[0-9]*' --dirty --always --abbrev=7` ("v0.5.0" on the
+# tagged commit, "v0.5.0-3-g0271ab6" after it, the bare hash with no tag), and the label the device shows where it showed the build
+# id: "v0.5.0 (0271ab60bea6)" when a version tag is in the history, else the id.
+#
+#   O3SDK_BUILD_ID, O3SDK_VERSION, O3SDK_BUILD_LABEL                 the kit's
+#   O3SDK_APP_BUILD_ID, O3SDK_APP_VERSION, O3SDK_APP_BUILD_LABEL      the app's
+#   O3SDK_IMAGE_LABEL   what the image says about itself (the boot screen's build line, `strings` on the `.bin` or `.elf`):
+#                       "o3sdk <kit label>" when the app is o3sdk's own tree (APP_SRC is SRC),
+#                       "<app label> / o3sdk <kit label>" when it is another project's (' / ': the glyph faces are ASCII).
+#
+# Run at BUILD time by a custom target (a configure-time hash would go stale with the next commit), and writes the file only when its
+# content changed, so an unchanged identity rebuilds nothing. No date and no host name: the same source state gives the same bytes (the
+# image stays reproducible). The hash length is fixed: git's default grows with the number of objects in the clone, so two clones of the
+# same commit gave different versions.
+#   cmake -DSRC=<o3sdk dir> [-DAPP_SRC=<app dir>] -DOUT=<header> -P gen_build_info.cmake
+# (tests: platform/mk66/tests/gen_build_info_test.cmake)
 if(NOT SRC OR NOT OUT)
-  message(FATAL_ERROR "usage: cmake -DSRC=<os dir> -DOUT=<header> -P gen_build_info.cmake")
+  message(FATAL_ERROR "usage: cmake -DSRC=<o3sdk dir> [-DAPP_SRC=<app dir>] -DOUT=<header> -P gen_build_info.cmake")
+endif()
+if(NOT APP_SRC)
+  set(APP_SRC "${SRC}")
 endif()
 find_program(_git git)
-set(_id "unknown")
-set(_version "unknown")
-if(_git)
-  execute_process(COMMAND ${_git} -C ${SRC} rev-parse --short=12 HEAD
-    OUTPUT_VARIABLE _hash OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
-  if(_rc EQUAL 0 AND _hash)
-    set(_id "${_hash}")
-    execute_process(COMMAND ${_git} -C ${SRC} status --porcelain --untracked-files=no -- .
-      OUTPUT_VARIABLE _dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
-    if(_dirty)
-      set(_id "${_id}-dirty")
-    endif()
-    set(_version "${_id}")
-    execute_process(COMMAND ${_git} -C ${SRC} describe --tags --match "v[0-9]*" --dirty --always --abbrev=7
-      OUTPUT_VARIABLE _desc OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _drc ERROR_QUIET)
-    if(_drc EQUAL 0 AND _desc)
-      set(_version "${_desc}")
+
+# The identity of the tree at <dir>: its id ("<hash>", "<hash>-dirty" or "unknown"), version and label, into the three named variables.
+# It is the git checkout that contains <dir>, not necessarily one rooted there: an app in a subdirectory of a monorepo reports the monorepo's
+# hash (and "-dirty" for changes under <dir> only), as it should; a directory that is no checkout but sits inside another repository
+# reports that repository's.
+function(_o3sdk_identity dir out_id out_version out_label)
+  set(_id "unknown")
+  set(_version "unknown")
+  if(_git)
+    execute_process(COMMAND ${_git} -C "${dir}" rev-parse --short=12 HEAD
+      OUTPUT_VARIABLE _hash OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _rc ERROR_QUIET)
+    if(_rc EQUAL 0 AND _hash)
+      set(_id "${_hash}")
+      execute_process(COMMAND ${_git} -C "${dir}" status --porcelain --untracked-files=no -- .
+        OUTPUT_VARIABLE _dirty OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+      if(_dirty)
+        set(_id "${_id}-dirty")
+      endif()
+      set(_version "${_id}")
+      execute_process(COMMAND ${_git} -C "${dir}" describe --tags --match "v[0-9]*" --dirty --always --abbrev=7
+        OUTPUT_VARIABLE _desc OUTPUT_STRIP_TRAILING_WHITESPACE RESULT_VARIABLE _drc ERROR_QUIET)
+      if(_drc EQUAL 0 AND _desc)
+        set(_version "${_desc}")
+      endif()
     endif()
   endif()
+  set(_label "${_id}")
+  if(_version MATCHES "^v[0-9]")
+    set(_label "${_version} (${_id})")
+  endif()
+  set(${out_id} "${_id}" PARENT_SCOPE)
+  set(${out_version} "${_version}" PARENT_SCOPE)
+  set(${out_label} "${_label}" PARENT_SCOPE)
+endfunction()
+
+_o3sdk_identity("${SRC}" _kit_id _kit_version _kit_label)
+get_filename_component(_kit_dir "${SRC}" REALPATH)
+get_filename_component(_app_dir "${APP_SRC}" REALPATH)
+if(_app_dir STREQUAL _kit_dir)
+  set(_app_id "${_kit_id}")
+  set(_app_version "${_kit_version}")
+  set(_app_label "${_kit_label}")
+  set(_image "o3sdk ${_kit_label}")
+else()
+  _o3sdk_identity("${APP_SRC}" _app_id _app_version _app_label)
+  set(_image "${_app_label} / o3sdk ${_kit_label}")
 endif()
-set(_label "${_id}")
-if(_version MATCHES "^v[0-9]")
-  set(_label "${_version} (${_id})")
-endif()
-set(_content "// Generated by platform/mk66/tools/gen_build_info.cmake. Do not edit.\n#pragma once\n#define O3SDK_BUILD_ID \"${_id}\"\n#define O3SDK_VERSION \"${_version}\"\n#define O3SDK_BUILD_LABEL \"${_label}\"\n")
+
+set(_content "// Generated by platform/mk66/tools/gen_build_info.cmake. Do not edit.\n#pragma once\n")
+string(APPEND _content "#define O3SDK_BUILD_ID \"${_kit_id}\"\n#define O3SDK_VERSION \"${_kit_version}\"\n#define O3SDK_BUILD_LABEL \"${_kit_label}\"\n")
+string(APPEND _content "#define O3SDK_APP_BUILD_ID \"${_app_id}\"\n#define O3SDK_APP_VERSION \"${_app_version}\"\n#define O3SDK_APP_BUILD_LABEL \"${_app_label}\"\n")
+string(APPEND _content "#define O3SDK_IMAGE_LABEL \"${_image}\"\n")
 set(_old "")
 if(EXISTS "${OUT}")
   file(READ "${OUT}" _old)

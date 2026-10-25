@@ -258,5 +258,7 @@ add_subdirectory(tests)                             # o3sdk_test_suite(...), hos
   `<name>_ramfunc`) and `o3sdk_test_suite` (doctest: one executable, one ctest per `*_test.cpp`).
 - **A path inside o3sdk** is `O3SDK_ROOT` (set by the platform file), never `PROJECT_SOURCE_DIR`, which belongs to the project that
   calls the function. A variable a helper reads must be a cache entry (`O3SDK_PYTHON`, `O3SDK_SINGLE_PRECISION_LAYERS`).
-- **The build identity** in the image (`gen_build_info.cmake`) is the top-level project's git state; the framework's commit is not
-  recorded in it.
+- **The build identity** in the image (`gen_build_info.cmake`) is two git states: the kit's (o3sdk's own directory, wherever the project
+  keeps it) and the app's (the top-level project's; the same tree when the app is one of o3sdk's own). `O3SDK_IMAGE_LABEL` joins them,
+  "o3sdk d8c4ede2c609" or "<app label> / o3sdk <kit label>", and is the boot screen's build line and the image's `g_build_label`
+  (`strings` on the `.bin` or the `.elf` shows it; the HEX and the `.ptf` store hex digits).

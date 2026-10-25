@@ -34,8 +34,11 @@ if(O3SDK_BUILD_TESTS)
   # Only boot::dma_init() writes DMA_CR and the DCHPRIs (ADR 0013 D1): a source check over this tree, every slice's files included.
   add_test(NAME mk66_dma_owner_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_dma_owner.py --self-test)
   add_test(NAME mk66_dma_owner COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_dma_owner.py check --root ${CMAKE_CURRENT_SOURCE_DIR})
+  # The build identity script: the kit's and the app's hashes, "unknown", "-dirty", the version tag (tests/gen_build_info_test.cmake).
+  add_test(NAME mk66_build_info COMMAND ${CMAKE_COMMAND} -DGEN=${_mk66_tools}/gen_build_info.cmake
+           -DWORK=${CMAKE_CURRENT_BINARY_DIR}/build_info_test -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_build_info_test.cmake)
   set_tests_properties(mk66_gen_ld_selftest mk66_image_selftest mk66_ramfunc_selftest mk66_dma_owner_selftest mk66_dma_owner
-                       PROPERTIES TIMEOUT 60 LABELS mk66)
+                       mk66_build_info PROPERTIES TIMEOUT 60 LABELS mk66)
   if(NOT O3SDK_PLATFORM STREQUAL "mk66")
     add_test(NAME mk66_ld COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/gen_ld.py check --header ${_mk66_header} --template ${_mk66_template})
     set_tests_properties(mk66_ld PROPERTIES TIMEOUT 60 LABELS mk66)
@@ -69,12 +72,13 @@ add_custom_command(OUTPUT ${_mk66_ld}
 add_custom_target(mk66_ld_script DEPENDS ${_mk66_ld})
 
 # The build identity (tools/gen_build_info.cmake: the git hash, "-dirty", the version tag), written at build time and only when it
-# changed; main.cpp keeps the label in the image, so a HEX says which tree it came from (`strings`). The tree is the top-level project's
-# (CMAKE_SOURCE_DIR): o3sdk's own when it is built alone, the app's repository when o3sdk is used from outside; the framework's commit
-# is not recorded in that case.
+# changed; main.cpp keeps the label in the image, so a `.bin` or `.elf` says which trees it came from (`strings`). Two trees, two identities: the
+# kit's is o3sdk's own directory (O3SDK_ROOT, wherever the project that uses it keeps it), the app's is the top-level project's
+# (CMAKE_SOURCE_DIR); they are one when the app is one of o3sdk's own. The header's O3SDK_IMAGE_LABEL is what the device shows.
 set(_mk66_gen_dir "${CMAKE_CURRENT_BINARY_DIR}/gen")
 add_custom_target(o3sdk_build_info
-  COMMAND ${CMAKE_COMMAND} -DSRC=${CMAKE_SOURCE_DIR} -DOUT=${_mk66_gen_dir}/o3sdk_build_info.h -P ${_mk66_tools}/gen_build_info.cmake
+  COMMAND ${CMAKE_COMMAND} -DSRC=${O3SDK_ROOT} -DAPP_SRC=${CMAKE_SOURCE_DIR} -DOUT=${_mk66_gen_dir}/o3sdk_build_info.h
+          -P ${_mk66_tools}/gen_build_info.cmake
   BYPRODUCTS ${_mk66_gen_dir}/o3sdk_build_info.h
   COMMENT "o3sdk_build_info.h"
   VERBATIM)

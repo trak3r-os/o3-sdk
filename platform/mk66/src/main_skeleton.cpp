@@ -29,8 +29,9 @@ volatile std::uint32_t g_heartbeat = 0;
 // checks see the app, while this main runs none of it.
 o3sdk::app::App& (*volatile const g_app_entry)() noexcept = &o3sdk_app;
 
-// Which tree the image was built from ("o3sdk 0123456789ab-dirty"), for `strings` on a HEX and for a debugger.
-const char* volatile const g_build_label = "o3sdk " O3SDK_BUILD_LABEL;
+// Which trees the image was built from ("o3sdk 0123456789ab-dirty"; in an app's image "ba9876543210 / o3sdk 0123456789ab", the app's
+// identity first), for `strings` on the `.bin` or the `.elf` (the HEX stores hex digits) and for a debugger.
+const char* volatile const g_build_label = O3SDK_IMAGE_LABEL;
 
 }  // namespace
 
