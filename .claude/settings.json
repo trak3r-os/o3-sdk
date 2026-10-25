@@ -1,0 +1,128 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cmake *)",
+      "Bash(ctest *)",
+      "Bash(nice -n 10 cmake *)",
+      "Bash(nice -n 10 ctest *)",
+      "Bash(python3 -I tools/*)",
+      "Bash(python3 -I platform/mk66/tools/*)",
+      "Bash(python3 -I .claude/hooks/*)",
+      "Bash(build-*/apps/*/*_sim)",
+      "Bash(build-*/apps/*/*_sim *)",
+      "Bash(nice -n 10 build-*/apps/*/*_sim *)",
+      "Bash(arm-none-eabi-nm *)",
+      "Bash(arm-none-eabi-size *)",
+      "Bash(arm-none-eabi-objdump *)",
+      "Bash(arm-none-eabi-readelf *)",
+      "Bash(*/bin/arm-none-eabi-nm *)",
+      "Bash(*/bin/arm-none-eabi-size *)",
+      "Bash(*/bin/arm-none-eabi-objdump *)",
+      "Bash(*/bin/arm-none-eabi-readelf *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git rev-parse*)",
+      "Bash(git ls-files*)",
+      "Bash(git branch)",
+      "Bash(git branch --show-current)",
+      "Bash(git branch -a*)",
+      "Bash(git branch -v*)",
+      "Bash(git branch --list*)",
+      "Bash(sha256sum *)",
+      "Bash(cmp *)"
+    ],
+    "deny": [
+      "Bash(git push --force*)",
+      "Bash(git push -f*)",
+      "Bash(git push * --force*)",
+      "Bash(git push * -f *)",
+      "Bash(git push --delete*)",
+      "Bash(git reset --hard*)",
+      "Bash(git clean*)",
+      "Bash(git checkout -- *)",
+      "Bash(git checkout .)",
+      "Bash(git restore *)",
+      "Bash(git stash*)"
+    ],
+    "ask": [
+      "Bash(git commit*)",
+      "Bash(git push*)",
+      "Bash(git tag*)",
+      "Bash(git add -A*)",
+      "Bash(git add .)"
+    ]
+  },
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_flash.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/syntax_check.py",
+            "timeout": 120,
+            "statusMessage": "Syntax-checking edited source file"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/shell_edit_check.py",
+            "timeout": 150
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "startup|resume|clear|compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session_brief.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify_gate.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 -I \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/verify_gate.py",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

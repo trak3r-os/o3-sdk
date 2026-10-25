@@ -1,0 +1,215 @@
+/* SPDX-License-Identifier: GPL-3.0-or-later
+ *
+ * Linker script template for the MK66FX1M0 image (from track3r-os OS-007b). Do not edit the generated mk66.ld: tools/gen_ld.py
+ * replaces every placeholder below (a constant's name between two at-signs) with the value of that constant in
+ * include/o3sdk/platform/mk66/mem_map.h, the single source of the memory map, and refuses a name the header does not define or a
+ * placeholder left over.
+ *
+ * Regions:
+ *   FLASH   program flash, 1 MiB at 0. Vector table at 0, flash configuration field at 0x400, code and constants, then the load
+ *           images of .ramfunc_l and .data, each starting where the one before ends. The image is one contiguous run from 0 to its
+ *           end with no hole (whether the SD bootloader tolerates one is unknown; asserted at the end of this script; the HEX check
+ *           and the objcopy gap fill back it up).
+ *   SRAM_L  64 KiB (code bus): hot code (`.ramfunc_l`) at the base, within kRamfuncLBudget; the rest is free (nothing is placed
+ *           there yet).
+ *   SRAM_U  192 KiB: .noinit (the crash record first), the fault stack, the DMA rings, .data, .bss; the main stack grows down from
+ *           the top.
+ *   SDRAM   16 MiB: `.sdram_bss` (every O3SDK_BIG object, kit/core placement.h) at the base, NOLOAD, cleared by the reset sequence
+ *           after the SDRAM test; the rest is the app's arena, __sdram_arena_start to __sdram_arena_end, neither placed nor cleared.
+ *
+ * Objects that must not be initialised (the crash block, O3SDK_NOINIT, O3SDK_DMA_RING in sections.h, and O3SDK_BIG in the kit's
+ * placement.h) live in input sections named `.bss.<name>`: GCC makes those NOBITS and refuses a non-zero initialiser in them at
+ * compile time ("only zero initializers are allowed in section"), so an initialiser can never be silently dropped from a NOLOAD
+ * output section. O3SDK_BIG objects are in `.bss.sdram_bss`, which the `.sdram_bss` output section collects into the SDRAM. The
+ * plain names `.noinit` and `.sdram_bss` are deliberately not matched anywhere: --orphan-handling=error turns an object put there
+ * by hand into a link error. The `.noinit`, `.dma_rings` and `.sdram_bss` output sections are listed before `.bss`, because the
+ * first output section whose pattern matches takes an input section and the `.bss.*` pattern of `.bss` would otherwise take
+ * `.bss.sdram_bss` into SRAM_U (tools/gen_ld.py checks this order).
+ */
+
+ENTRY(Reset_Handler)
+
+MEMORY
+{
+  FLASH  (rx)  : ORIGIN = @kFlashBase@, LENGTH = @kFlashSize@
+  SRAM_L (rwx) : ORIGIN = @kSramLBase@, LENGTH = @kSramLSize@
+  SRAM_U (rw)  : ORIGIN = @kSramUBase@, LENGTH = @kSramUSize@
+  SDRAM  (rw)  : ORIGIN = @kSdramBase@, LENGTH = @kSdramSize@
+}
+
+/* Three load segments with their own permissions, so that no segment is both writable and executable: code and
+   read-only data (r-x), the hot code that is copied into SRAM_L (r-x), and the initialised data (rw-). */
+PHDRS
+{
+  text    PT_LOAD FLAGS(5);
+  ramfunc PT_LOAD FLAGS(5);
+  data    PT_LOAD FLAGS(6);
+}
+
+SECTIONS
+{
+  .text :
+  {
+    KEEP(*(.vectors))
+    ASSERT(. - ADDR(.text) == @kVectorTableBytes@, "the vector table is not the size mem_map.h says (kVectorTableBytes)");
+    *(.o3sdk_startup .o3sdk_startup.*)
+    ASSERT(. <= @kFlashConfigOffset@, "vector table and startup code overrun the flash configuration field");
+    . = @kFlashConfigOffset@;
+    __flashconfig_start = .;
+    KEEP(*(.flashconfig))
+    __flashconfig_end = .;
+    *(.text .text.* .gnu.linkonce.t.*)
+    *(.glue_7 .glue_7t .vfp11_veneer .v4_bx)   /* linker-made interworking veneers; none are expected on a Thumb-only image */
+    *(.rodata .rodata.* .gnu.linkonce.r.*)
+    . = ALIGN(4);
+  } > FLASH :text =0xFF
+
+  ASSERT(__flashconfig_end - __flashconfig_start == @kFlashConfigSize@, "the .flashconfig section must be exactly 16 bytes (flash_config.h)")
+  ASSERT(__flashconfig_start == @kFlashConfigOffset@, "the flash configuration field must sit at exactly 0x400")
+
+  .ARM.extab : { *(.ARM.extab* .gnu.linkonce.armextab.*) } > FLASH :text
+
+  /* libgcc's unwinder looks these two symbols up; C++ library code references it even though first-party code is built
+     without exceptions. */
+  .ARM.exidx :
+  {
+    __exidx_start = .;
+    *(.ARM.exidx* .gnu.linkonce.armexidx.*)
+    __exidx_end = .;
+  } > FLASH :text
+
+  /* Constructors, run by Reset_Handler in this order. */
+  .preinit_array : { . = ALIGN(4); __preinit_array_start = .; KEEP(*(.preinit_array*)) __preinit_array_end = .; } > FLASH :text
+  .init_array    : { . = ALIGN(4); __init_array_start = .;    KEEP(*(SORT(.init_array.*))) KEEP(*(.init_array*)) __init_array_end = .; } > FLASH :text
+  .fini_array    : { . = ALIGN(4); __fini_array_start = .;    KEEP(*(SORT(.fini_array.*))) KEEP(*(.fini_array*)) __fini_array_end = .; } > FLASH :text
+
+  /* Hot code, linked at SRAM_L, loaded from flash and copied by Reset_Handler. */
+  .ramfunc_l : ALIGN(4)
+  {
+    __ramfunc_l_start = .;
+    *(.ramfunc_l .ramfunc_l.*)
+    . = ALIGN(4);
+    __ramfunc_l_end = .;
+  } > SRAM_L AT > FLASH :ramfunc
+  __ramfunc_l_load = LOADADDR(.ramfunc_l);
+
+  /* Bottom of SRAM_U: what survives a reset. The crash record block is first, at the very base of SRAM_U. These input
+     sections are NOBITS (see the header): nothing here has a load image or an initialiser. */
+  .noinit (NOLOAD) : ALIGN(8)
+  {
+    __noinit_start = .;
+    KEEP(*(.bss.noinit.crash))
+    ASSERT(. - __noinit_start == @kCrashBlockSize@, "the crash block must be exactly kCrashBlockSize bytes, first in .noinit");
+    *(.bss.noinit .bss.noinit.*)
+    . = ALIGN(8);
+    __noinit_end = .;
+  } > SRAM_U :NONE
+
+  /* The stack the fault handlers switch to: reserved, never initialised. */
+  .fault_stack (NOLOAD) : ALIGN(8)
+  {
+    . += @kFaultStackSize@;
+    __fault_stack_top = .;
+  } > SRAM_U :NONE
+
+  /* The audio DMA rings (OS-005a): each aligned to its own size, because the eDMA wraps an address with a modulo (hal/audio.h).
+     Placed here, before .data, so that their alignment padding is NOLOAD and cannot open a gap between .data and .bss, which share
+     one load segment. NOT cleared by the reset sequence: the audio device zeroes them (silence) before the DMA runs. Input sections
+     named `.bss.dma_rings` are NOBITS, like the noinit ones, so a non-zero initialiser is a compile error. */
+  .dma_rings (NOLOAD) : ALIGN(@kDmaRingAlign@)
+  {
+    __dma_rings_start = .;
+    *(.bss.dma_rings .bss.dma_rings.*)
+    . = ALIGN(8);
+    __dma_rings_end = .;
+  } > SRAM_U :NONE
+
+  /* The O3SDK_BIG objects (input section `.bss.sdram_bss`, NOBITS): the base of the SDRAM, no load image, cleared word by word by
+     the reset sequence after the SDRAM test (startup.cpp step 7), before the constructors. 32-byte aligned at both ends, so the
+     clear covers it exactly and the arena behind it starts on whole cache lines. Listed before `.data` and `.bss` on purpose: the
+     pattern of `.bss` below (`.bss.*`) would take `.bss.sdram_bss` into SRAM_U if it came first. */
+  .sdram_bss (NOLOAD) : ALIGN(@kSdramArenaAlign@)
+  {
+    __sdram_bss_start = .;
+    *(.bss.sdram_bss .bss.sdram_bss.*)
+    . = ALIGN(@kSdramArenaAlign@);
+    __sdram_bss_end = .;
+  } > SDRAM :NONE
+
+  /* The app's arena: the rest of the SDRAM. */
+  __sdram_arena_start = __sdram_bss_end;
+  __sdram_arena_end = ORIGIN(SDRAM) + LENGTH(SDRAM);
+
+  /* The load image of .data starts exactly where the one of .ramfunc_l ends (a section alignment of 8 would otherwise leave
+     a hole before it: the HEX must have none). Word copies only need 4-byte alignment, asserted below. */
+  .data : AT(LOADADDR(.ramfunc_l) + SIZEOF(.ramfunc_l)) ALIGN(8)
+  {
+    __data_start = .;
+    *(.data .data.* .gnu.linkonce.d.*)
+    . = ALIGN(8);
+    __data_end = .;
+  } > SRAM_U :data
+  __data_load = LOADADDR(.data);
+
+  /* .bss has no load image; a load address right behind .data's keeps it in the same segment. */
+  .bss : AT(LOADADDR(.data) + SIZEOF(.data)) ALIGN(8)
+  {
+    __bss_start = .;
+    *(.bss .bss.* COMMON .gnu.linkonce.b.*)
+    . = ALIGN(8);
+    __bss_end = .;
+  } > SRAM_U :data
+
+  /* The main stack: the top of SRAM_U, growing down. Nothing may be linked into it. */
+  __stack_top = ORIGIN(SRAM_U) + LENGTH(SRAM_U);
+  __stack_limit = __stack_top - @kStackSize@;
+
+  ASSERT(__bss_end <= __stack_limit, "SRAM_U overflow: .data, .bss and .noinit leave no room for the main stack")
+  ASSERT(__stack_top == 0x20030000, "initial SP must be the end of SRAM_U, 0x20030000")
+  ASSERT(__dma_rings_start % @kDmaRingAlign@ == 0, "the DMA rings must start on their alignment (the eDMA address modulo)")
+  ASSERT(__ramfunc_l_end - __ramfunc_l_start <= @kRamfuncLBudget@, "hot code exceeds its SRAM_L budget (mem_map.h kRamfuncLBudget)")
+  ASSERT(__ramfunc_l_end <= @kSramLFreeBase@, "hot code overruns the free part of SRAM_L")
+  ASSERT(__stack_limit - __bss_end >= @kSramUMinFree@, "SRAM_U: less than 32 KiB free between .bss and the stack (ADR 0013 D7 budget)")
+  ASSERT(__ramfunc_l_load % 4 == 0 && __data_load % 4 == 0, "the load images are copied a word at a time: 4-byte aligned")
+  ASSERT(__sdram_bss_start == ORIGIN(SDRAM), ".sdram_bss must start at the base of the SDRAM")
+  ASSERT(__sdram_bss_end <= __sdram_arena_end, ".sdram_bss overflows the SDRAM: the O3SDK_BIG objects need more than 16 MiB")
+  ASSERT(__sdram_bss_start % 4 == 0 && __sdram_bss_end % 4 == 0, ".sdram_bss is cleared a word at a time: 4-byte aligned")
+
+  /* Indirect-function stubs: this image has none (no ifunc, no dynamic linking), and says so. */
+  .iplt     : { *(.iplt) }     > FLASH :text
+  .rel.iplt : { *(.rel.iplt) } > FLASH :text
+  .igot.plt : { *(.igot.plt) } > FLASH :text
+  ASSERT(SIZEOF(.iplt) == 0 && SIZEOF(.rel.iplt) == 0 && SIZEOF(.igot.plt) == 0, "indirect-function (ifunc) stubs in a static image")
+
+  /* Not loaded: build attributes and debug information. Listed so that --orphan-handling=error can tell a section nobody
+     placed (which would land somewhere by accident) from these. */
+  .ARM.attributes 0 : { *(.ARM.attributes) }
+  .debug_aranges 0 : { *(.debug_aranges) }
+  .debug_pubnames 0 : { *(.debug_pubnames) }
+  .debug_info 0 : { *(.debug_info .gnu.linkonce.wi.*) }
+  .debug_abbrev 0 : { *(.debug_abbrev) }
+  .debug_line 0 : { *(.debug_line .debug_line.* .debug_line_end) }
+  .debug_frame 0 : { *(.debug_frame) }
+  .debug_str 0 : { *(.debug_str) }
+  .debug_loc 0 : { *(.debug_loc) }
+  .debug_macinfo 0 : { *(.debug_macinfo) }
+  .debug_pubtypes 0 : { *(.debug_pubtypes) }
+  .debug_ranges 0 : { *(.debug_ranges) }
+  .debug_macro 0 : { *(.debug_macro) }
+  .debug_addr 0 : { *(.debug_addr) }
+  .debug_line_str 0 : { *(.debug_line_str) }
+  .debug_loclists 0 : { *(.debug_loclists) }
+  .debug_rnglists 0 : { *(.debug_rnglists) }
+  .debug_str_offsets 0 : { *(.debug_str_offsets) }
+  .debug_names 0 : { *(.debug_names) }
+  /DISCARD/ : { *(.comment) }
+
+  /* Where the image ends in flash: the end of the last load image. */
+  __image_end = LOADADDR(.data) + SIZEOF(.data);
+
+  /* No hole in the flash image: the sizes of everything loaded into flash add up to the span from the start of flash to the
+     end of the last load image. (Sections never overlap, so equal sums mean every byte is covered.) */
+  ASSERT(SIZEOF(.text) + SIZEOF(.ARM.extab) + SIZEOF(.ARM.exidx) + SIZEOF(.preinit_array) + SIZEOF(.init_array) +
+         SIZEOF(.fini_array) + SIZEOF(.ramfunc_l) + SIZEOF(.data) == __image_end - ORIGIN(FLASH),
+         "the flash image has a hole (an alignment gap between two load images): the HEX must be one contiguous run")
+}

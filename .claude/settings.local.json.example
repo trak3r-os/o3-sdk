@@ -1,0 +1,5 @@
+{
+  "env": {
+    "O3_ALLOW_CARD_WRITE": ""
+  }
+}

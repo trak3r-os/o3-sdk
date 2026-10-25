@@ -1,0 +1,172 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#include <o3sdk/sim/harness.h>
+
+#include <o3sdk/core/audio_clock.h>
+#include <o3sdk/hal/audio.h>
+#include <o3sdk/platform/host/png.h>
+
+#include <cstdio>
+
+namespace o3sdk::sim {
+
+namespace {
+
+// The drawing of the pads under the screen.
+constexpr int kGap = 16;
+constexpr int kPadW = 56;
+constexpr int kPadH = 40;
+constexpr int kPadGap = 9;
+constexpr int kPadsW = static_cast<int>(app::kPadCols) * kPadW + static_cast<int>(app::kPadCols - 1u) * kPadGap;
+constexpr int kPadsH = static_cast<int>(app::kPadRows) * kPadH + static_cast<int>(app::kPadRows - 1u) * kPadGap;
+constexpr int kMarginX = (EveRaster::kWidth - kPadsW) / 2;
+constexpr int kImageH = EveRaster::kHeight + kGap + kPadsH + kMarginX;
+
+struct Rgb {
+  int r, g, b;
+};
+constexpr Rgb kBackground{28, 28, 32};
+constexpr Rgb kPadOff{58, 58, 64};
+constexpr Rgb kPadLit{255, 238, 205};  // the LEDs are monochrome: a warm white at full level
+constexpr Rgb kHeld{90, 170, 255};
+
+void fill(std::vector<std::uint8_t>& px, int w, int x0, int y0, int x1, int y1, Rgb c) {
+  for (int y = y0; y < y1; ++y) {
+    for (int x = x0; x < x1; ++x) {
+      std::uint8_t* p = &px[(static_cast<std::size_t>(y) * static_cast<std::size_t>(w) + static_cast<std::size_t>(x)) * 4u];
+      p[0] = static_cast<std::uint8_t>(c.r);
+      p[1] = static_cast<std::uint8_t>(c.g);
+      p[2] = static_cast<std::uint8_t>(c.b);
+      p[3] = 255;
+    }
+  }
+}
+
+Rgb mix(Rgb a, Rgb b, int level) {
+  return Rgb{a.r + (b.r - a.r) * level / 255, a.g + (b.g - a.g) * level / 255, a.b + (b.b - a.b) * level / 255};
+}
+
+void put_u32(std::FILE* f, std::uint32_t v) {
+  const unsigned char b[4] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8), static_cast<unsigned char>(v >> 16),
+                              static_cast<unsigned char>(v >> 24)};
+  std::fwrite(b, 1, 4, f);
+}
+
+void put_u16(std::FILE* f, std::uint16_t v) {
+  const unsigned char b[2] = {static_cast<unsigned char>(v), static_cast<unsigned char>(v >> 8)};
+  std::fwrite(b, 1, 2, f);
+}
+
+}  // namespace
+
+Harness::Harness(app::App& app)
+    : app_(app),
+      raster_(std::make_unique<EveRaster>()),
+      display_(std::make_unique<RasterDisplay>(*raster_)),
+      engine_(std::make_unique<dsp::Engine>()) {
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false});
+  runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
+  clock_.set(1000);  // not zero: a tick of 0 is a legal time, but starting elsewhere catches code that treats it as "never"
+}
+
+Harness::~Harness() = default;
+
+bool Harness::start() {
+  const bool ok = runtime_->start();
+  runtime_->poll();
+  return ok;
+}
+
+void Harness::push(core::InputKind kind, std::uint8_t id, std::int16_t value) {
+  input_.push(core::InputEvent{clock_.now(), kind, id, value});
+}
+
+void Harness::press(app::Button b) { push(core::InputKind::Button, static_cast<std::uint8_t>(b), 1); }
+void Harness::release(app::Button b) { push(core::InputKind::Button, static_cast<std::uint8_t>(b), 0); }
+void Harness::pad_down(unsigned pad) { push(core::InputKind::Pad, static_cast<std::uint8_t>(pad), 127); }
+void Harness::pad_up(unsigned pad) { push(core::InputKind::Pad, static_cast<std::uint8_t>(pad), 0); }
+void Harness::turn(int detents) { push(core::InputKind::Encoder, app::kEncoder, static_cast<std::int16_t>(detents)); }
+
+void Harness::render_due() {
+  // Samples due by now at the engine's rate: uptime x rate, from the one rate constant (exact integers).
+  const std::uint64_t us = clock_.uptime_us();
+  const std::uint64_t due = us * core::kCpuHz / 1000000u * core::kRefCyclesPerSample.den / core::kRefCyclesPerSample.num;
+  const hal::audio::BlockCallback cb = runtime_->block_callback();
+  std::int16_t in[hal::audio::kBlockSamples] = {};
+  std::int16_t out[hal::audio::kBlockSamples];
+  hal::audio::BlockReport report{};
+  while (samples_ + hal::audio::kBlock <= due) {
+    const hal::audio::BlockIo io{in, out, 0u, &report};
+    cb.fn(cb.user, io);
+    samples_ += hal::audio::kBlock;
+    if (recording_) {
+      audio_.insert(audio_.end(), out, out + hal::audio::kBlockSamples);
+    }
+  }
+}
+
+void Harness::run_ms(std::uint32_t ms) {
+  for (std::uint32_t i = 0; i < ms; ++i) {
+    clock_.advance(core::kTicksPerMs);
+    render_due();
+    runtime_->poll();
+  }
+}
+
+std::vector<std::uint8_t> Harness::panel_image(int& width, int& height) const {
+  width = EveRaster::kWidth;
+  height = kImageH;
+  std::vector<std::uint8_t> px(static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4u);
+  fill(px, width, 0, 0, width, height, kBackground);
+  const std::uint8_t* screen = raster_->rgba();
+  for (std::size_t i = 0; i < EveRaster::kFramebufferBytes; ++i) {
+    px[i] = screen[i];
+  }
+  const app::Panel& panel = runtime_->context().panel();
+  for (unsigned pad = 0; pad < app::kPadCount; ++pad) {
+    const int x = kMarginX + static_cast<int>(app::pad_col(pad)) * (kPadW + kPadGap);
+    const int y = EveRaster::kHeight + kGap + static_cast<int>(app::pad_row(pad)) * (kPadH + kPadGap);
+    if (panel.pad_held(pad)) {
+      fill(px, width, x - 3, y - 3, x + kPadW + 3, y + kPadH + 3, kHeld);
+    }
+    fill(px, width, x, y, x + kPadW, y + kPadH, mix(kPadOff, kPadLit, leds_.level(pad)));
+  }
+  return px;
+}
+
+bool Harness::snapshot(const std::string& path) const {
+  int w = 0;
+  int h = 0;
+  const std::vector<std::uint8_t> px = panel_image(w, h);
+  return platform::host::write_png_rgba(path.c_str(), px.data(), w, h);
+}
+
+bool Harness::write_wav(const std::string& path) const {
+  const auto rate = static_cast<std::uint32_t>(core::kRefRateHz + 0.5f);
+  return write_wav_s16(path, audio_, rate);
+}
+
+bool write_wav_s16(const std::string& path, const std::vector<std::int16_t>& lr, std::uint32_t rate) {
+  std::FILE* f = std::fopen(path.c_str(), "wb");
+  if (f == nullptr) {
+    return false;
+  }
+  const auto data = static_cast<std::uint32_t>(lr.size() * sizeof(std::int16_t));
+  std::fwrite("RIFF", 1, 4, f);
+  put_u32(f, 36u + data);
+  std::fwrite("WAVEfmt ", 1, 8, f);
+  put_u32(f, 16u);
+  put_u16(f, 1u);  // PCM
+  put_u16(f, 2u);  // stereo
+  put_u32(f, rate);
+  put_u32(f, rate * 4u);
+  put_u16(f, 4u);
+  put_u16(f, 16u);
+  std::fwrite("data", 1, 4, f);
+  put_u32(f, data);
+  for (const std::int16_t s : lr) {
+    put_u16(f, static_cast<std::uint16_t>(s));
+  }
+  return std::fclose(f) == 0;
+}
+
+}  // namespace o3sdk::sim
