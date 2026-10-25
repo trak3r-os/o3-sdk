@@ -5,7 +5,8 @@ A framework for instruments and grooveboxes on the Tracker hardware: NXP MK66FX1
 
 An app built with o3sdk is a **whole firmware image**: it owns the screen, the pads, the buttons, the CPU and the memory. The kit is a
 library underneath it, not a host around it: drivers, the audio engine, the UI toolkit, the input conventions and a simulator, already
-solved. The first app is **o3-303**, an improved TB-303, in its own repository next to this one (`../o3-303`) that uses o3sdk as it is.
+solved. The first app is **[o3-303](https://github.com/trak3r-os/o3-303)**, an improved TB-303, in its own repository (checked out next to
+this one) that uses o3sdk as it is; it is also the example of how an app repository builds on the kit.
 
 Unofficial; not affiliated with or endorsed by Polyend. "Tracker" is used only to describe the hardware it runs on.
 
@@ -24,6 +25,8 @@ Unofficial; not affiliated with or endorsed by Polyend. "Tracker" is used only t
 Nothing here has run on a Tracker yet.
 
 ## Build
+
+CMake 3.24 or newer and a C++17 compiler for the host; the ARM GNU toolchain 15.3.rel1 for the image.
 
 ```sh
 cmake -S . -B build-host
