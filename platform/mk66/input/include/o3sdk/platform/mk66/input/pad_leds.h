@@ -87,8 +87,9 @@ class PadLeds final : public hal::Leds {
 
   std::uint32_t errors() const noexcept { return errors_; }
   std::uint32_t reinits() const noexcept { return reinits_; }
-  // The level staged for pad `index` (0 past the last pad).
+  // OS-HIL (`diag leds`): the level staged for pad `index` (0 past the last pad), and whether the chip holds the PWM of every staged level as far as the driver knows (nothing left to send).
   std::uint8_t level(unsigned index) const noexcept { return index < hal::kPadLedCount ? target_[index] : std::uint8_t{0}; }
+  bool in_sync() const noexcept { return all_pwm_current(); }
 
   static constexpr std::uint32_t kHealthUs = 500'000;      // how often the shutdown register is read back
   static constexpr std::uint32_t kShutdownPauseUs = 10'000;  // between software shutdown and normal operation (10 ms)

@@ -54,6 +54,21 @@ class OutputGate {
   std::uint32_t faults_ = 0;
 };
 
+// OS-OUTON: whether the main loop makes its attempt to open the outputs on this pass (the gate's ready() and OpenRetry::ready() are asked separately).
+//   audio_up    the audio path is running (from boot, or from `diag audio start` after a boot failure, which then goes through the same gate)
+//   opened      the outputs are open: set by the open, CLEARED by whatever mutes them (fw update's quiesce), so the open is attempted again only when that has ended
+//   asked       a Play, a Song Play or a live note found them closed and waits (the fallback: the boot attempt did not happen yet or failed)
+//   loading     the boot project load is still running (its settle, project, samples and modules phases; the SD card's mount runs before the main loop)
+//   fw_busy     the firmware update path holds the card or is handing over (an upload, a check, the wait for the bootloader): never raise the amplifier then
+//   powering_off  OS-POWER P1: the shutdown has stopped the engine and is stopping the audio path (appimg::power_off_latched(), set at its stage A and never cleared): NOTHING reopens the outputs,
+//               whatever the other arguments are, a Play or a live note that waits included. It is its own flag: `opened` is cleared by every mute, so it cannot be the guard.
+// At boot nobody has asked: the attempt waits for the load to end (the unmute blocks about 0.2 s, and must not sit on the loader's slices or the card's reads). A request
+// that is already there does not wait for the load: it is the old first-Play path, and the Play it holds back is waiting for sound.
+// (Restored from track3r-os for the firmware hand-over: o3-sdk has no project load and no power-off yet, so main passes false for `asked`, `loading` and `powering_off`.)
+constexpr bool open_wanted(bool audio_up, bool opened, bool asked, bool loading, bool fw_busy, bool powering_off) noexcept {
+  return !powering_off && audio_up && !opened && !fw_busy && (asked || !loading);
+}
+
 // Whether the main loop may make an attempt now (ready()), and what a failed or a successful one does to the next. `asked` is a
 // request that keeps its retries after the automatic attempts have given up (in track3r-os a Play that found the outputs closed);
 // an image with no such request passes false.

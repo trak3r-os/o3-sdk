@@ -24,6 +24,7 @@
 #include <o3sdk/hal/input.h>
 #include <o3sdk/hal/leds.h>
 
+#include <cstddef>
 #include <cstdint>
 
 namespace o3sdk::app {
@@ -68,6 +69,13 @@ class Runtime {
   // Frames the display was too busy to begin (a swap still pending): normal on the unit, tried again on the next pass.
   std::uint32_t frames_busy() const noexcept { return frames_busy_; }
   std::uint32_t last_frame_words() const noexcept { return last_words_; }
+
+  // The unit's state as one line, for the console's `state` (and a test): the kit's pairs, then the app's (App::describe_state).
+  //   app=<name> screen=<title> playing=0|1 tempo=<mbpm> cpu=<pct> frames=<n> [<the app's pairs>]
+  // `playing` is the last Play/Stop the main loop asked for, `tempo` is in milli-BPM (120000 = 120.0), `cpu` the render's load of the
+  // last block in percent (0 without a cycle counter), `frames` the frames drawn. Spaces in a name become '_'. NUL terminated, cut
+  // at a pair when `cap` is short; returns the length. Main loop only.
+  std::size_t state_line(char* out, std::size_t cap) const noexcept;
 
  private:
   static void render_block(void* user, const hal::audio::BlockIo& io) noexcept;

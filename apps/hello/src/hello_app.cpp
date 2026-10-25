@@ -24,6 +24,7 @@
 #include <o3sdk/units/synth/synth.h>
 
 #include <atomic>
+#include <cstddef>
 #include <cstdint>
 
 namespace {
@@ -110,6 +111,10 @@ class PlayScreen final : public app::Screen {
   }
 
   const char* title() const noexcept override { return "PLAY"; }
+
+  // For the console's `state` (HelloApp::describe_state).
+  int octave() const noexcept { return octave_; }
+  const app::ParamKeys& keys() const noexcept { return keys_; }
 
   void input(app::Context& ctx, const app::Input& in) noexcept override {
     if (keys_.input(ctx, in)) {
@@ -266,6 +271,24 @@ class HelloApp final : public app::App {
     (void)e.add_hook(riff_);
     play_.init(synth, delay, &riff_);
     ctx.show(play_);
+  }
+
+  // The console's `state` after the kit's pairs (docs/FRAMEWORK.md section 5): the keyboard octave, the page of values and the one the
+  // encoder drives now, with its value as the knob strip shows it. A key past the page's last (blank) has the value "-".
+  std::size_t describe_state(const app::Context& ctx, char* out, std::size_t cap) const noexcept override {
+    app::StateWriter w(out, cap);
+    const app::ParamKeys& keys = play_.keys();
+    const app::ParamPage* page = keys.page();
+    const unsigned focus = keys.focus();
+    char value[16] = {};
+    if (page != nullptr && focus < page->count) {
+      (void)ctx.engine().format_param(page->unit, page->ids[focus], value, sizeof value);
+    }
+    w.sint("octave", play_.octave());
+    w.str("page", page != nullptr ? page->name : nullptr);
+    w.num("focus", focus);
+    w.str("value", value);
+    return w.size();
   }
 
   bool input(app::Context& ctx, const app::Input& in) noexcept override {

@@ -48,6 +48,7 @@
 // whole render, the RX copy and the commit to the TX slot included.
 
 #include <o3sdk/hal/audio.h>
+#include <o3sdk/platform/mk66/audio/pipeline.h>
 #include <o3sdk/platform/mk66/audio/status.h>
 
 #include <cstdint>
@@ -60,6 +61,13 @@ hal::audio::Device& audio_device() noexcept;
 // What the audio path publishes about itself (counters, render cycles, jitter): audio_status().snapshot() from the main loop.
 // Zero until start() initialises the pipeline; start() resets it.
 const audio::AudioStatus& audio_status() noexcept;
+// OS-PERF3, `cpu reset`: zeroes the per-run figures (the maxima, the over-budget, late and fault counters: AudioStatus::reset_peaks); the fault LED's latch
+// (StatusSnapshot::fault_seen) stays. Main thread only.
+void audio_cpu_reset() noexcept;
+// OS-MAINGUARD tuning, `guard n <1..255>`: the starvation window N (Pipeline::set_starve_blocks; clamped), taking effect at the render's next block. Main thread only.
+void audio_set_starve_blocks(std::uint32_t n) noexcept;
+// The pipeline itself, read-only: the guard's shed counters for `cpu`.
+const audio::Pipeline& audio_pipeline() noexcept;
 
 // OS-MAINGUARD (audio/pipeline.h): arms the render's main-loop starvation guard, now and for every later start(). The main loop
 // calls it once, before its loop, and then calls audio_main_pass() once per pass; an image whose loop does not beat must not arm it.

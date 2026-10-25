@@ -7,14 +7,26 @@
 #   platform_mk66_display  the FT812 driver's pure parts (display/)
 #   platform_mk66_input    keys, pads, encoder, pad LEDs: pure parts (input/)
 #   platform_mk66_audio    the audio pipeline (slot ring, status), codec and I2S facts (audio/)
+#   platform_mk66_storage  the SD card: SDHC facts, SD protocol, FatFs-backed storage, card swap, `sd` and `ls` text (storage/)
+#   platform_mk66_update   the firmware update path: path guard, HEX validator, `fw` service, FirmwareStore, App firmware port (update/)
+#   platform_mk66_usb      the USB0 driver's pure parts, the `diag` platform text, the HIL injector, the `shot` stream, the USB audio tap (usb/)
+#   platform_mk66_console  the console's table, `state`, the USB crash-loop rule and the mode guard: pure parts (console/)
 # The pure parts build on every platform and their tests (tests/) run on the host. With -DO3SDK_PLATFORM=mk66 the block at the end
 # builds one firmware image per app (`<app>.elf`, `<app>.hex`, `<app>.ptf`) with the hardware halves of each domain.
+
+# The USB console, the SD card and the firmware update path (docs/M2B-PLAN.md): ON (the default) links them into every image, with the composition main.cpp makes of them; OFF links
+# exactly M2's image (no usb, storage, update or console objects), so the M2 session images do not change. The skeleton image has none either way.
+option(O3SDK_MK66_CONSOLE "Image: the USB console (CDC `diag`, USB audio, the firmware update path) and the SD card. OFF: M2's image" ON)
 
 o3sdk_library(platform_mk66_base SOURCES src/crash_record.cpp DEPENDS hal core)
 
 add_subdirectory(display)
 add_subdirectory(input)
 add_subdirectory(audio)
+add_subdirectory(storage)
+add_subdirectory(update)
+add_subdirectory(usb)
+add_subdirectory(console)
 
 if(NOT O3SDK_CROSS AND O3SDK_BUILD_TESTS)
   add_subdirectory(tests)
@@ -34,11 +46,27 @@ if(O3SDK_BUILD_TESTS)
   # Only boot::dma_init() writes DMA_CR and the DCHPRIs (ADR 0013 D1): a source check over this tree, every slice's files included.
   add_test(NAME mk66_dma_owner_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_dma_owner.py --self-test)
   add_test(NAME mk66_dma_owner COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_dma_owner.py check --root ${CMAKE_CURRENT_SOURCE_DIR})
+  # The host tools of the USB console (tools/README.md), copied from track3r-os and identical but for the names: each one's self-test, with no
+  # hardware. o3console talks to a pseudo-terminal that plays the unit; o3shot decodes and compares screens; o3audio stands in for arecord;
+  # o3hil runs scenarios against a mock unit; o3disk finds the unit's disk in a fake /sys (the disk set itself is not in o3sdk yet).
+  add_test(NAME mk66_o3console_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3console.py --self-test)
+  add_test(NAME mk66_o3shot_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3shot.py --self-test)
+  add_test(NAME mk66_o3audio_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3audio.py --self-test)
+  add_test(NAME mk66_o3hil_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3hil.py --self-test)
+  add_test(NAME mk66_o3disk_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3disk.py --self-test)
+  # Only the update path writes the card and only it drives the bootloader request pin: a source check over o3sdk's whole tree (it passes
+  # while a file is absent and fails when a writer turns up anywhere else). The root is o3sdk's own directory, not the top-level project's.
+  add_test(NAME mk66_writers_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_writers.py --self-test)
+  add_test(NAME mk66_writers COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_writers.py check --root ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+  # The USB check of an image (vector, g_bdt, the identity string): only its self-test here; each app's image gets `<app>_usb` (o3sdk_app).
+  add_test(NAME mk66_usb_image_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_usb_image.py --self-test)
   # The build identity script: the kit's and the app's hashes, "unknown", "-dirty", the version tag (tests/gen_build_info_test.cmake).
   add_test(NAME mk66_build_info COMMAND ${CMAKE_COMMAND} -DGEN=${_mk66_tools}/gen_build_info.cmake
            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/build_info_test -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_build_info_test.cmake)
   set_tests_properties(mk66_gen_ld_selftest mk66_image_selftest mk66_ramfunc_selftest mk66_dma_owner_selftest mk66_dma_owner
-                       mk66_build_info PROPERTIES TIMEOUT 60 LABELS mk66)
+                       mk66_build_info mk66_writers_selftest mk66_writers mk66_usb_image_selftest PROPERTIES TIMEOUT 60 LABELS mk66)
+  set_tests_properties(mk66_o3console_selftest mk66_o3shot_selftest mk66_o3audio_selftest mk66_o3hil_selftest mk66_o3disk_selftest
+                       PROPERTIES TIMEOUT 180 LABELS mk66)  # (a pseudo-terminal and a few seconds of mock unit: 16 s idle, slower on a busy host)
   if(NOT O3SDK_PLATFORM STREQUAL "mk66")
     add_test(NAME mk66_ld COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/gen_ld.py check --header ${_mk66_header} --template ${_mk66_template})
     set_tests_properties(mk66_ld PROPERTIES TIMEOUT 60 LABELS mk66)
@@ -85,12 +113,17 @@ add_custom_target(o3sdk_build_info
 
 # The reset sequence, the fault path, the clock, the I2C master, the code cache and main: compiled once, linked into every app's image.
 # main.cpp is the composition root (display, input, the app's Runtime, audio); the skeleton's main_skeleton.cpp only names o3sdk_app().
+set(_mk66_console OFF)
 if(O3SDK_MK66_SKELETON)
   set(_mk66_main src/main_skeleton.cpp)
   set(_mk66_main_libs "")
 else()
   set(_mk66_main src/main.cpp)
   set(_mk66_main_libs platform_mk66_display platform_mk66_input platform_mk66_audio)
+  if(O3SDK_MK66_CONSOLE)
+    set(_mk66_console ON)
+    list(APPEND _mk66_main_libs platform_mk66_console platform_mk66_usb platform_mk66_storage platform_mk66_update usb)
+  endif()
 endif()
 add_library(platform_mk66_image OBJECT src/startup.cpp src/boot.cpp src/crash_store.cpp src/clock.cpp src/i2c.cpp src/cache.cpp ${_mk66_main})
 target_link_libraries(platform_mk66_image PUBLIC platform_mk66_base app ${_mk66_main_libs})
@@ -102,7 +135,13 @@ target_compile_definitions(platform_mk66_image PRIVATE
   O3SDK_SDRAM_FULL_TEST=$<BOOL:${O3SDK_MK66_SDRAM_FULL_TEST}>
   O3SDK_CODE_CACHE=$<BOOL:${O3SDK_CODE_CACHE}>
   O3SDK_SDRAM_ICODE_ALIAS=$<BOOL:${O3SDK_SDRAM_ICODE_ALIAS}>
-  O3SDK_AUDIO_TEST=$<BOOL:${O3SDK_MK66_AUDIO_TEST}>)
+  O3SDK_AUDIO_TEST=$<BOOL:${O3SDK_MK66_AUDIO_TEST}>
+  O3SDK_CONSOLE=$<BOOL:${_mk66_console}>)
+# The console's hardware half names the generated build identity (the banner and `version` print O3SDK_IMAGE_LABEL).
+if(TARGET platform_mk66_console_hw)
+  target_include_directories(platform_mk66_console_hw PRIVATE ${_mk66_gen_dir})
+  add_dependencies(platform_mk66_console_hw o3sdk_build_info)
+endif()
 # The reset sequence is the C runtime: its copy and zero loops must stay loops, not become memcpy / memset calls.
 set_source_files_properties(src/startup.cpp PROPERTIES COMPILE_OPTIONS -fno-tree-loop-distribute-patterns)
 
@@ -120,6 +159,9 @@ function(o3sdk_mk66_image name app_target)
   target_link_libraries(${name} PRIVATE platform_mk66_image)
   if(NOT O3SDK_MK66_SKELETON)
     target_link_libraries(${name} PRIVATE platform_mk66_display_hw platform_mk66_input_hw platform_mk66_audio_hw)
+    if(O3SDK_MK66_CONSOLE)
+      target_link_libraries(${name} PRIVATE platform_mk66_console_hw platform_mk66_usb_hw platform_mk66_storage_hw platform_mk66_update_hw)
+    endif()
   endif()
   # Whole archive: o3sdk_app() is the app library's entry point and only main names it.
   target_link_libraries(${name} PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,${app_target}>")
@@ -171,6 +213,12 @@ function(o3sdk_mk66_image name app_target)
   add_test(NAME ${name}_ramfunc COMMAND ${O3SDK_PYTHON} -I ${tools}/check_ramfunc.py check $<TARGET_FILE:${name}>
            --objdump ${CMAKE_OBJDUMP} ${ramfunc_args})
   set_tests_properties(${name}_image ${name}_flashconfig ${name}_ramfunc PROPERTIES TIMEOUT 60 LABELS mk66)
+  # An image with the USB console: the interrupt vector of USB0 (16 + 53) resolves to USB0_IRQHandler and not to the default handler, the buffer descriptor table is
+  # 512-aligned, and the USB identity string is in the image (tools/check_usb_image.py).
+  if(NOT O3SDK_MK66_SKELETON AND O3SDK_MK66_CONSOLE)
+    add_test(NAME ${name}_usb COMMAND ${O3SDK_PYTHON} -I ${tools}/check_usb_image.py check $<TARGET_FILE:${name}> --nm ${CMAKE_NM})
+    set_tests_properties(${name}_usb PROPERTIES TIMEOUT 60 LABELS mk66)
+  endif()
 endfunction()
 
 # ---- ctest: the generated linker script and the noinit guard (o3sdk's own tests) --------------------------------------------

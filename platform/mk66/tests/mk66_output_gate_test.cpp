@@ -12,6 +12,7 @@
 
 #include <cstdint>
 
+using o3sdk::platform::mk66::open_wanted;
 using o3sdk::platform::mk66::OpenRetry;
 using o3sdk::platform::mk66::OutputGate;
 
@@ -137,6 +138,53 @@ TEST_CASE("open retry: the backoff survives the millisecond counter wrapping, an
   CHECK(r.failures() == 255);
 }
 
+// ---- OS-OUTON: when the main loop makes the attempt (open_wanted, restored from track3r-os with its cases) -------------------------------------------------------------
+
+TEST_CASE("open_wanted: at boot, with nobody asking, the attempt waits for the audio path and for the project load, and then it is made") {
+  CHECK_FALSE(open_wanted(/*audio_up=*/false, /*opened=*/false, /*asked=*/false, /*loading=*/false, /*fw_busy=*/false, /*powering_off=*/false));  // the audio path did not come up: nothing to open
+  CHECK_FALSE(open_wanted(true, false, false, /*loading=*/true, false, false));                                                  // the boot project load: the unmute must not sit on its slices
+  CHECK(open_wanted(true, false, false, false, false, false));                                                            // loaded, or nothing to load (no card, no Workspace)
+}
+
+TEST_CASE("open_wanted: a Play, a Song Play or a live note that found the outputs closed does not wait for the load (the fallback)") {
+  CHECK(open_wanted(true, false, /*asked=*/true, /*loading=*/true, false, false));
+  CHECK(open_wanted(true, false, true, false, false, false));
+  CHECK_FALSE(open_wanted(/*audio_up=*/false, false, true, false, false, false));  // no audio path: the request waits for a start, it opens nothing
+  CHECK_FALSE(open_wanted(false, false, true, true, false, false));
+}
+
+TEST_CASE("open_wanted: once opened, not again until whatever muted them clears the flag") {
+  for (int asked = 0; asked < 2; ++asked) {
+    for (int loading = 0; loading < 2; ++loading) {
+      CHECK_FALSE(open_wanted(true, /*opened=*/true, asked != 0, loading != 0, false, false));
+    }
+  }
+}
+
+TEST_CASE("open_wanted: never while the firmware update path holds the card or waits for the bootloader, asked or not") {
+  CHECK_FALSE(open_wanted(true, false, false, false, /*fw_busy=*/true, false));
+  CHECK_FALSE(open_wanted(true, false, true, false, true, false));
+  CHECK_FALSE(open_wanted(true, false, true, true, true, false));
+  CHECK(open_wanted(true, false, false, false, false, false));  // and it comes back the moment the update path is idle
+}
+
+TEST_CASE("open_wanted: never while the shutdown has the audio path (the power-off latch), whatever the other arguments are") {
+  for (int audio_up = 0; audio_up < 2; ++audio_up) {
+    for (int opened = 0; opened < 2; ++opened) {
+      for (int asked = 0; asked < 2; ++asked) {
+        for (int loading = 0; loading < 2; ++loading) {
+          for (int fw_busy = 0; fw_busy < 2; ++fw_busy) {
+            CHECK_FALSE(open_wanted(audio_up != 0, opened != 0, asked != 0, loading != 0, fw_busy != 0, /*powering_off=*/true));
+          }
+        }
+      }
+    }
+  }
+  // and without the latch the same inputs open as before
+  CHECK(open_wanted(true, false, false, false, false, /*powering_off=*/false));
+  CHECK(open_wanted(true, false, true, true, false, false));
+}
+
 namespace {
 
 // main.cpp's loop body for the open (audio.h, "HOW main.cpp USES IT", step 3): a fresh reading into the gate, then, while the path runs and the outputs
@@ -147,6 +195,7 @@ struct BootLoop {
   bool started = true;      // audio_device().start() returned Ok
   bool opened = false;
   bool unmute_ok = true;    // false: a codec write that is not acknowledged
+  bool fw_busy = false;     // appimg::firmware_update_active(): the update path holds the card or waits for the bootloader
   bool led_fault = false;   // the audio LED code for a failed unmute
   int unmutes = 0;
   int failures_seen = 0;
@@ -155,7 +204,7 @@ struct BootLoop {
   bool pass(std::uint32_t ms, std::uint32_t boundaries, std::uint32_t underruns = 0, std::uint32_t faults = 0) {
     ++passes;
     gate.observe(boundaries, underruns, faults);
-    if (!started || opened || !gate.ready(boundaries) || !retry.ready(false, ms)) {
+    if (!open_wanted(started, opened, /*asked=*/false, /*loading=*/false, fw_busy, /*powering_off=*/false) || !gate.ready(boundaries) || !retry.ready(false, ms)) {
       return false;
     }
     ++unmutes;
@@ -273,4 +322,23 @@ TEST_CASE("a mute from elsewhere clears the flag, and the loop opens them again 
   CHECK_FALSE(loop.pass(3480, 3539, 1));
   CHECK(loop.pass(3481, 3540, 1));
   CHECK(loop.unmutes == 3);
+}
+
+TEST_CASE("fw update hand-over: quiesce clears the open; nothing raises the amplifier during the wait; a failed or timed-out hand-over opens them again") {
+  BootLoop loop;
+  CHECK(loop.pass(3000, 3000));
+  CHECK(loop.opened);
+  // `fw update`: the upload and the re-check hold the card, then quiesce() mutes the outputs and appimg::audio_closed() clears the flag.
+  loop.fw_busy = true;
+  CHECK_FALSE(loop.pass(10000, 10000));
+  loop.muted();
+  CHECK_FALSE(loop.opened);
+  for (std::uint32_t ms = 10001; ms < 15000; ms += 100) {  // the 5 s wait for the bootloader: the update path is busy, the gate would be ready, the amplifier stays down
+    CHECK_FALSE(loop.pass(ms, ms));
+  }
+  CHECK(loop.unmutes == 1);
+  loop.fw_busy = false;  // "the bootloader did not take over": the phase is idle again
+  CHECK(loop.pass(15100, 15100));
+  CHECK(loop.opened);
+  CHECK(loop.unmutes == 2);
 }

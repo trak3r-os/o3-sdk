@@ -259,6 +259,55 @@ TEST_CASE("scanner: a button press and release carry the button code") {
   CHECK(e[0].value == 0);
 }
 
+TEST_CASE("scanner: an injected event (OS-HIL) takes the scan's own queue, with its stamp rule, and cannot be told from a finger") {
+  Rig r;
+  r.scanner.begin();
+  r.pass();
+  // a real press, then an injected one in the same pass: both in one queue, in order, never an earlier stamp than the one before
+  r.pad_chip.press(input::key_of_pad(3));
+  r.pass();
+  CHECK(r.scanner.inject(core::InputKind::Button, 29, 1));
+  CHECK(r.scanner.inject(core::InputKind::Pad, 7, 90));
+  CHECK(r.scanner.inject(core::InputKind::Encoder, 0, -3));
+  CHECK(r.scanner.inject(core::InputKind::Pad, 7, 0));
+  CHECK(r.scanner.inject(core::InputKind::Button, 29, 0));
+  core::InputEvent e[8];
+  MUST(r.pop(e, 8) == 6);
+  CHECK((e[0].kind == core::InputKind::Pad && e[0].id == 3 && e[0].value == 127));
+  CHECK((e[1].kind == core::InputKind::Button && e[1].id == 29 && e[1].value == 1));
+  CHECK((e[2].kind == core::InputKind::Pad && e[2].id == 7 && e[2].value == 90));
+  CHECK((e[3].kind == core::InputKind::Encoder && e[3].id == 0 && e[3].value == -3));
+  CHECK((e[4].kind == core::InputKind::Pad && e[4].value == 0));
+  CHECK((e[5].kind == core::InputKind::Button && e[5].value == 0));
+  for (unsigned i = 1; i < 6; ++i) {
+    CHECK(core::tick_reached(e[i].timestamp, e[i - 1].timestamp));  // the stamps never go back
+  }
+  // a pressed injected pad is held for the LEDs until its injected release
+  CHECK(r.scanner.inject(core::InputKind::Pad, 20, 127));
+  CHECK(r.scanner.pads_held() == ((std::uint64_t{1} << 20) | (std::uint64_t{1} << 3)));
+  CHECK(r.scanner.inject(core::InputKind::Pad, 20, 0));
+  CHECK(r.scanner.pads_held() == (std::uint64_t{1} << 3));
+  r.scanner.poll(e[0]);
+  r.scanner.poll(e[0]);
+  // what the scan never makes is refused, and nothing is queued for it
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Button, 33, 1));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Button, 1, 2));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Pad, 48, 1));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Pad, 1, 128));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Pad, 1, -1));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Encoder, 1, 1));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::Encoder, 0, 0));
+  CHECK_FALSE(r.scanner.inject(core::InputKind::PcKey, 0, 1));
+  CHECK_FALSE(r.scanner.poll(e[0]));
+  // a full queue refuses and counts, like the scan's
+  unsigned taken = 0;
+  while (r.scanner.inject(core::InputKind::Button, 1, 1)) {
+    ++taken;
+  }
+  CHECK(taken == core::kInputQueueCapacity);
+  CHECK(r.scanner.stats().dropped >= 1u);
+}
+
 TEST_CASE("scanner: a bounce is one press, and a quick tap is delayed by the lockout, not lost") {
   Rig r;
   r.scanner.begin();

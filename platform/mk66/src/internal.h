@@ -12,6 +12,10 @@
 
 #include <cstdint>
 
+namespace o3sdk::dsp {
+class Engine;
+}
+
 namespace o3sdk::platform::mk66::boot {
 
 // ---- boot.cpp: the reset sequence's steps, in the order startup.cpp calls them -------------------------------------
@@ -88,3 +92,30 @@ Result write_reg(std::uint8_t address7, std::uint16_t reg, std::uint16_t value) 
 Result read_reg(std::uint8_t address7, std::uint16_t reg, std::uint16_t& value) noexcept;
 
 }  // namespace o3sdk::platform::mk66::i2c
+
+// ---- the image's composition root: what the firmware update path (update/src/fw_host_mk66.cpp) and the console ask of it ----------------------
+// Declarations identical to track3r-os's (src/internal.h); the definitions are the console slice's (console/src/appimg.cpp, docs/M2B-PLAN.md
+// section 3). The rest of track3r-os's appimg:: (the tracker's app, project loads, power, MIDI, disk) has no counterpart here.
+namespace o3sdk::platform::mk66::appimg {
+// OS-HW1: around a long blocking call made from the main loop (`diag audio start`: the codec's 0.5 s ramp) the display is serviced from the idle hook,
+// as it is during the boot's waits. `on` false puts back what was there: no hook, or the hook of the boot screen's hold while that lasts.
+void service_while_blocked(bool on) noexcept;
+// OS-OUTON: whether the outputs are open (audio_opened() set it), and the other way: audio_closed() says the outputs were muted behind the app's back (`fw update`'s quiesce
+// before the hand-over), so that a Play waits for the gate again and main.cpp opens them again once the update path let go. The tone image: false, no-op.
+void audio_closed() noexcept;
+// OS-006c: stops the sequencer's transport (a Stop on its ring, the badge says so), for the hand-over to the bootloader (`fw update`).
+void stop_transport() noexcept;
+// OS-007o: the card is in use by the app: a project is loading or a save job is running. The firmware update path (`fw put|rm|arm|update`) refuses while it is true,
+// and the save layer refuses to start while the update path holds the card (SaveService::attach_claim): FatFs on the volume is not re-entrant and a hand-over to the
+// bootloader must not cut a save. Main loop only.
+bool storage_in_use() noexcept;
+
+// ---- console slice (docs/M2B-PLAN.md section 5): the image's own, defined with the others in console/src/appimg.cpp ----------------------------------------------------------
+// The composition root gives the console the engine whose transport stop_transport() stops (console::attach does, from the Runtime's context).
+void bind_engine(dsp::Engine& engine) noexcept;
+// OS-OUTON, as in track3r-os: whether the outputs are open (audio_opened() sets it, audio_closed() clears it), and whether the firmware update path holds the card or is
+// handing over (main never raises the amplifier then; it is also the card's claim). Main loop only.
+bool audio_outputs_open() noexcept;
+void audio_opened() noexcept;
+bool firmware_update_active() noexcept;
+}  // namespace o3sdk::platform::mk66::appimg

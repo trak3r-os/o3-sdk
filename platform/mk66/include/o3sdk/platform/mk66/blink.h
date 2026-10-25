@@ -37,6 +37,9 @@ inline constexpr std::uint8_t kAudioFailure = 10;  // the audio bring-up failed 
 inline constexpr std::uint8_t kAudioFault = 11;       // an underrun, a late render, a missed boundary or an I2S/DMA error since boot
 inline constexpr std::uint8_t kAudioOverBudget = 12;  // no fault, but a render exceeded the load governor's 60 % of the block
 
+// USB (docs/M2B-PLAN.md section 6, mitigation b): the log that says why cannot be read with USB down, so the LED says that it is.
+inline constexpr std::uint8_t kUsbFailure = 14;  // usb0::start() refused (the descriptor table misaligned, the descriptors did not build): the image runs without USB. Shown for two periods after the start-up, then the heartbeat
+
 inline constexpr std::uint32_t kPulseOnMs = 200;
 inline constexpr std::uint32_t kPulseOffMs = 200;
 inline constexpr std::uint32_t kPauseMs = 1600;

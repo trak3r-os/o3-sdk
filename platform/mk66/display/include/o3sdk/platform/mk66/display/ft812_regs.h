@@ -65,6 +65,12 @@ inline constexpr std::uint8_t kDlSwapFrame = 2;        // swap at the next frame
 inline constexpr std::uint16_t kSoundMute = 0x0060u;   // REG_SOUND: effect "mute"
 inline constexpr std::uint16_t kCmdFault = 0x0FFFu;    // REG_CMD_READ value that says the coprocessor stopped
 
+// ---- The snapshot (OS-HIL, `diag shot`): CMD_SNAPSHOT2 fmt, ptr, x | y << 16, w | h << 16 (the Guide's CMD_SNAPSHOT2), and the two
+// output formats the console asks for. RGB565 is EVE.h's; ARGB8 is the code 0x20, which EVE.h does not name.
+inline constexpr std::uint32_t kCmdSnapshot2 = 0xFFFFFF37u;
+inline constexpr std::uint32_t kFmtRgb565 = 7u;
+inline constexpr std::uint32_t kFmtArgb8 = 0x20u;
+
 // ---- Host commands: three bytes, command / parameter / 0 ---------------------------------------------------------
 namespace host {
 inline constexpr std::uint8_t kActive = 0x00;

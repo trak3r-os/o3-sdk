@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <o3sdk/platform/mk66/input/scanner.h>
 
+#include <o3sdk/hal/leds.h>
 #include <o3sdk/platform/mk66/input/pins.h>
 
 namespace o3sdk::platform::mk66::input {
@@ -215,6 +216,42 @@ void Scanner::publish_encoder(core::Tick now) noexcept {
   } else {
     ++dropped_;  // the turns are kept and offered again: a full queue costs latency, not detents
   }
+}
+
+bool Scanner::inject(core::InputKind kind, std::uint8_t id, std::int16_t value) noexcept {
+  core::InputEvent event;
+  refresh_stamp(clock_.now());
+  switch (kind) {
+    case core::InputKind::Button:
+      if (id >= kButtonCount || value < 0 || value > 1) {
+        return false;
+      }
+      event = core::make_button_event(stamp(clock_.now()), id, value != 0);
+      break;
+    case core::InputKind::Pad:
+      if (id >= hal::kPadLedCount || value < 0 || value > 127) {
+        return false;
+      }
+      event = core::make_pad_event(stamp(clock_.now()), id, value);
+      break;
+    case core::InputKind::Encoder:
+      if (id != 0u || value == 0) {
+        return false;
+      }
+      event = core::make_encoder_event(stamp(clock_.now()), id, value);
+      break;
+    default:
+      return false;
+  }
+  if (!queue_.push(event)) {
+    ++dropped_;
+    return false;
+  }
+  if (kind == core::InputKind::Pad) {
+    const std::uint64_t bit = std::uint64_t{1} << id;
+    injected_pads_ = value != 0 ? (injected_pads_ | bit) : (injected_pads_ & ~bit);
+  }
+  return true;
 }
 
 hal::InputStats Scanner::stats() const noexcept {

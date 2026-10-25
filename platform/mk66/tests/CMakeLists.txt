@@ -28,7 +28,12 @@ mk66_suite(mk66_base_tests platform_mk66_base
   mk66_mem_map_test.cpp mk66_crash_record_test.cpp mk66_memtest_test.cpp mk66_sdramc_config_test.cpp mk66_flash_config_test.cpp
   mk66_lmem_test.cpp mk66_blink_irq_test.cpp mk66_resources_test.cpp mk66_idle_hook_test.cpp)
 mk66_suite(mk66_display_tests platform_mk66_display mk66_display_*_test.cpp)
-mk66_suite(mk66_input_tests platform_mk66_input mk66_input_*_test.cpp)
+# (mk66_input_hold_test.cpp tests usb/input_hold.h and is in mk66_usb_tests below, so the glob names the others.)
+mk66_suite(mk66_input_tests platform_mk66_input
+  mk66_input_filter_test.cpp mk66_input_leds_test.cpp mk66_input_map_test.cpp mk66_input_pins_test.cpp mk66_input_scanner_test.cpp)
+# (mk66_storage_swap_test.cpp drives the firmware upload through the update path's FwService: the storage suite links the update library, which brings storage.)
+mk66_suite(mk66_storage_tests platform_mk66_update mk66_storage_*_test.cpp)
+mk66_suite(mk66_update_tests platform_mk66_update mk66_update_*_test.cpp)
 mk66_suite(mk66_audio_tests platform_mk66_audio
   mk66_audio_config_test.cpp mk66_sgtl5000_test.cpp mk66_output_gate_test.cpp audio_*_test.cpp)
 # audio_status_thread_test.cpp: std::thread needs the platform's thread library (pthread on Linux).
@@ -39,4 +44,19 @@ endif()
 # links `app`, the platform's input library does not depend on it.
 if(TARGET mk66_input_tests)
   target_link_libraries(mk66_input_tests PRIVATE app)
+endif()
+# The console's pure part: the table and its rules (mk66_console_core_test.cpp), `state` over a real Runtime on the host fakes (platform_host),
+# the USB mode guard and the crash-loop rule (usb_mode_guard_test.cpp).
+mk66_suite(mk66_console_tests platform_mk66_console mk66_console_*_test.cpp usb_mode_guard_test.cpp)
+if(TARGET mk66_console_tests)
+  target_link_libraries(mk66_console_tests PRIVATE platform_host)
+  # mk66_console_e2e_test.cpp runs the real shell and pump over the device and its fake controller: the rig and the fake controller are the kit's tests' (tests/usb).
+  target_include_directories(mk66_console_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/usb)
+endif()
+# The USB driver's pure parts (usb/): the SoC facts, the diag text, the injector, the input hold, the peek/poke lists, the `shot` stream, the real shell + pump + log pager over the
+# device and its fake controller (mk66_usb_console_test.cpp), the USB audio tap and the boot layout's descriptors. The fake controller and the rig are the kit's tests' (tests/usb).
+mk66_suite(mk66_usb_tests platform_mk66_usb
+  mk66_usb_*_test.cpp mk66_hil_inject_test.cpp mk66_input_hold_test.cpp mk66_mem_access_test.cpp mk66_shot_stream_test.cpp)
+if(TARGET mk66_usb_tests)
+  target_include_directories(mk66_usb_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/usb)
 endif()

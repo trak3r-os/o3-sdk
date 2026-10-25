@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 # platform/mk66/audio: the audio path. The pure parts (the slot ring, the pipeline between the DMA ISR and the render line, the status
-# counters, the test tone, the SGTL5000 register plan, the I2S/eDMA values, the output gate) are `platform_mk66_audio`, tested on the
+# counters, the `cpu` / `mem` text formatters (diag), the test tone, the SGTL5000 register plan, the I2S/eDMA values, the output gate) are `platform_mk66_audio`, tested on the
 # host (tests/mk66_audio_config_test.cpp, mk66_sgtl5000_test.cpp, mk66_output_gate_test.cpp, audio_*_test.cpp); the I2S0 / eDMA / codec
 # code (src/audio.cpp) is `platform_mk66_audio_hw`, which joins the image (platform/mk66/CMakeLists.txt).
-o3sdk_library(platform_mk66_audio SOURCES src/pipeline.cpp src/status.cpp src/test_tone.cpp DEPENDS platform_mk66_base)
+o3sdk_library(platform_mk66_audio SOURCES src/pipeline.cpp src/status.cpp src/test_tone.cpp src/diag.cpp DEPENDS platform_mk66_base)
 # The single-precision rule (cmake/O3sdkTargets.cmake): the test tone's table is float.
 target_compile_options(platform_mk66_audio PRIVATE -fsingle-precision-constant)
 # The codec's CHIP_I2S_CTRL (sgtl5000.h): the value proven on the unit, or the data sheet's letter for a 64 Fs slave, an A/B item of the

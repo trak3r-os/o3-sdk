@@ -1,0 +1,20 @@
+{
+ "name": "hello_audio",
+ "title": "HELLO's note reaches the master on USB channels 7-8 (the boot set is track3r-os's AUDIO P8; 1-6 are silent)",
+ "needs": ["audio"],
+ "steps": [
+  {"state": {"app": "HELLO", "playing": "0"}, "within": 10, "poll": 0.5},
+  {"cmd": "usb", "expect_not": "ERR", "note": "(the USB state, for the log: the AUDIO set and its streams)"},
+  {"pad": 12, "gesture": "down", "note": "(C5 on the keyboard map, held for the two captures below)"},
+  {"wait": 0.5},
+  {"audio": {"seconds": 2, "channel": 7, "silent": false, "clipping": false, "max_peak_db": -1},
+   "note": "(o3audio.py record --channel 7 --not-silent --no-clipping: the master's left; the device's own channel count is taken, 8 in P8)"},
+  {"audio": {"seconds": 1, "channel": 1, "silent": true}, "soft": true,
+   "note": "(channels 1-6 are silent, kept for an app's stems: SOFT, the layout has not run on a unit yet)"},
+  {"pad": 12, "gesture": "up"},
+  {"cmd": "cpu", "expect": "\\bunderrun 0 \\(", "soft": true, "note": "(no underrun with the capture stream and the return running)"}
+ ],
+ "finally": [
+  {"pad": 12, "gesture": "up", "note": "(a pad left down by a failed run)"}
+ ]
+}

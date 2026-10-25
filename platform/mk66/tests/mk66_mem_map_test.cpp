@@ -38,6 +38,8 @@ TEST_CASE("mk66 mem_map: SRAM_L is the hot code's budget and free space; SRAM_U 
   CHECK(mem::kRamfuncLBudget == 32u * 1024u);
   CHECK(mem::kSramLFreeBase == 0x1FFF8000u);
   CHECK(mem::kRamfuncLBudget <= mem::kSramLSize);
+  CHECK(mem::kRamfuncLSize == 0xC800u);  // the update path's validator window: track3r-os's 50 KiB
+  CHECK(mem::kRamfuncLBudget <= mem::kRamfuncLSize);
   // ADR 0013 D7: SRAM_U stacks 24 KiB; the crash block, the fault stack and the main stack leave well over half of SRAM_U.
   CHECK(mem::kStackSize == 24u * 1024u);
   CHECK(mem::kStackSize + mem::kFaultStackSize + mem::kCrashBlockSize < mem::kSramUSize / 2u);

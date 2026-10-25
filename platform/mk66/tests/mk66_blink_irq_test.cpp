@@ -93,7 +93,7 @@ TEST_CASE("blink: the codes are distinct patterns, display and audio share one L
   // Every code of every slice in one list: a new slice that reuses a number fails here, not on the bench.
   const std::uint8_t codes[] = {blink::kClockFailure,  blink::kSdramFailure,  blink::kDisplayFailure, blink::kDisplayPolled,
                                 blink::kCrashSeen,     blink::kDisplayStalled, blink::kAppFailure,     blink::kAudioFailure,
-                                blink::kAudioFault,    blink::kAudioOverBudget, blink::kInputDegraded, blink::kDrillRoundTrip};
+                                blink::kAudioFault,    blink::kAudioOverBudget, blink::kInputDegraded, blink::kDrillRoundTrip,  blink::kUsbFailure};
   for (std::size_t i = 0; i < sizeof codes; ++i) {
     for (std::size_t j = i + 1; j < sizeof codes; ++j) {
       CHECK(codes[i] != codes[j]);
@@ -104,6 +104,7 @@ TEST_CASE("blink: the codes are distinct patterns, display and audio share one L
   CHECK(blink::kSdramFailure == 3);
   CHECK(blink::kCrashSeen == 6);
   CHECK(blink::kInputDegraded == 13);
+  CHECK(blink::kUsbFailure == 14);
   // The audio codes follow the display's (4, 5, 8, 9): 10 and up.
   CHECK(blink::kAudioFailure == 10);
   CHECK(blink::kAudioFault == 11);

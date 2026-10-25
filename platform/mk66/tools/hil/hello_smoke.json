@@ -1,0 +1,31 @@
+{
+ "name": "hello_smoke",
+ "title": "HELLO on the unit: version, state, the boot screen against the simulator's, a key, the encoder and a pad reach the app, the pad LED follows",
+ "steps": [
+  {"cmd": "version", "expect": ["Track3r o3sdk, build \\S+", "usb 16D0:0E9F"], "expect_not": "ERR"},
+  {"cmd": "log 40", "expect_not": "FAILED", "soft": true, "note": "(the boot log: a FAILED line is the thing to look at; soft, a unit with no card in may say so)"},
+  {"state": {"app": "HELLO", "screen": "PLAY", "playing": "0"}, "within": 10, "poll": 0.5},
+  {"leds": {"online": true, "snap": "idle", "within": 3}, "note": "(the pad levels at rest: the natural keys dim, the others off)"},
+  {"shot": "boot", "compare": {"sim_scenario": "apps/hello/scenarios/tour.txt", "snap": "01_boot", "ignore": ["700,0,100,32"], "tol": 24, "aa": 1, "max_bad": 0.005}, "non_blank": true, "soft": true,
+   "note": "(soft until a unit has shown the picture agrees: the simulator is a tool for looking at screens, not a model of the FT812. The reference is <golden-dir>/01_boot.png: the TOP 800x480 of hello_sim's 01_boot.png, which also draws the pads below the screen; run with --golden-dir; the crop is in tools/README.md. The header's CPU readout, right of x=700, is ignored: the simulator shows none. Taken first: the picture is the boot state, WAVE SAW on F1)"},
+  {"keys": ["f2"], "gap": 0.3},
+  {"state": {"app": "HELLO", "focus": "1"}, "within": 2, "note": "(F2, CUTOFF, took the encoder)"},
+  {"keys": ["f1"], "gap": 0.3},
+  {"state": {"focus": "0"}, "within": 2, "note": "(F1, WAVE)"},
+  {"enc": -3, "gap": 0.3, "note": "(three detents down: the bottom of WAVE's four values whatever it was)"},
+  {"state": {"focus": "0"}, "within": 2, "keep": {"as": "LOW", "field": "value", "re": "^(.+)$"}},
+  {"enc": 3, "gap": 0.3},
+  {"state": {"focus": "0"}, "ne": {"value": "{{LOW}}"}, "within": 2, "note": "(`enc 3` moved WAVE three values up)"},
+  {"enc": -1, "gap": 0.3},
+  {"state": {"focus": "0", "value": "SAW"}, "within": 2, "soft": true, "note": "(one down from the top: SAW, the value the unit boots with)"},
+  {"pad": 12, "gesture": "down"},
+  {"leds": {"differs_from": "idle", "within": 3}, "note": "(pad 12 is C5 on the keyboard map: dim at rest, full while held)"},
+  {"pad": 12, "gesture": "up"},
+  {"leds": {"online": true, "within": 3}},
+  {"state": {"app": "HELLO", "screen": "PLAY", "playing": "0"}},
+  {"shot": "touched", "non_blank": true}
+ ],
+ "finally": [
+  {"pad": 12, "gesture": "up", "note": "(a pad left down by a failed run)"}
+ ]
+}

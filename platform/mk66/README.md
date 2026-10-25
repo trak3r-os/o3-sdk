@@ -23,6 +23,7 @@ defines `o3sdk_app()`).
 | `O3SDK_CODE_CACHE` | ON | the LMEM code cache on in the reset sequence (`lmem.h`), as proven in track3r-os |
 | `O3SDK_SDRAM_ICODE_ALIAS` | ON | after the SDRAM test the controller also answers at `0x0800_0000` (`sdramc_config.h` `kCm0WithAlias`), as proven; nothing in the kit reads through the alias yet |
 | `O3SDK_MK66_AUDIO_TEST` | OFF | the audio bring-up image: the device plays the 1 kHz test tone (`audio/test_tone.h`) instead of the app's engine |
+| `O3SDK_MK66_CONSOLE` | ON | the USB console (CDC `diag`: `help version stage cpu guard mem crash usb log input peek poke rot sd ls fw reset key pad enc state shot leds cache`, plus an app's `App::diag_commands`), USB audio (the AUDIO set of track3r-os's default layout, the master on channels 7-8), the SD card and the firmware update path (`fw put/arm/update`), composed in `main.cpp` (`docs/M2B-PLAN.md` section 5) and `console/`. OFF: M2's image, no usb, storage, update or console objects |
 | `O3SDK_DISPLAY_ROTATE` | 1 | panel orientation, `REG_ROTATE` 0..7 (cache STRING, set in `display/CMakeLists.txt`); 1 is upright on the maintainer's unit, 0 is upside down |
 
 ## Outputs (in the app's binary directory, e.g. `build-mk66/apps/hello/`)
@@ -70,6 +71,10 @@ Linker usage of `hello` (2026-10-25, the fresh ARM GNU 15.3.1 builds of the M2 g
 | SRAM_U | 1,528 B | 51,080 B (25.98%) |
 | SDRAM | 705,600 B | 705,600 B |
 
+With the console (`O3SDK_MK66_CONSOLE=ON`, the default since M2b-R; 2026-10-25, `hello`): FLASH 153,172 B (14.61%), SRAM_L 1,476 B, SRAM_U 78,008 B (39.68%), SDRAM 771,136 B (the
+64 KiB log ring of the console in `.sdram_bss`). The static image checks and `hello_usb` (`tools/check_usb_image.py`: vector 16 + 53 is `USB0_IRQHandler`, `g_bdt` 512-aligned) pass; not
+measured on a unit: the CPU cost of the USB interrupt and the tap (`cpu` with and without a host streaming).
+
 ## Reset sequence (`src/startup.cpp`, `src/boot.cpp`)
 
 Interrupts off; watchdog unlocked and disabled; FPU on; the quiet pins (amplifier muted first, `board.h` `kQuietPins`); crash
@@ -101,6 +106,7 @@ The status LED is `PTC19`, active low (`blink.h`):
 | 4, 5, 8, 9 | display codes (no chip, polled path, stalled, app failure) |
 | 10, 11, 12 | audio codes (bring-up failed, fault seen, over budget) |
 | 13 | a key scanner did not answer at boot |
+| 14 flashes, for two periods (about 14 s), then the heartbeat | `usb0::start()` refused: the image runs without USB (the console, the audio device and `fw` are out of reach, and the log that says why cannot be read: the code is all the image can say) |
 | dark | the image never reached `early_pins`, or the LED is not where `board.h` says |
 
 7 is reserved (track3r-os's fault drill; M2 builds no drill image).
@@ -118,4 +124,5 @@ and the drivers' behaviour on the hardware (the host tests run their logic again
 Never by us, and never by a debug probe or an uploader: only the maintainer installs an image, by the card. The `.ptf` goes alone in
 `Firmware/` on the card and the hidden reset button flashes it (track3r-os `docs/manual/install.md`: the bootloader flashes the first
 `.ptf` in `Firmware/`, and the official update menu lists only names starting with `PolyendTracker`). USB, the SD card driver and the
-firmware update over USB are milestone M2b.
+firmware update over USB are milestone M2b: an image built with the console (the default) takes a `.ptf` over USB (`o3console.py --put`, then `--update`; `tools/`), after
+`fw-gate-check` and with the maintainer's go (`docs/M2B-PLAN.md` section 6, the unit procedure).

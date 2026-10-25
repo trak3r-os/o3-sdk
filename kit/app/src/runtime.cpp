@@ -52,6 +52,11 @@ void format_percent(std::uint32_t pct, char* out) noexcept {
   out[o] = '\0';
 }
 
+// The render's load of the last block in percent (the header's number).
+std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
+  return static_cast<std::uint32_t>(static_cast<std::uint64_t>(s.cycles) * 100u / hal::audio::kCyclesPerBlock);
+}
+
 }  // namespace
 
 Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept : app_(app), engine_(engine), platform_(platform) {
@@ -167,8 +172,7 @@ void Runtime::draw_header(ui::Renderer& r) noexcept {
   (void)ui::transport_badge(r, 610, 5, kHeaderH - 10, s.playing);
   if (platform_.cpu_meter) {
     char cpu[12];
-    const std::uint32_t pct = static_cast<std::uint32_t>(static_cast<std::uint64_t>(s.cycles) * 100u / hal::audio::kCyclesPerBlock);
-    format_percent(pct, cpu);
+    format_percent(cpu_percent(s), cpu);
     r.text(ui::kScreenW - 8 - r.text_width(cpu, Face::Label), label_y, cpu, Color::ChromeDim, Face::Label);
   }
 }
@@ -197,6 +201,34 @@ void Runtime::update_leds() noexcept {
       platform_.leds->set(i, leds_.get(i));
     }
   }
+}
+
+std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
+  if (out == nullptr || cap == 0u) {
+    return 0;
+  }
+  StateWriter w(out, cap);
+  w.str("app", app_.info().name);
+  w.str("screen", ctx_.screen_ != nullptr ? ctx_.screen_->title() : nullptr);
+  w.flag("playing", engine_.playing());
+  w.num("tempo", engine_.tempo());
+  w.num("cpu", platform_.cpu_meter ? cpu_percent(engine_.stats()) : 0u);
+  w.num("frames", frames_);
+  std::size_t n = w.size();
+  // The app's pairs go after a space; the room is what the kit's pairs left (the separator, one character and the terminator at least).
+  if (w.complete() && n + 3u <= cap) {
+    const std::size_t room = cap - n - 1u;  // out[n] is the separator
+    std::size_t m = app_.describe_state(ctx_, out + n + 1u, room);
+    if (m >= room) {
+      m = room - 1u;  // an app that reports more than it was given: keep what fits
+    }
+    if (m != 0u) {
+      out[n] = ' ';
+      n += 1u + m;
+    }
+    out[n] = '\0';
+  }
+  return n;
 }
 
 void Runtime::render_block(void* user, const hal::audio::BlockIo& io) noexcept {

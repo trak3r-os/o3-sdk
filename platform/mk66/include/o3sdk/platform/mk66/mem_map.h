@@ -57,6 +57,9 @@ constexpr std::uint32_t sdram_alias(std::uint32_t sdram_address) noexcept { retu
 // module slab are gone with the tracker.
 inline constexpr std::uint32_t kRamfuncLBudget = 32u * kKiB;
 inline constexpr std::uint32_t kSramLFreeBase = kSramLBase + kRamfuncLBudget;
+// The SRAM_L window the update path's validator accepts for a vector (update/hex_validator.h pins its copy to this): track3r-os's, 50 KiB. It is not
+// a section of this image; o3sdk's kRamfuncLBudget fits inside, so the validator accepts o3sdk's images and track3r-os's (the way back).
+inline constexpr std::uint32_t kRamfuncLSize = 0xC800u;
 
 // ---- SRAM_U: data, bss, noinit, stack (ADR 0013 D7: about 160 of 192 KiB, at least 32 free) ------------------------
 // Low to high: `.noinit` (the crash record, the stage word), the fault stack, the audio DMA rings, `.data`, `.bss`, free, the main
@@ -142,6 +145,7 @@ static_assert(kStackSize + kFaultStackSize + kCrashBlockSize < kSramUSize / 2u, 
 static_assert(kCrashBlockSize % 8u == 0u && kFaultStackSize % 8u == 0u && kStackSize % 8u == 0u, "AAPCS: 8-byte aligned stacks");
 
 static_assert(kRamfuncLBudget <= kSramLSize && kRamfuncLBudget % 4u == 0u, "the hot-code budget fits SRAM_L, in whole words");
+static_assert(kRamfuncLBudget <= kRamfuncLSize, "the hot-code budget fits the window the update path's validator accepts");
 static_assert(kSramLFreeBase + (kSramLSize - kRamfuncLBudget) == kSramLBase + kSramLSize, "the free part of SRAM_L runs to its end");
 static_assert(kSdramArenaAlign % 16u == 0u && kSdramBase % kSdramArenaAlign == 0u, "the arena is aligned to whole cache lines");
 static_assert(sdram_alias(kSdramBase + kSdramSize - 1u) < 0x10000000u, "the whole SDRAM fits the ICode alias window 0x0800_0000-0x0FFF_FFFF");

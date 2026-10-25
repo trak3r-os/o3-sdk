@@ -42,6 +42,7 @@ add_subdirectory(kit/eve)
 add_subdirectory(kit/ui)
 add_subdirectory(kit/dsp)
 add_subdirectory(kit/app)
+add_subdirectory(kit/usb)  # core <- usb: the portable USB device library (descriptors, control pipe, CDC, shell, log, UAC2)
 
 # The MK66 platform: its pure parts on every platform (host tests), the firmware images with -DO3SDK_PLATFORM=mk66.
 if(O3SDK_CROSS OR O3SDK_BUILD_TESTS)

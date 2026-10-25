@@ -136,6 +136,16 @@ The kit's apps share one way to edit values, so the hand learns it once:
 
 `knob_strip()` (`widgets.h`) draws the eight cells above the soft keys: name, value with unit, a bar, the focused cell highlighted.
 
+### Diagnostics: the console's hooks (`diag.h`)
+
+The platform's USB console (`state`, and the commands an app adds) reaches an app through two optional `App` methods, so `kit/app`
+depends on no USB code. `App::describe_state(ctx, out, cap)` writes the app's `key=value` pairs (`StateWriter`; a value has no space;
+a pair that does not fit is dropped whole); `Runtime::state_line()` puts the kit's pairs first, `app=<name> screen=<title>
+playing=0|1 tempo=<mbpm> cpu=<pct> frames=<n>`, then the app's. `App::diag_commands(rows)` returns a table of `DiagCommand` (name, help
+line, `void run(const DiagArgs&, DiagOut&) noexcept`); the console takes at most 16, a row whose name is not 2-7 lowercase letters,
+is a kit command's, or carries a word of the update path (`update flash boot ...`) is skipped and logged. Handlers run in the main loop
+and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the example.
+
 ### The system Config (the kit's, in every app)
 
 The maintainer's decision (2026-10-25): the kit brings the machine up (clocks, SDRAM, display, input, LEDs, audio, the crash record)

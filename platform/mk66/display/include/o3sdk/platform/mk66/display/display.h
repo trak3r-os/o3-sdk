@@ -125,6 +125,9 @@ class Ft812Display final : public hal::Display {
   std::uint8_t backlight() const noexcept { return duty_; }
   bool backlight_on() const noexcept { return light_ == Light::On; }
   bool idle() const noexcept { return state_ == State::Idle && !frame_queued_ && !swap_pending_; }
+  // OS-HIL (`diag shot`): no frame or upload transfer owns the SPI, so the console may use the chip for a few transactions of its own. Weaker than idle(): a swap that has not
+  // completed yet (REG_DLSWAP is a register, not a transfer) does not matter to the bus. Main loop only: nothing starts a transfer between two calls of the console.
+  bool bus_idle() const noexcept { return state_ == State::Idle && !frame_queued_; }
 
  private:
   enum class State : std::uint8_t { Idle, Sending };

@@ -1,7 +1,7 @@
 # Third-party components
 
 Vendored code keeps its own licence. The Spleen and Terminus glyph data are linked into the target libraries (as `ui`'s face
-tables); everything else listed here is host-only.
+tables) and FatFs into the MK66 image (the SD card's file system); everything else listed here is host-only.
 
 | Component | Version | Files | Licence | Used by |
 |---|---|---|---|---|
@@ -9,6 +9,7 @@ tables); everything else listed here is host-only.
 | stb_image_write | v1.16 | `third_party/stb/stb_image_write.h`, `third_party/stb/LICENSE` | MIT or public domain (Unlicense), your choice; (c) 2017 Sean Barrett | PNG snapshots of the simulator (`platform/host`), host builds only |
 | Spleen | 2.2.0 | `third_party/fonts/spleen/spleen-8x16.bdf`, `spleen-6x12.bdf`, `LICENSE`, `AUTHORS` | BSD-2-Clause, (c) 2018-2026 Frederic Cambus | the Label (8x16) and Micro (6x12) faces: `tools/font_convert.py` turns the BDFs into the `ui` glyph tables |
 | Terminus | 4.49.1 | `third_party/fonts/terminus/ter-u20b.bdf`, `ter-u32b.bdf`, `OFL.TXT`, `AUTHORS` | SIL Open Font License 1.1, (c) 2020 Dimitar Toshkov Zhekov, Reserved Font Name "Terminus Font" | the Data (10x20) and Display (16x32) faces |
+| FatFs | R0.15a (22 Nov 2024) | `third_party/fatfs/{ff.c,ff.h,ffunicode.c,diskio.h,LICENSE.txt}` byte-identical to ChaN's archive (as track3r-os records them); `ffconf.h` ours (six options changed, `FF_FS_READONLY 0` for the firmware writer); `CMakeLists.txt` ours (`o3sdk_fatfs`) | FatFs licence (BSD-style: keep the notice and disclaimer in source; binaries need nothing), (c) 2024 ChaN; compatible with GPL-3.0-or-later | the SD card's file system (`platform/mk66/storage`); only `update/src/fat_firmware_store.cpp` names write calls (`check_writers.py`); the MK66 image and the host tests |
 
 All four were copied byte for byte from track3r-os (`third_party/`), whose `THIRD_PARTY.md` records where each was fetched
 from and the SHA-256 of every file. A firmware image that contains the glyph tables must reproduce the Spleen and Terminus

@@ -344,8 +344,11 @@ Mk66Audio g_device;
 
 hal::audio::Device& audio_device() noexcept { return g_device; }
 const audio::AudioStatus& audio_status() noexcept { return o3sdk_audio_pipeline.status(); }
+void audio_cpu_reset() noexcept { o3sdk_audio_pipeline.reset_peaks(); }
 void audio_arm_starve_guard() noexcept { o3sdk_audio_pipeline.arm_guard(); }
 void audio_main_pass() noexcept { o3sdk_audio_pipeline.main_pass(); }
+void audio_set_starve_blocks(std::uint32_t n) noexcept { o3sdk_audio_pipeline.set_starve_blocks(n); }
+const audio::Pipeline& audio_pipeline() noexcept { return o3sdk_audio_pipeline; }
 AudioClockFault audio_clock_fault() noexcept { return g_clock_fault; }
 
 hal::audio::BlockCallback audio_test_tone() noexcept {

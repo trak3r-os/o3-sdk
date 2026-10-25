@@ -19,3 +19,4 @@ foreach(src IN LISTS test_sources)
   get_filename_component(name ${src} NAME_WE)
   add_test(NAME ${name} COMMAND o3sdk_tests --source-file=*${name}.cpp)
 endforeach()
+add_subdirectory(usb)  # o3sdk_usb_tests: the USB library's suite, ported from track3r-os

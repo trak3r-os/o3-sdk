@@ -18,7 +18,7 @@ In scope:
 | Module | Why remote flashing and testing need it |
 |---|---|
 | track3r-os `usb/`, all of it -> `kit/usb` | The device logic, CDC, the shell, the log ring, the UAC2 streams; pure, depends on `core` only. MSC and UAC2 are kept so the library and its tests stay identical; unused code goes with `--gc-sections`. |
-| The USB0 driver, STANDARD and AUDIO sets | The console's transport; AUDIO (profile P2, capture only) lets us hear the unit. |
+| The USB0 driver, STANDARD and AUDIO sets | The console's transport; AUDIO (track3r-os's default P8 with the return, the master on 7-8) lets us hear the unit. |
 | The console: `help version stage cpu guard mem crash usb log input peek poke rot sd ls fw reset key pad enc state shot leds cache`, plus app commands | Everything the goal lists. |
 | The SD card (SDHC, FatFs, read path, card swap, claims) | `fw` writes `Firmware/`; `sd` and `ls` show the card. |
 | The update path (`path_guard`, `hex_validator`, `fat_firmware_store`, `fw_service`, `fw_sink`, `fw_host_mk66`) | The documented update path. `fw_sink` (the client API) comes with it, so the later firmware switcher UI is a UI-only slice. |
@@ -113,7 +113,7 @@ included.
 | **S** SD, FatFs, update | `third_party/fatfs/**`; `platform/mk66/storage/**`; `platform/mk66/update/**`; `audio/include/o3sdk/platform/mk66/audio/diag.h`, `audio/src/diag.cpp` and their line in `audio/CMakeLists.txt`; `tools/fw_hex_cross.py`; tests `mk66_storage_*`, `mk66_update_*`, the restored cases in `audio_status_test.cpp`. Additive: the `kRamfuncLSize` lines in `mem_map.h` and `mk66_mem_map_test.cpp`, the `appimg` declarations in `src/internal.h` |
 | **D** driver and platform parts | `platform/mk66/usb/**` (includes the identical `console.h`); tests `mk66_usb_soc`, `mk66_usb_text` (cut: no command-table or stem-map cases), `mk66_hil_inject`, `mk66_input_hold`, `mk66_mem_access`, `mk66_shot_stream`, `mk66_usb_console_test`, new `mk66_usb_audio_tap_test`, new `mk66_usb_bringup_test`. Restorations in `input/scanner.{h,cpp}`, `input/pad_leds.h`, `display/display.h` and their tests |
 | **C** kit console and image | `platform/mk66/console/**` (new); `kit/app/include/o3sdk/app/diag.h` (new) plus the hook lines in `app.h`, `runtime.h`, `runtime.cpp`, `tests/app_diag_test.cpp`; HELLO's `describe_state`; `platform/mk66/src/main.cpp`; the image block of `platform/mk66/CMakeLists.txt`; the audio restorations (`audio.h`, `audio.cpp`, `output_gate.h`, `mk66_output_gate_test.cpp`) |
-| **T** host tools and checks | `platform/mk66/tools/{o3console,o3shot,o3audio,o3hil}.py`, `check_writers.py`, `check_usb_image.py` (new), `tools/hil/hello_smoke.json`; the self-test lines in the python-tools block of `platform/mk66/CMakeLists.txt` |
+| **T** host tools and checks | `platform/mk66/tools/{o3console,o3shot,o3audio,o3hil,o3disk}.py`, `check_writers.py`, `check_usb_image.py` (new), `tools/hil/{hello_smoke,hello_audio}.json`, `tools/README.md` (the tools doc); the self-test lines in the python-tools block of `platform/mk66/CMakeLists.txt` |
 | integrator | `docs/**`, `THIRD_PARTY.md` (FatFs), `CLAUDE.md`, the hw-session doc, `fw-gate-check` runs |
 
 Interfaces:
@@ -127,8 +127,9 @@ Interfaces:
 | T | the tools identical except the rename; `check_writers.py check --root` with a self-test; `check_usb_image.py check <elf> --nm` (vector 16+53 resolves to `USB0_IRQHandler`, not `Default_Handler`; `g_bdt` 512-aligned; `"Track3r"` in the image), self-test included |
 
 App commands (enforced in `console/core.cpp`, tested): names 2-7 lowercase letters, help at most 70 characters; no collision with a kit
-command; no forbidden word (`update`, `flash`, `boot`, `bootloader`, `fwinfo`, `upload`, `dfu`, `program`, `erase`, `write`: `fw` is the
-only writer); at most 16; a bad row is skipped and logged; the shell gets one table built at `attach()` (the kit's rows, then the app's
+command; no forbidden word in the name (`update`, `flash`, `boot`, `bootloader`, `fwinfo`, `upload`, `dfu`, `program`, `erase`, `write`: a lint on names
+only, by substring, with false positives such as `reboot` and misses such as `burn`; `fw` is the only writer, and what enforces that is the path guard
+and `check_writers.py`, not this filter); at most 16; a bad row is skipped and logged; the shell gets one table built at `attach()` (the kit's rows, then the app's
 bound to one dispatcher).
 
 Order: **U** first (a mechanical copy) and **T** in parallel from the start. **S** and **D** start once U's `usb` builds (both may copy
@@ -150,8 +151,8 @@ Tests. Ported, identical unless noted: U the 19 usb tests; S `mk66_storage_{card
 `mk66_hil_inject`, `mk66_input_hold`, `mk66_mem_access`, `mk66_shot_stream`, `mk66_usb_console_test` (real shell, pump and log pager
 over the device against the fake controller), the restored inject / in_sync / bus_idle cases; T the tools' self-tests. New: D
 `mk66_usb_audio_tap_test` (interleaved blocks in, `StemReader` out, samples exact; enable/disable; the lifetime contract under an
-overwriting ring) and `mk66_usb_bringup_test` (the descriptors of the boot layout `(Standard, P2, false)` byte-identical to track3r-os's
-STANDARD golden `usb_golden.h`; `(Audio, P2, false)` passes `validate()` with 2 capture channels; start preconditions); C
+overwriting ring) and `mk66_usb_bringup_test` (the descriptors of the boot layout `usb/boot_layout.h`, `(Audio, P8, true)`, byte-identical to track3r-os's
+`kAudioFSP8` golden, STANDARD to `kStandardFS` (`usb_golden.h`); start preconditions); C
 `mk66_console_core_test` (table assembly, the app-command rules, dispatch and the unknown-command error, help layout, `state` = kit
 pairs then app pairs), `mk66_console_e2e_test` (the console core, `Shell`, `ConsolePump` and `UsbDevice` over track3r-os's `usb_rig`
 fake controller with a fake App: `help`, `version`, `state`, an app command, `key f1` reaching the app through a fake injector),
@@ -165,27 +166,30 @@ links exactly M2's image (no usb, storage or update), so the M2 session images d
 ```
 main:
   console::init_log(); log("boot: main reached"); log_hex reset sources
-  record = boot_crash_record(): console::note_boot_crash(record); play kCrashSeen; clear_crash_record()
+  record = boot_crash_record(): console::note_boot_crash(record); log; usb_crashed = crash_blames_usb(record); play kCrashSeen; clear_crash_record()
   display bring_up (log, note_boot_fault(kFaultDisplay) on failure); idle hook
   input init
   Platform{display, console::tap_input(input::input()), &input::leds(), clock, true}; Runtime rt; rt.start(); boot screen
   render = usb_audio::wrap(rt.block_callback())      (test-tone image: unwrapped)
   audio_device().start(render)                        (log, note_boot_fault(kFaultAudio))
   set_module(kStorageModule): storage::device::init(); mount() (at most about 3 s; the idle hook keeps the display going)
-      -> log, kFaultSd if a card is in and does not mount; watch_begin(); claim(&firmware_has_card)
+      -> log, kFaultSd if a card is in and does not mount; watch_begin(); claim(&appimg::firmware_update_active), claim(&card_mount_pending)
   console::attach(rt)
-  set_module(kUsbModule): trial check; usb0::start(Mode::Standard, Profile::P2, false) -> log; set_module(0)
+  unless usb_crashed: set_module(kUsbModule); usb0::start(boot_layout::kMode, kProfile, kReturn) = (Audio, P8, return on) -> console::note_usb_started(),
+      log what usb0::mode() and profile() report (STANDARD if start() fell back); on false: log, and blink code 14 for two periods from the loop; set_module(0)
   loop: wfi; console::service(); input::service(); display::service(); rt.poll(); audio_main_pass();
-        storage::device::poll(ms) (a card taken out or put in);
+        poll_card(ms): storage::device::poll (a card taken out or put in, mounted again);
         every 100 ms: audio snapshot and the gate:
-          open when !opened && open_wanted(audio_up, opened, false, false, appimg::firmware_update_active(), false) && output_gate.ready
-        LED; trial-revert tick
+          open when open_wanted(audio_up, appimg::audio_outputs_open(), false, false, appimg::firmware_update_active(), false) && output_gate.ready
+        LED
 ```
 
 `console::service()` runs track3r-os's pass in the same order: injector releases; cancel a `shot` stream the user ended;
 `update::device::service().poll(shell)`; `usb0::service()`; the DTR banner, `terminal_closed()`, `pump.service()`, `shell.tick()`,
-`cdc_writer().flush()`; then o3-sdk's `UsbModeGuard` (after a change to AUDIO, if `control().configured()` is still false 10 s later,
-`request_layout(Standard, P2, false)` and log it). Command handlers are main-loop only, each puts at most 1.5 KiB of text on the 24 KiB
+`cdc_writer().flush()`; then o3-sdk's `UsbModeGuard` (the device started in, or asked for, the AUDIO set; once the host has reset the bus and
+`control().configured()` is still false 10 s later, `request_layout(Standard, usb0::profile(), usb0::return_enabled())` and log it; it ignores
+the driver's counters while a change is in progress, because the driver zeroes them at every attach). Command handlers are main-loop only, each
+puts at most 1.5 KiB of text (the reply bound is 1,600 bytes with CR LF: kit/app `diag.h`; `help` and `log` page themselves) on the 24 KiB
 stack; `fw put` does one 2 KiB `f_write` per pass, as in track3r-os.
 
 Priorities: the IRQ table is unchanged and identical to track3r-os (AudioDma 16 > SysTick 32 > Usb 64 > Completion 80 > Render 128).
@@ -227,7 +231,7 @@ enc, leds, a shot compared with `hello_sim`'s PNG).
       hello.png <hello_sim reference>`; `"key f1"`, `"pad 12"`, `"enc 3"`, then `state` and `--shot`; `"pad 12 down"`, `leds` (pad 12
       lit), `"pad 12 up"`; `"fw arm PolyendTracker_0.0.1.ptf <crc>"` -> `armed <token>` (the way back validates on the device; let the
       token expire).
-   4. `"usb audio"` (the AUDIO set is up from boot); `o3audio.py record --seconds 3 --not-silent` while `pad 12 down`; `"usb audio"`
+   4. `"usb audio"` (the AUDIO set is up from boot); `o3audio.py record --seconds 3 --channel 7 --not-silent` (the master is on 7-8, as in track3r-os's P8; 1-6 are silent, kept for app stems) while `pad 12 down`; `"usb audio"`
       (no underruns), `cpu`; `"usb mode standard"` and back to check the fallback.
    5. The way back: `o3console.py --update PolyendTracker_0.0.1.ptf --crc <crc> --yes-update --expect-version v1.0.0` (the file is
       already on the card); then from track3r-os, `fw rm o3sdk-hello.ptf`.
@@ -235,10 +239,15 @@ enc, leds, a shot compared with `hello_sim`'s PNG).
 
 A stranded unit (the o3-sdk image does not bring its USB up) and the mitigations: (a) the first-ptf rule (step 0 and the check in step
 1): recovery is one press of the hidden reset button by a person at the unit, no card handling; (b) the boot is M2's with USB last: a
-USB failure (`usb0::start` false, logged) leaves a working unit with a blink code; (c) no crash loop: if the last crash record says
-module `kUsbModule` or exception 69 (IRQ 53), this boot skips `usb0::start`; (d) no trial auto-revert (the maintainer: "dejate de
-autoreversion en la imagen"); (e) the mode guard: after a change of USB set, if the host has not configured the device 10 s later, the
-unit goes back to STANDARD; (f) bring-up proved on the host as far as possible (the fake-controller enumeration and
+USB failure (`usb0::start` false, logged, which nobody can read with USB down) leaves a working unit with the blink code 14 for two periods;
+(c) a USB crash does not repeat itself: if the last crash record is blamed on USB (`console/modules.h` `crash_blames_usb`: its module word is
+`kUsbModule`, i.e. the fault came inside `usb0::start`; or its stacked IPSR is 69, i.e. the fault was taken while the USB interrupt was running,
+the case of a fault during enumeration or a stream, where the handler's own IPSR is 3, 4 or 5 and the module is 0; or the handler's IPSR is 69),
+this boot skips `usb0::start`, and the boot after the next power-up tries again. Not covered: a fault that USB causes but that is taken elsewhere
+(the main loop, the render line), and a record with no usable stack frame. With a host attached such a fault repeats on every power-up; unplugging
+the host stops it (no host, no USB interrupts), and the hidden reset button is (a); (d) no trial auto-revert (the maintainer: "dejate de
+autoreversion en la imagen"); (e) the mode guard: when the device was started in, or asked for, the AUDIO set and the host (which has reset the bus) has not
+configured it 10 s later, the unit goes back to STANDARD with the same profile and return (a bare unit with no host stays as it is); (f) bring-up proved on the host as far as possible (the fake-controller enumeration and
 property tests, `mk66_usb_console_test`, the bring-up golden, the e2e console test, `check_usb_image.py`); (g) no watchdog this round
 (its clock and timeout are unverified on the unit: a wrong guess is a reset loop on the first boot). If the image does not boot at all
 (M2 has never run on the unit), only (a) helps: someone presses the hidden reset button.
@@ -267,5 +276,11 @@ AUDIO streaming (compare `cpu` with and without).
 - **D4** trial auto-revert: **no** (the maintainer, 2026-10-25: "dejate de autoreversion en la imagen").
 - **D5** the image boots in track3r-os's default AUDIO set, identical descriptors, the master in parallel with the main output (the
   maintainer: "el usb audio si se ha probado, y es en paralelo a la salida main"); STANDARD is the fallback.
+  As built (slice D): track3r-os's default set is (Audio, P8, return on), "8 OUT / 2 IN" (`model/src/params.cpp:253`, `usb0.cpp:93`,
+  `usb_boot_layout()`), with `kAudioFSP8` as the bring-up golden. The master goes on the last two channels, 7-8 in P8, as track3r-os's
+  P8 puts it, so a DAW routing serves both firmwares; 1-6 are silent, kept for an app's stems. While the return (OUT) stream runs,
+  each render block pulls 64 frames and drops them, as track3r-os's Graph does before mixing. `usb_audio::supported()` is every profile
+  but P4S; the tap is about 3 KB of bss. This supersedes the "P2, capture only" wording earlier in this plan; the unit procedure's
+  audio check is `--channel 7`, with no `usb mode audio` step.
 - **D6** M2's card session runs first, with the maintainer at the unit (the maintainer: "todo lo demas OK" to the recommendation); the
   same session also runs o3-303's image and the fill-rate check for the 303 skin.

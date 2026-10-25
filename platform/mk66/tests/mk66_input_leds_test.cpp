@@ -217,6 +217,29 @@ TEST_CASE("pad leds: a flush sends only what changed, one row a transfer, and no
   }
 }
 
+TEST_CASE("pad leds: in_sync (OS-HIL `diag leds`) says whether the chip holds the PWM of every staged level, and level() what is staged") {
+  Rig r;
+  r.ready();
+  CHECK(r.leds.in_sync());
+  r.leds.set(5, 255);
+  CHECK(r.leds.level(5) == 255);
+  CHECK_FALSE(r.leds.in_sync());  // staged, not on the chip yet
+  CHECK(r.leds.flush());
+  CHECK(r.leds.in_sync());
+  r.leds.set(1, 50);   // row 0
+  r.leds.set(30, 50);  // row 2: two transfers
+  CHECK_FALSE(r.leds.flush());
+  CHECK_FALSE(r.leds.in_sync());  // one row sent, one left
+  CHECK(r.leds.flush());
+  CHECK(r.leds.in_sync());
+  r.leds.clear();
+  CHECK_FALSE(r.leds.in_sync());  // a cleared frame is staged, not sent
+  r.settle(10);
+  CHECK(r.leds.in_sync());
+  CHECK(r.leds.level(5) == 0);
+  CHECK(r.leds.level(48) == 0);  // past the last pad
+}
+
 TEST_CASE("pad leds: a frame never writes outside the pads' own registers, and an index past the end is ignored") {
   Rig r;
   r.ready();

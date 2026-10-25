@@ -223,6 +223,25 @@ TEST_CASE("display driver: a frame is written to RAM_DL, then swapped in; begin_
   CHECK(first == 0x02112233u);
 }
 
+TEST_CASE("display driver: bus_idle (OS-HIL `diag shot`) is false while a transfer owns the SPI and true as soon as it ends, though the swap has not completed") {
+  Rig rig;
+  CHECK(rig.disp.bus_idle());
+  CHECK(rig.disp.idle());
+  CHECK(rig.disp.begin_frame());
+  const std::uint32_t end = ft::kDlDisplay;
+  CHECK(rig.disp.write(&end, 1));
+  rig.disp.end_frame();
+  CHECK_FALSE(rig.disp.bus_idle());  // the frame is on the wire
+  CHECK_FALSE(rig.disp.idle());
+  rig.settle(3);                     // the transfer completes, the swap is issued
+  CHECK(rig.chip.swaps() == 2u);
+  CHECK(rig.disp.bus_idle());        // no transfer owns the bus ...
+  CHECK_FALSE(rig.disp.idle());      // ... though the swap has not completed
+  rig.settle(30);
+  CHECK(rig.disp.idle());
+  CHECK(rig.disp.bus_idle());
+}
+
 TEST_CASE("display driver: frames pace at the display's refresh, never faster") {
   Rig rig;
   unsigned committed = 0;

@@ -62,10 +62,16 @@ class Scanner final : public hal::Input {
   bool poll(core::InputEvent& out) noexcept override { return queue_.pop(out); }
   hal::InputStats stats() const noexcept override;
 
+  // OS-HIL (`key`, `pad`, `enc` of the diag console): one event from outside the matrices, into the SAME queue the scan fills and stamped by the same rule (never
+  // earlier than the last event), so the app cannot tell it from a finger. Button / Pad: value 1.. = pressed (a pad's velocity), 0 = released; Encoder: the signed detent
+  // delta. A pad's state joins pads_held() (the LEDs show a pressed pad). false: the queue is full (counted in `dropped`) or the kind / id / value is not one the scan
+  // makes. Main loop only: the scan's own context, the queue's one producer (the console and the scan never run at the same time).
+  bool inject(core::InputKind kind, std::uint8_t id, std::int16_t value) noexcept;
+
   // The debounced state as the queue will have it once drained: for the boot chord and the tests.
   bool button_held(unsigned code) const noexcept { return pads_buttons_[kButtons].filter.is_held(code); }
   bool pad_held(unsigned index) const noexcept { return pads_buttons_[kPads].filter.is_held(index); }
-  std::uint64_t pads_held() const noexcept { return pads_buttons_[kPads].filter.held(); }  // bit n = pad n
+  std::uint64_t pads_held() const noexcept { return pads_buttons_[kPads].filter.held() | injected_pads_; }  // bit n = pad n
 
  private:
   enum Which : unsigned { kPads = 0, kButtons = 1 };
@@ -115,6 +121,7 @@ class Scanner final : public hal::Input {
   std::uint32_t errors_ = 0;
   std::uint32_t resyncs_ = 0;
   std::uint32_t unmapped_ = 0;  // chip events of a matrix position with no switch
+  std::uint64_t injected_pads_ = 0;  // bit n: pad n is held by an injected press (OS-HIL), until its injected release
 };
 
 }  // namespace o3sdk::platform::mk66::input

@@ -8,7 +8,10 @@
 //
 // which the platform's main (platform/mk66) and the simulator (sim/) call. Nothing else in the image names the app.
 
+#include <o3sdk/app/diag.h>
 #include <o3sdk/app/input.h>
+
+#include <cstddef>
 
 namespace o3sdk::app {
 
@@ -30,6 +33,17 @@ class App {
   virtual bool input(Context&, const Input&) noexcept { return false; }
   // Every pass of the main loop, before the screen's update.
   virtual void update(Context&) noexcept {}
+
+  // ---- Diagnostics (diag.h; the platform's console, docs/FRAMEWORK.md section 5). Both default to nothing. -----------------------
+  // Extra console commands: points `rows` at a table that lives as long as the app (a constexpr array) and returns its length. Asked
+  // once, when the console attaches (the rules a row must meet are in diag.h; a row that breaks one is skipped and logged).
+  virtual std::size_t diag_commands(const DiagCommand*& rows) const noexcept {
+    rows = nullptr;
+    return 0;
+  }
+  // The app's part of the console's `state` line: `key=value` pairs (StateWriter) written into `out`, NUL terminated, at most `cap`
+  // bytes with the terminator, no leading or trailing space; returns the length (0: nothing to add). Main loop only; read only.
+  virtual std::size_t describe_state(const Context&, char* /*out*/, std::size_t /*cap*/) const noexcept { return 0; }
 
  protected:
   App() = default;

@@ -34,7 +34,8 @@ CI: `tools/remote_ci.sh <host|mk66>` runs `tools/ci.sh` on the remote build mach
 
 ## Engineering standards
 
-- Layering by link dependency: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`; units depend on `dsp` only.
+- Layering by link dependency: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- usb` (the USB stack, linked by the
+  MK66 platform, never by an app); units depend on `dsp` only.
 - Real-time paths (`Unit::process`, `Clocked::block`, `Engine::render`, ISRs): no allocation, no SD I/O, no blocking, bounded loops.
 - No heap, no RTTI, no exceptions, no `double` in the kit, units or apps (`-fsingle-precision-constant`; check the cross build for
   `__aeabi_d*` with `arm-none-eabi-nm -u`). Big buffers go in the SDRAM with `O3SDK_BIG` (`kit/core/include/o3sdk/core/placement.h`).
