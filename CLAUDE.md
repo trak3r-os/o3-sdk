@@ -10,8 +10,11 @@ Everything in this repository is written in English.
 
 - Never add code, assets or reverse-engineering material from the official firmware. "Polyend" and "Tracker" are used only to
   describe the hardware.
-- Firmware reaches a unit only through the documented update path (the bootloader's `.ptf` from the SD card). No debug-probe
-  flashing, no improvised uploaders. Formatting a card, or deleting files you did not put there, needs the maintainer's ask.
+- Firmware reaches a unit only through a documented update path, after `fw-gate-check` passes: the bootloader's `.ptf` from the
+  SD card, put there by hand, on a mounted card, or by the USB console (`o3console.py --put`, then the console's firmware
+  commands), as in track3r-os (maintainer, 2026-10-25). Agents may write to an SD card mounted under `/media` or `/run/media`
+  (never `/mnt`, never a raw device). No debug-probe flashing, no improvised uploaders. Formatting a card, or deleting files you
+  did not put there, needs the maintainer's ask.
 - No secrets, personal data or binaries in git. Commit or push only when the maintainer asks.
 
 ## Build and test
@@ -71,8 +74,9 @@ does not read diffs or logs itself. Other agents may share the tree (the M2 slic
 | `handoff` | closing a session so the next one resumes cold |
 
 Hooks (`.claude/hooks/`, Python 3 standard library, wired in `.claude/settings.json`):
-- `guard_flash.py` refuses uploaders, debug probes, raw block-device writes, partition tools and any write to removable media; the
-  maintainer opens one card with `O3_ALLOW_CARD_WRITE=1` in `.claude/settings.local.json` (see the `.example`). Check: `--selftest`.
+- `guard_flash.py` refuses uploaders, debug probes, raw block-device writes, partition tools, writes to `/mnt` or to any media
+  path that is not a mounted card, and `git add` of binaries; the console's update path and a mounted card are open (the
+  track3r-os policy). Check: `--selftest`.
 - `syntax_check.py` compiles each C/C++ file edited with Edit/Write with `-fsyntax-only` and the build's flags
   (`build-host/compile_commands.json`, then any other `build*/`). `shell_edit_check.py` does the same for the files a Bash command
   that writes (sed -i, a python heredoc, `cat >`) names; nothing is refused. By hand: `python3 -I .claude/hooks/syntax_check.py <files>`.

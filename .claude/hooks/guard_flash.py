@@ -1,18 +1,19 @@
 #!/usr/bin/env python3
-"""PreToolUse(Bash|Edit|Write|NotebookEdit) guard: nothing that could flash a unit or touch a card.
+"""PreToolUse(Bash|Edit|Write|NotebookEdit) guard: no debug probe, no raw block device, no format, no write to a disk that is not a card.
 
-CLAUDE.md (Hard rules) and docs/M2-PLAN.md (Rules): firmware reaches a unit only through the documented update path (the
-bootloader's .ptf from the SD card, a step the maintainer performs); no debug-probe flashing, no improvised uploaders; formatting a
-card, or deleting files you did not put there, needs the maintainer's ask; "never write to a card" while milestone M2 is open.
+CLAUDE.md (Hard rules), the same policy as track3r-os (maintainer, 2026-10-25: "igual que track3r-os"): firmware reaches a unit only
+through a documented update path after `fw-gate-check` passes: the bootloader's .ptf from the SD card, put there by hand, by an
+agent on a mounted card, or by the console (`o3console.py --put`, then the console's firmware commands). No debug-probe flashing, no
+improvised uploaders. Agents may write to any SD card mounted under /media or /run/media (track3r-os, maintainer 2026-10-17); a
+/mnt mount may be a fixed disk and stays read-only. Formatting a card, or deleting files an agent did not put there, needs the
+maintainer's ask (formatting is refused here; deleting is the agent's duty to check).
 
 What it refuses (exit code 2, the reason is shown to the model):
-  1. a hardware uploader, debug probe or console updater in command position (teensy_loader_cli, tycmd upload, openocd, pyocd, J-Link,
-     dfu-util, st-flash, probe-rs, ..., o3console --put/--update);
+  1. a hardware uploader or debug probe in command position (teensy_loader_cli, tycmd upload, openocd, pyocd, J-Link, dfu-util,
+     st-flash, probe-rs, ...);
   2. a raw block-device write or a partition/format tool (dd of=/dev/sdX, > /dev/mmcblk0, mkfs, wipefs, fdisk, parted, ...);
-  3. any write to removable media (/media, /run/media, /mnt) by a shell command or by the Edit/Write tools. Reads are fine. The
-     maintainer opens a card for one purpose (handing over a verified .ptf) by putting O3_ALLOW_CARD_WRITE=1 in the "env" of
-     .claude/settings.local.json (see settings.local.json.example); a command prefix does not count. Even then only a mounted volume
-     under /media/<user>/<vol> or /run/media/<user>/<vol> is writable (never /mnt), and formatting stays refused;
+  3. a write to /mnt, or to a /media or /run/media path that is not on a mounted volume (/media/<user>/<vol>), by a shell command or
+     by the Edit/Write tools. Reads are fine;
   4. `git add` naming a firmware image or other binary (.ptf .hex .elf .bin .a .o .wav): no binaries in git.
 
 Fails open on a payload it cannot parse. `guard_flash.py --selftest` checks the rules.
@@ -34,17 +35,16 @@ UPLOADERS = (
 DISK_TOOLS = r"mkfs(?:\.\w+)?|mke2fs|mkswap|wipefs|fdisk|sfdisk|cfdisk|gdisk|sgdisk|parted|blkdiscard"
 BLOCKDEV = re.compile(r"^/dev/(?:sd[a-z]|mmcblk\d|nvme\d|disk\d|hd[a-z]|vd[a-z]|loop\d|sr\d|mapper/)")
 
-FLASH_WHY = ("Updating hardware is a physical action that needs a verified target, a passed gate and the maintainer's go. "
-             "Produce the candidate image and its SHA-256 (skill fw-gate-check) and stop: the maintainer carries the .ptf to "
-             "the unit by the bootloader's SD update path.")
-CARD_WHY = ("Agents do not write to removable media. Work in the repository or the scratchpad; the maintainer copies a verified "
-            ".ptf to a card himself, or opens one card for you with O3_ALLOW_CARD_WRITE=1 in .claude/settings.local.json "
-            "(a mounted volume under /media or /run/media only). Formatting a card is always the maintainer's.")
+FLASH_WHY = ("Firmware goes to a unit only through a documented update path after fw-gate-check passes: the console "
+             "(o3console.py --put, then its firmware commands) or a .ptf on a mounted SD card for the bootloader. No debug "
+             "probe, no improvised uploader.")
+CARD_WHY = ("Only an SD card mounted under /media/<user>/<vol> or /run/media/<user>/<vol> is writable for agents (not /mnt, "
+            "not an unmounted path, never a raw device). Formatting a card, or deleting files you did not put there, needs "
+            "the maintainer's ask.")
 
 RULES = [
     (re.compile(CMD_START + r"(?:" + UPLOADERS + r")\b"), "hardware uploader or debug-probe tool", FLASH_WHY),
     (re.compile(CMD_START + r"tycmd\s+(?:upload|reset|bootloader)\b"), "tycmd upload/reset", FLASH_WHY),
-    (re.compile(r"\bo3console(?:\.py)?\b[^|;&]*--(?:put|update|yes-update)\b"), "firmware update over the console", FLASH_WHY),
     (re.compile(CMD_START + r"(?:" + DISK_TOOLS + r")\b"), "partition or format tool", CARD_WHY),
     (re.compile(r"\bdd\b[^|;&]*\bof=/dev/(?:sd|mmcblk|nvme|disk|hd|vd|loop|mapper/)"), "dd to a block device", CARD_WHY),
     (re.compile(r">\s*/dev/(?:sd[a-z]|mmcblk\d|nvme\d|disk\d|hd[a-z]|vd[a-z])"), "redirect into a block device", CARD_WHY),
@@ -95,10 +95,10 @@ def _media_root(path):
     return None
 
 
-def card_writable(path, allow_card, ismount):
-    """True when the maintainer opened cards (O3_ALLOW_CARD_WRITE=1) and path is on a mounted /media or /run/media volume."""
+def card_writable(path, ismount):
+    """True when path is on a mounted volume under /media/<user>/<vol> or /run/media/<user>/<vol>."""
     root = _media_root(path)
-    return bool(allow_card and root and root.startswith(WRITABLE_MEDIA) and ismount(root))
+    return bool(root and root.startswith(WRITABLE_MEDIA) and ismount(root))
 
 
 def _segments(command):
@@ -150,13 +150,13 @@ def _destinations(cmd, toks):
     return out
 
 
-def media_write(command, allow_card, ismount):
-    """The reason a shell command writes to a block device or to media that is not open for writing, else None."""
+def media_write(command, ismount):
+    """The reason a shell command writes to a block device or to media that is not a mounted card, else None."""
     def blocked(path):
         if BLOCKDEV.match(path):
             return "writing to a block device"
-        if path.startswith(MEDIA) and not card_writable(path, allow_card, ismount):
-            return "writing to removable media" + ("" if allow_card else " (cards are closed to agents)")
+        if path.startswith(MEDIA) and not card_writable(path, ismount):
+            return "writing to removable media that is not a mounted card"
         return None
 
     for toks in _segments(command):
@@ -175,91 +175,94 @@ def media_write(command, allow_card, ismount):
                 return f"{cmd}: {what}"
     paths = MEDIA_PATH.findall(command)
     if paths and INTERP.search(command) and SCRIPT_WRITE.search(command):
-        if not all(card_writable(p, allow_card, ismount) for p in paths):
-            return "a script that writes near removable media"
+        if not all(card_writable(p, ismount) for p in paths):
+            return "a script that writes near removable media that is not a mounted card"
     return None
 
 
-def evaluate(tool_input, allow_card=False, ismount=os.path.ismount):
+def evaluate(tool_input, ismount=os.path.ismount):
     """None to let the call through, else (what, why)."""
     path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
-    if path.startswith(MEDIA) and not card_writable(path, allow_card, ismount):
-        return "editing a file on removable media", CARD_WHY
+    if path.startswith(MEDIA) and not card_writable(path, ismount):
+        return "editing a file on removable media that is not a mounted card", CARD_WHY
     command = strip_data_heredocs(tool_input.get("command") or "")
     if not command:
         return None
     for pattern, what, why in RULES:
         if pattern.search(command):
             return what, why
-    what = media_write(command, allow_card, ismount)
+    what = media_write(command, ismount)
     return (what, CARD_WHY) if what else None
 
 
 SELFTEST = [
-    # (tool_input, allow_card, blocked?)
-    ({"command": "teensy_loader_cli --mcu=TEENSY36 -w fw.hex"}, False, True),
-    ({"command": "cd build && sudo openocd -f x.cfg"}, False, True),
-    ({"command": "nice -n 10 pyocd flash fw.hex"}, False, True),
-    ({"command": "/opt/segger/JLinkExe -device MK66FX1M0"}, False, True),
-    ({"command": "tycmd upload fw.hex"}, False, True),
-    ({"command": "probe-rs download fw.elf"}, False, True),
-    ({"command": "python3 platform/mk66/tools/o3console.py --put x.ptf"}, False, True),
-    ({"command": "python3 -I o3console.py --update x --crc 1 --yes-update"}, False, True),
-    ({"command": "dd if=hello.ptf of=/dev/sdb bs=4M"}, False, True),
-    ({"command": "dd if=hello.ptf of=/dev/sdb bs=4M"}, True, True),
-    ({"command": "cat hello.hex > /dev/mmcblk0"}, True, True),
-    ({"command": "mkfs.vfat /dev/sdb1"}, True, True),
-    ({"command": "sudo wipefs -a /dev/sdb"}, True, True),
-    ({"command": "git add build-mk66/apps/hello/hello.ptf"}, False, True),
-    ({"command": "git add apps/hello/src/hello_app.cpp && git add *.hex"}, False, True),
-    ({"command": "cp hello.ptf /media/user/CARD/Firmware/"}, False, True),
-    ({"command": "cp -t /media/user/CARD/Firmware hello.ptf"}, False, True),
-    ({"command": "nice -n 10 cp hello.ptf /run/media/user/CARD/Firmware/"}, False, True),
-    ({"command": "cp hello.ptf /mnt/disk/Firmware/"}, True, True),
-    ({"command": "mv /media/user/CARD/Firmware/x.ptf /tmp/"}, False, True),
-    ({"command": "rm /media/user/CARD/Firmware/x.ptf"}, False, True),
-    ({"command": "echo x > /media/user/CARD/a.txt"}, False, True),
-    ({"command": "sed -i s/a/b/ /media/user/CARD/a.txt"}, False, True),
-    ({"command": "unzip pack.zip -d /media/user/CARD/"}, False, True),
-    ({"command": "python3 -c \"import shutil; shutil.copy('hello.ptf','/media/user/CARD/')\""}, False, True),
-    ({"file_path": "/media/user/CARD/notes.txt"}, False, True),
-    ({"file_path": "/mnt/disk/notes.txt"}, True, True),
-    # open cards: a mounted volume under /media or /run/media may be written, nothing else
-    ({"command": "cp hello.ptf /media/user/CARD/Firmware/"}, True, False),
-    ({"command": "cp hello.ptf /media/user/OTHER/Firmware/"}, True, True),   # not mounted
-    ({"command": "python3 -c \"import shutil; shutil.copy('a','/media/user/CARD/')\""}, True, False),
-    ({"file_path": "/media/user/CARD/notes.txt"}, True, False),
+    # (tool_input, blocked?); /media/user/CARD is the one mounted card
+    ({"command": "teensy_loader_cli --mcu=TEENSY36 -w fw.hex"}, True),
+    ({"command": "cd build && sudo openocd -f x.cfg"}, True),
+    ({"command": "nice -n 10 pyocd flash fw.hex"}, True),
+    ({"command": "/opt/segger/JLinkExe -device MK66FX1M0"}, True),
+    ({"command": "tycmd upload fw.hex"}, True),
+    ({"command": "probe-rs download fw.elf"}, True),
+    ({"command": "dd if=hello.ptf of=/dev/sdb bs=4M"}, True),
+    ({"command": "cat hello.hex > /dev/mmcblk0"}, True),
+    ({"command": "mkfs.vfat /dev/sdb1"}, True),
+    ({"command": "sudo wipefs -a /dev/sdb"}, True),
+    ({"command": "git add build-mk66/apps/hello/hello.ptf"}, True),
+    ({"command": "git add apps/hello/src/hello_app.cpp && git add *.hex"}, True),
+    # media that is not a mounted card under /media or /run/media
+    ({"command": "cp hello.ptf /media/user/OTHER/Firmware/"}, True),           # not mounted
+    ({"command": "nice -n 10 cp hello.ptf /run/media/user/CARD/Firmware/"}, True),  # not mounted
+    ({"command": "cp hello.ptf /mnt/disk/Firmware/"}, True),
+    ({"command": "cp hello.ptf /media/user"}, True),                            # not a volume
+    ({"command": "echo x > /mnt/disk/a.txt"}, True),
+    ({"command": "rm /media/user/OTHER/Firmware/x.ptf"}, True),
+    ({"command": "python3 -c \"import shutil; shutil.copy('hello.ptf','/mnt/disk/')\""}, True),
+    ({"file_path": "/mnt/disk/notes.txt"}, True),
+    ({"file_path": "/media/user/OTHER/notes.txt"}, True),
+    ({"command": "cat > /mnt/disk/a.txt <<'EOF'\nhello\nEOF"}, True),
+    # the console's documented update path and a mounted card are open (track3r-os's policy)
+    ({"command": "python3 -I platform/mk66/tools/o3console.py --put x.ptf"}, False),
+    ({"command": "python3 -I o3console.py --put x.ptf --expect-volume 1234-ABCD"}, False),
+    ({"command": "cp hello.ptf /media/user/CARD/Firmware/"}, False),
+    ({"command": "cp -t /media/user/CARD/Firmware hello.ptf"}, False),
+    ({"command": "mv /media/user/CARD/Firmware/x.ptf /media/user/CARD/old/"}, False),
+    ({"command": "rm /media/user/CARD/Firmware/x.ptf"}, False),
+    ({"command": "echo x > /media/user/CARD/a.txt"}, False),
+    ({"command": "sed -i s/a/b/ /media/user/CARD/a.txt"}, False),
+    ({"command": "unzip pack.zip -d /media/user/CARD/"}, False),
+    ({"command": "python3 -c \"import shutil; shutil.copy('hello.ptf','/media/user/CARD/')\""}, False),
+    ({"command": "cat > /media/user/CARD/a.txt <<'EOF'\nhello\nEOF"}, False),
+    ({"file_path": "/media/user/CARD/notes.txt"}, False),
     # reads, builds and mentions pass
-    ({"command": "cmake --build build-host -j4 2>&1 | tail -20"}, False, False),
-    ({"command": "nice -n 10 ctest --test-dir build-host --output-on-failure"}, False, False),
-    ({"command": "build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /tmp/hello"}, False, False),
-    ({"command": "grep -rn openocd docs/ && grep st-flash README.md"}, False, False),
-    ({"command": "git log --oneline | grep -i teensy_loader_cli"}, False, False),
-    ({"command": "python3 -I platform/mk66/tools/check_image.py check build-mk66/apps/hello/hello.hex"}, False, False),
-    ({"command": "sha256sum build-mk66/apps/hello/hello.ptf"}, False, False),
-    ({"command": "cp /media/user/CARD/Firmware/x.ptf /tmp/x.ptf"}, False, False),
-    ({"command": "ls -la /media/user/CARD/Firmware/ && cat /media/user/CARD/readme.txt"}, False, False),
-    ({"command": "rsync -a /media/user/CARD/ /tmp/backup/"}, False, False),
-    ({"command": "dd if=/dev/zero of=/tmp/blank.img bs=1M count=1"}, False, False),
-    ({"command": "echo hi > /dev/null"}, False, False),
-    ({"command": "git add apps/hello/src/hello_app.cpp CMakeLists.txt"}, False, False),
-    ({"command": "git commit -m 'drop the old st-flash note'"}, False, False),
-    ({"command": "python3 - <<'EOF'\nprint(open('/media/user/CARD/readme.txt').read())\nEOF"}, False, False),
-    ({"command": "nice -n 10 cmake -S . -B build-m2-audio-mk66 -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=/opt/arm-gnu-toolchain"}, False, False),
-    ({"command": "ctest --test-dir build-m2-audio-host -L mk66 -R 'audio' --output-on-failure"}, False, False),
-    ({"command": "arm-none-eabi-nm -u build-mk66/kit/dsp/libo3sdk_dsp.a | grep __aeabi_d"}, False, False),
-    ({"command": "cp -r ../track3r-os/platform/mk66/audio platform/mk66/"}, False, False),
-    ({"command": "sed -i 's/o3os/o3sdk/g' platform/mk66/audio/slot_ring.cpp && rm -rf build-m2-audio-host"}, False, False),
-    ({"command": "python3 -I tools/font_convert.py --out /tmp/font && mkdir -p /tmp/hello"}, False, False),
-    ({"command": "cat > docs/notes.md <<'EOF'\nDebug probes (openocd, st-flash) are not used.\n| openocd | no |\nEOF"}, False, False),
-    ({"command": "cd docs && cat >> notes.md <<'EOF'\n; openocd -f x.cfg\nEOF\ngit status"}, False, False),
-    ({"command": "git commit -m \"$(cat <<'EOF'\nfix: drop the st-flash note\nopenocd is gone\nEOF\n)\""}, False, False),
-    ({"command": "cat notes.txt | python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['x'])\nopenocd -f x.cfg\nEOF"}, False, True),
-    ({"command": "bash <<'EOF'\nopenocd -f x.cfg\nEOF"}, False, True),
-    ({"command": "cat > /media/user/CARD/a.txt <<'EOF'\nhello\nEOF"}, False, True),
-    ({"command": "cat <<EOF > x.txt\nhi\nEOF\nopenocd -f x.cfg"}, False, True),
-    ({"file_path": "/home/user/Code/o3-sdk/kit/core/src/ring.cpp"}, False, False),
-    ({"file_path": "/home/user/Code/o3-sdk/kit/core/src/ring.cpp", "old_string": "a", "new_string": "b"}, False, False),
+    ({"command": "cmake --build build-host -j4 2>&1 | tail -20"}, False),
+    ({"command": "nice -n 10 ctest --test-dir build-host --output-on-failure"}, False),
+    ({"command": "build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /tmp/hello"}, False),
+    ({"command": "grep -rn openocd docs/ && grep st-flash README.md"}, False),
+    ({"command": "git log --oneline | grep -i teensy_loader_cli"}, False),
+    ({"command": "python3 -I platform/mk66/tools/check_image.py check build-mk66/apps/hello/hello.hex"}, False),
+    ({"command": "sha256sum build-mk66/apps/hello/hello.ptf"}, False),
+    ({"command": "cp /media/user/OTHER/Firmware/x.ptf /tmp/x.ptf"}, False),
+    ({"command": "ls -la /mnt/disk/Firmware/ && cat /mnt/disk/readme.txt"}, False),
+    ({"command": "rsync -a /media/user/OTHER/ /tmp/backup/"}, False),
+    ({"command": "dd if=/dev/zero of=/tmp/blank.img bs=1M count=1"}, False),
+    ({"command": "echo hi > /dev/null"}, False),
+    ({"command": "git add apps/hello/src/hello_app.cpp CMakeLists.txt"}, False),
+    ({"command": "git commit -m 'drop the old st-flash note'"}, False),
+    ({"command": "python3 - <<'EOF'\nprint(open('/mnt/disk/readme.txt').read())\nEOF"}, False),
+    ({"command": "nice -n 10 cmake -S . -B build-m2-audio-mk66 -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=/opt/arm-gnu-toolchain"}, False),
+    ({"command": "ctest --test-dir build-m2-audio-host -L mk66 -R 'audio' --output-on-failure"}, False),
+    ({"command": "arm-none-eabi-nm -u build-mk66/kit/dsp/libo3sdk_dsp.a | grep __aeabi_d"}, False),
+    ({"command": "cp -r ../track3r-os/platform/mk66/audio platform/mk66/"}, False),
+    ({"command": "sed -i 's/o3os/o3sdk/g' platform/mk66/audio/slot_ring.cpp && rm -rf build-m2-audio-host"}, False),
+    ({"command": "python3 -I tools/font_convert.py --out /tmp/font && mkdir -p /tmp/hello"}, False),
+    ({"command": "cat > docs/notes.md <<'EOF'\nDebug probes (openocd, st-flash) are not used.\n| openocd | no |\nEOF"}, False),
+    ({"command": "cd docs && cat >> notes.md <<'EOF'\n; openocd -f x.cfg\nEOF\ngit status"}, False),
+    ({"command": "git commit -m \"$(cat <<'EOF'\nfix: drop the st-flash note\nopenocd is gone\nEOF\n)\""}, False),
+    ({"command": "cat notes.txt | python3 - <<'EOF'\nimport subprocess\nsubprocess.run(['x'])\nopenocd -f x.cfg\nEOF"}, True),
+    ({"command": "bash <<'EOF'\nopenocd -f x.cfg\nEOF"}, True),
+    ({"command": "cat <<EOF > x.txt\nhi\nEOF\nopenocd -f x.cfg"}, True),
+    ({"file_path": "/home/user/Code/o3-sdk/kit/core/src/ring.cpp"}, False),
+    ({"file_path": "/home/user/Code/o3-sdk/kit/core/src/ring.cpp", "old_string": "a", "new_string": "b"}, False),
 ]
 
 
@@ -267,12 +270,12 @@ def selftest():
     def mounted(path):
         return path == "/media/user/CARD"
     bad = []
-    for tool_input, allow, want in SELFTEST:
-        got = evaluate(tool_input, allow, mounted) is not None
+    for tool_input, want in SELFTEST:
+        got = evaluate(tool_input, mounted) is not None
         if got != want:
-            bad.append((tool_input, allow, want))
-    for tool_input, allow, want in bad:
-        print(f"FAIL want {'block' if want else 'pass'} (allow_card={allow}): {tool_input!r}")
+            bad.append((tool_input, want))
+    for tool_input, want in bad:
+        print(f"FAIL want {'block' if want else 'pass'}: {tool_input!r}")
     print(f"{len(SELFTEST) - len(bad)}/{len(SELFTEST)} ok")
     return 1 if bad else 0
 
@@ -286,7 +289,7 @@ def main() -> int:
         return 0
     if not isinstance(payload, dict):
         return 0
-    verdict = evaluate(payload.get("tool_input") or {}, os.environ.get("O3_ALLOW_CARD_WRITE") == "1")
+    verdict = evaluate(payload.get("tool_input") or {})
     if verdict:
         print(f"BLOCKED by project guard: {verdict[0]}. {verdict[1]}", file=sys.stderr)
         return 2

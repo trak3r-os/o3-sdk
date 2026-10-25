@@ -9,7 +9,7 @@ Time on the unit is the scarcest resource: collect everything that needs the dev
 
 ## Prepare
 1. **Collect** the unit-only checks: the "Done when" item 3 of `docs/M2-PLAN.md` while M2 is open (kit boot screen, then HELLO; pads, buttons and encoder drive it; LEDs follow; sound on the outputs; CPU % in the header; a crash leaves a record and a blink code); the hardware-only lines in the engineers' and reviewers' reports ("needs the unit"); estimates that now need a measurement (a unit's CPU cost, DESIGN-303 open decisions marked "measure on the unit first"). Each check gets: id, steps on the device, expected result, what to capture.
-2. **Candidates.** Build each image needed and run skill `fw-gate-check` on it. Never flash, never write to a card: the maintainer carries the `.ptf`.
+2. **Candidates.** Build each image needed and run skill `fw-gate-check` on it. Only a gated image goes to the unit, by a documented update path: the USB console of the image running on the unit (`o3console.py --put`, then the console's firmware commands, as in track3r-os's docs/manual/computer_tools.md) or a mounted card for the bootloader. An image without the USB console strands the unit: nothing can be read or installed remotely until someone uses the card path and the hidden reset button, so say so before installing one.
 3. **Write** `docs/hw/YYYY-MM-DD.md` (create the directory on first use):
    - images: file, build id, SHA-256, what each is for;
    - safety first: the update path (the `.ptf` alone in `Firmware/` of the SD card, then the hidden reset button; track3r-os `docs/manual/install.md`), the recovery path, and that the maintainer performs it;

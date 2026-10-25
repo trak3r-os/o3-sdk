@@ -96,7 +96,7 @@ def main():
     if builds:
         print("- Build dirs: " + ", ".join(builds[:8]) + (", ..." if len(builds) > 8 else "")
               + " (untracked; build-host feeds the syntax-check hook).")
-    print("- Rules: CLAUDE.md. Never flash, never run an uploader or probe, cards are the maintainer's, never commit unless asked; "
+    print("- Rules: CLAUDE.md. No probe or uploader, firmware only through a documented update path after fw-gate-check, never commit unless asked; "
           "builds under nice -n 10; verify before claiming done (name the unit check a host test cannot give); "
           "everything written in the repository is English.")
     return 0
