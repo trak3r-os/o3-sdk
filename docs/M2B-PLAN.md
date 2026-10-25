@@ -32,10 +32,12 @@ console is the path this round); screenshot to card; the USB return stream, stem
 the tracker's own commands (mix, mon, load, inst, mod, radio, voices, ogexp, disk, power, bench, `enc accel`, `usb profile/return/map/ep0`,
 `audio start`).
 
-USB audio fits this round: the library side comes with slice U; the new work is about 400 lines (a 2-channel master tap feeding
-`usb::StemRing` from the render, the AUDIO P2 capture-only layout, `usb mode audio`, a 10 s fallback to STANDARD). UAC2 is unproven on a
-Tracker, so AUDIO is runtime-only this round: boot is STANDARD, the set first proven on the unit. (FRAMEWORK.md section 10 said "audio
-class 1"; what is ported is UAC2.)
+USB audio fits this round: the library side comes with slice U; the new work is the master tap feeding `usb::StemRing` from the render
+and its binding. USB audio is proven on the unit in track3r-os, and it is the master **in parallel with the main output** (the maintainer,
+2026-10-25): the image boots in the AUDIO set, as track3r-os does by default (its USB AUDIO row is On by default), with that set's
+descriptors identical; the master goes on the first stereo pair of the capture stream; the return (OUT) stream's endpoint stays as the
+descriptors have it and what arrives is discarded this round. STANDARD stays as the fallback set (`usb mode standard`, the mode guard).
+(FRAMEWORK.md section 10 said "audio class 1"; what is ported is UAC2.)
 
 ## 2. Where the code comes from
 
@@ -211,23 +213,22 @@ enc, leds, a shot compared with `hello_sim`'s PNG).
 
 1. `build-host`: green, warning-free; `ctest` passes in full (kit, usb, mk66, tools).
 2. `build-mk66`: `hello.elf/.hex/.ptf` warning-free; static gate (`hello_image`, `_flashconfig`, `_ramfunc`, new `_usb`, `mk66_writers`,
-   `mk66_dma_owner`); no `__aeabi_d*`, no heap; `fw-gate-check` reproducible twice for `hello.ptf` and the trial variant
-   `hello-trial.ptf` (`-DO3SDK_MK66_TRIAL_REVERT=PolyendTracker_0.0.1.ptf`).
+   `mk66_dma_owner`); no `__aeabi_d*`, no heap; `fw-gate-check` reproducible twice for `hello.ptf`.
 3. On the host, `fw_hex_cross.py --hex <track3r-os v1.0.0 .ptf>` gives "valid" with o3-sdk's validator (the way back).
 4. The unit procedure, run through `hw-session` (the test session trak-303-0f, with the maintainer's go):
    0. Preconditions: the unit runs track3r-os v1.0.0 and `o3console.py version` works; `fw` lists `PolyendTracker_0.0.1.ptf` (a known-good
       recovery image) as **first-ptf**, the target of the hidden reset button (if not, the maintainer fixes it by card first); note the
       volume serial and the CRC of the recovery file; back up the card.
-   1. `o3console.py --put hello-trial.ptf --name o3sdk-hello.ptf --expect-volume XXXX-XXXX` -> `ok ...`; the reply's `first-ptf` must
+   1. `o3console.py --put hello.ptf --name o3sdk-hello.ptf --expect-volume XXXX-XXXX` -> `ok ...`; the reply's `first-ptf` must
       still be `PolyendTracker_0.0.1.ptf`; if not, `fw rm o3sdk-hello.ptf` and stop.
    2. `o3console.py --update o3sdk-hello.ptf --crc <crc> --yes-update --expect-version <app hash>` -> re-enumerates and prints
-      `Track3r o3sdk, build ...` (that `version` also stops the trial timer).
+      `Track3r o3sdk, build ...`.
    3. Over the o3-sdk console: `version stage "log 40" crash cpu mem usb sd fw leds state`; `--shot hello.png`, then `o3shot.py compare
       hello.png <hello_sim reference>`; `"key f1"`, `"pad 12"`, `"enc 3"`, then `state` and `--shot`; `"pad 12 down"`, `leds` (pad 12
       lit), `"pad 12 up"`; `"fw arm PolyendTracker_0.0.1.ptf <crc>"` -> `armed <token>` (the way back validates on the device; let the
       token expire).
-   4. `"usb mode audio"`, reconnect, `"usb audio"`; `o3audio.py record --seconds 3 --not-silent` while `pad 12 down`; `"usb audio"` (no
-      underruns), `cpu`, `"usb mode standard"`.
+   4. `"usb audio"` (the AUDIO set is up from boot); `o3audio.py record --seconds 3 --not-silent` while `pad 12 down`; `"usb audio"`
+      (no underruns), `cpu`; `"usb mode standard"` and back to check the fallback.
    5. The way back: `o3console.py --update PolyendTracker_0.0.1.ptf --crc <crc> --yes-update --expect-version v1.0.0` (the file is
       already on the card); then from track3r-os, `fw rm o3sdk-hello.ptf`.
    6. Steps 1-5 again with o3-303's image.
@@ -235,12 +236,9 @@ enc, leds, a shot compared with `hello_sim`'s PNG).
 A stranded unit (the o3-sdk image does not bring its USB up) and the mitigations: (a) the first-ptf rule (step 0 and the check in step
 1): recovery is one press of the hidden reset button by a person at the unit, no card handling; (b) the boot is M2's with USB last: a
 USB failure (`usb0::start` false, logged) leaves a working unit with a blink code; (c) no crash loop: if the last crash record says
-module `kUsbModule` or exception 69 (IRQ 53), this boot skips `usb0::start`; (d) trial auto-revert (decision D4; opt-in build option,
-the trial image only; `console/trial_revert.*`): if (c) triggers, or no console command ran (`Shell::commands_run() == 0`) within 300 s
-of boot, it takes the update path's client API to a `.ptf` already on the card (`update::device::sink().begin_check("<revert>")` ->
-poll -> `install()`: the same check and hand-over as `fw update`); a missing or invalid file does nothing; release images compile it
-out; a trial unit powered without a computer reverts after 5 minutes (benign); (e) AUDIO cannot take the console away (runtime only,
-the 10 s fallback, STANDARD after any reboot); (f) bring-up proved on the host as far as possible (the fake-controller enumeration and
+module `kUsbModule` or exception 69 (IRQ 53), this boot skips `usb0::start`; (d) no trial auto-revert (the maintainer: "dejate de
+autoreversion en la imagen"); (e) the mode guard: after a change of USB set, if the host has not configured the device 10 s later, the
+unit goes back to STANDARD; (f) bring-up proved on the host as far as possible (the fake-controller enumeration and
 property tests, `mk66_usb_console_test`, the bring-up golden, the e2e console test, `check_usb_image.py`); (g) no watchdog this round
 (its clock and timeout are unverified on the unit: a wrong guess is a reset loop on the first boot). If the image does not boot at all
 (M2 has never run on the unit), only (a) helps: someone presses the hidden reset button.
@@ -266,7 +264,8 @@ AUDIO streaming (compare `cpu` with and without).
 - **D1** the I/X/N classification above: accepted by the integrator (M2's rule; the maintainer's "keep track3r-os code identical").
 - **D2** the App hook shape (`app::DiagCommand`, `App::diag_commands`, `App::describe_state`, `Runtime::state_line`): accepted.
 - **D3** `identity.h` identical: accepted (the host tools and host caches work unchanged).
-- **D4** trial auto-revert in the remote-test image, opt-in, never in a release image: accepted.
-- **D5** boot in STANDARD; AUDIO P2 capture-only by `usb mode audio` with the 10 s fallback: accepted.
-- **D6** whether M2's card session (image H) runs first, or the trial image is the first o3-sdk boot: **the maintainer's**, needed
-  before the unit procedure only.
+- **D4** trial auto-revert: **no** (the maintainer, 2026-10-25: "dejate de autoreversion en la imagen").
+- **D5** the image boots in track3r-os's default AUDIO set, identical descriptors, the master in parallel with the main output (the
+  maintainer: "el usb audio si se ha probado, y es en paralelo a la salida main"); STANDARD is the fallback.
+- **D6** M2's card session runs first, with the maintainer at the unit (the maintainer: "todo lo demas OK" to the recommendation); the
+  same session also runs o3-303's image and the fill-rate check for the 303 skin.
