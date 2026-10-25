@@ -30,6 +30,8 @@ uses o3sdk from outside (`add_subdirectory`) gets the kit, the units and the pla
 
 Run builds under `nice -n 10`. A host test is not hardware verification: name the remaining unit check.
 
+CI: `tools/remote_ci.sh <host|mk66>` runs `tools/ci.sh` on the remote build machine; exit 3 or 255 means run `tools/ci.sh <host|mk66>` locally (`docs/ci.md`).
+
 ## Engineering standards
 
 - Layering by link dependency: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`; units depend on `dsp` only.

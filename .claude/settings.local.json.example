@@ -1,3 +1,5 @@
 {
-  "env": {}
+  "env": {
+    "O3SDK_REMOTE_CI": ""
+  }
 }
