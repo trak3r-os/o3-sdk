@@ -16,7 +16,8 @@
 //             (one producer: the main loop) and returns at once; the render applies it at frame 0 of its next block. A full ring
 //             refuses the command (false) and counts it; nothing blocks.
 //   Render    render(): the platform's audio callback (an interrupt on the unit, the simulator's loop on the host), once per block.
-//             No heap, no blocking, bounded.
+//             No heap, no blocking, bounded. In a block: the queued commands, then the clocked hooks (events and mixer writes, see
+//             BlockContext), then the units and the mixer.
 //
 // Parameter values live on the main side (param(), set_param(), step_param(), format_param()), as the user sees them; the unit
 // gets each change as an event. At start() every unit receives all its stored values (a process() call of zero frames).
@@ -53,12 +54,26 @@ inline constexpr UnitId kNoUnit = 0xFF;
 enum class MixField : std::uint8_t { Level, Pan, SendA, SendB, Mute };
 inline constexpr unsigned kMixFieldCount = 5;
 
-// What a clocked hook may do inside a block: read the transport, place events for any unit.
+// What a clocked hook may do inside a block: read the transport, place events for any unit, write a slot's mixer.
 class BlockContext {
  public:
   const Transport& transport() const noexcept { return *transport_; }
   // Queues `e` (its frame inside this block) for `unit`. false: unknown unit, or the unit's list for this block is full (counted).
   bool emit(UnitId unit, const Event& e) noexcept;
+  // Writes one mixer field of `slot` (a sequencer's motion lane, a slew). The value is clamped as Engine::set_mix clamps it (NaN gives
+  // the field's default) and is the field's target from here: the mixer ramps the gain from where the last block left it to the
+  // target across this whole block, exactly as for a main-loop write, so a jump is click-free. A few instructions, no queue, no
+  // limit on the calls; the mixer has one ramp per block, so several writes to a field in one block collapse to the last.
+  // Order, the one rule: each block applies the main loop's queued commands first, then runs the hooks in the order added, then
+  // the mixer reads the targets. For a field the last write in that order wins: a hook's write beats a main-loop write applied in
+  // the same block, a later hook's beats an earlier one's, a later call of the same hook beats its earlier one. The value stays the
+  // target (it is not restored) until another write replaces it, and the main loop's next write, applied at the start of a later
+  // block, replaces it. Engine::mix() keeps reporting the main loop's last value: a hook's write is the render side's, as a Param
+  // event is for param(). false, nothing written: `slot` >= kMaxSlots or `field` not a MixField (refused, not clamped).
+  bool set_mix(unsigned slot, MixField field, float value) noexcept;
+  // The target of that field as the render side stands now (what the last write left, the main loop's or a hook's); 0 for a slot or
+  // field out of range, as Engine::mix(). A slew reads it to start from where the field is.
+  float mix(unsigned slot, MixField field) const noexcept;
   // The codec's input of this block (frames samples each), for a hook that listens (a recorder's threshold).
   const float* input_l() const noexcept { return in_l_; }
   const float* input_r() const noexcept { return in_r_; }
@@ -183,6 +198,7 @@ class Engine {
 
   bool push(const Command& c) noexcept;
   bool queue_event(UnitId unit, const Event& e) noexcept;  // render side
+  void apply_mix(unsigned slot, MixField field, float value) noexcept;  // render side: `value` already clamped, `slot` and `field` valid
   void drain() noexcept;
   void run_unit(UnitId unit, const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames) noexcept;
   void publish(float peak_l, float peak_r, const float* slot_peaks, std::uint32_t cycles, bool clipped) noexcept;

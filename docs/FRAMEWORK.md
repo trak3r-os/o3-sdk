@@ -99,6 +99,20 @@ main loop ──commands──▶                                               
 - **Render**: `render()`, once per block, from the platform's audio callback (`Runtime::block_callback()`).
 - **Clocked hooks** (`Clocked::block(BlockContext&)`) run in the render context before the units and place events at any frame:
   sequencers, arpeggiators, a MIDI clock. Timing is sample-accurate.
+- **A hook writes the mixer** with `BlockContext::set_mix(slot, field, value)` (a motion lane, a slew; `field` is a `MixField`: Level,
+  Pan, SendA, SendB, Mute). The value is clamped as `Engine::set_mix` clamps it, becomes the field's target at once, and the mixer
+  ramps the gain to it across the block, from where the last block left it, as for a main-loop write: a jump never clicks. It costs a
+  few instructions and has no queue, so a hook may call it as often as it likes, but the mixer has one ramp per block (up to 64 frames, not
+  frame-accurate like an event): several writes to a field in a block collapse to the last, so a slew written every 16 frames
+  lands at the block's rate. `BlockContext::mix(slot, field)` reads the target as the render side stands (a slew starts from it).
+  **The rule: each block applies the main loop's queued commands first, then runs the hooks in the order added, then the mixer reads
+  the targets; for a field, the last write in that order wins.** A hook's write beats a main-loop write applied in the same block, a
+  later hook's beats an earlier one's, a later call beats an earlier one. The value then stays (nothing restores the main loop's)
+  until another write replaces it: the main loop's next write, applied at the start of a later block, does; a hook that writes the
+  field every block (a lane) holds it against the main loop, and one that stops writing hands it back at the next main-loop write.
+  `Engine::mix()` keeps reporting the main loop's last value (a hook's write is the render side's, as a `Param` event is for
+  `param()`). A `slot` >= `kMaxSlots` or a `field` that is not a `MixField` is refused: `false`, nothing written (a value is clamped,
+  an index never). A slot with no source takes the write (it is only a target).
 - **The transport** (`transport.h`) counts Q32.32 ticks at 960 PPQN, advanced by an integer increment computed from the tempo and the
   one rate constant: no drift. `for_each_step(t, period, offset, swing, fn)` walks a grid (sixteenths are 240 ticks) and calls
   `fn(frame, step)` for each step that starts in the block; `Transport::started` and `stopped` mark the first block after Play and Stop.

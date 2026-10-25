@@ -79,6 +79,34 @@ float clamp_mix(MixField f, float v) noexcept {
 
 bool BlockContext::emit(UnitId unit, const Event& e) noexcept { return engine_ != nullptr && engine_->queue_event(unit, e); }
 
+bool BlockContext::set_mix(unsigned slot, MixField field, float value) noexcept {
+  if (engine_ == nullptr || slot >= kMaxSlots || static_cast<unsigned>(field) >= kMixFieldCount) {
+    return false;
+  }
+  engine_->apply_mix(slot, field, clamp_mix(field, value));
+  return true;
+}
+
+float BlockContext::mix(unsigned slot, MixField field) const noexcept {
+  if (engine_ == nullptr || slot >= kMaxSlots || static_cast<unsigned>(field) >= kMixFieldCount) {
+    return 0.0f;
+  }
+  const Engine::Slot& s = engine_->slots_[slot];
+  switch (field) {
+    case MixField::Level:
+      return s.level;
+    case MixField::Pan:
+      return s.pan;
+    case MixField::SendA:
+      return s.send[0];
+    case MixField::SendB:
+      return s.send[1];
+    case MixField::Mute:
+      return s.mute ? 1.0f : 0.0f;
+  }
+  return 0.0f;
+}
+
 Engine::Engine() noexcept {
   for (auto& slot : mix_main_) {
     for (unsigned f = 0; f < kMixFieldCount; ++f) {
@@ -325,6 +353,29 @@ bool Engine::queue_event(UnitId unit, const Event& e) noexcept {
   return true;
 }
 
+// The one place a mixer target is written on the render side: the main loop's commands (drain) and the hooks (BlockContext::set_mix)
+// both come here, so a hook's write is ramped by the mixer exactly as a main-loop write is.
+void Engine::apply_mix(unsigned slot, MixField field, float value) noexcept {
+  Slot& s = slots_[slot];
+  switch (field) {
+    case MixField::Level:
+      s.level = value;
+      break;
+    case MixField::Pan:
+      s.pan = value;
+      break;
+    case MixField::SendA:
+      s.send[0] = value;
+      break;
+    case MixField::SendB:
+      s.send[1] = value;
+      break;
+    case MixField::Mute:
+      s.mute = value >= 0.5f;
+      break;
+  }
+}
+
 void Engine::drain() noexcept {
   Command c;
   for (unsigned n = 0; n < kMaxCommandsPerBlock && ring_.pop(c); ++n) {
@@ -332,27 +383,9 @@ void Engine::drain() noexcept {
       case Op::UnitEvent:
         (void)queue_event(c.target, c.event);
         break;
-      case Op::Mix: {
-        Slot& slot = slots_[c.target];
-        switch (static_cast<MixField>(c.field)) {
-          case MixField::Level:
-            slot.level = c.value;
-            break;
-          case MixField::Pan:
-            slot.pan = c.value;
-            break;
-          case MixField::SendA:
-            slot.send[0] = c.value;
-            break;
-          case MixField::SendB:
-            slot.send[1] = c.value;
-            break;
-          case MixField::Mute:
-            slot.mute = c.value >= 0.5f;
-            break;
-        }
+      case Op::Mix:
+        apply_mix(c.target, static_cast<MixField>(c.field), c.value);
         break;
-      }
       case Op::MasterLevel:
         master_level_ = c.value;
         break;
