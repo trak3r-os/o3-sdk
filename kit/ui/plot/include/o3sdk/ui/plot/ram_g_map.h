@@ -10,8 +10,8 @@
 //   0x04000  hex pairs, notes, icons, the smaller tiles of the zoomed grid   kRamGEnd - kRamGTiles bytes   (assets.h)
 //   0x0F000  wave slots 0..3             4 x 96 KiB: 2 lanes x 2 buffers, 800 x 240 at L4 (this file)
 //   0x6F000  boot logo                   2 pages: 124 x 124 L4, 7,688 bytes, uploaded with the other assets (OS-003f)
-//   0x71000  spare                       the rest, 572 KiB, for the screens to come. In it: the screenshot's bands (OS-HIL, `diag shot`: kRamGShot, all but the last 64 bytes, which
-//                                        are the display driver's DMA self-test scratch)
+//   0x71000  spare                       the rest, 572 KiB, for the screens to come. In it: the screenshot's bands (OS-HIL, `diag shot`: kRamGShot, up to the app's region),
+//                                        the app's region (kRamGApp, from 0xD4000, 4 KB aligned, 175.9 KiB) and the last 64 bytes, the display driver's DMA self-test scratch
 //
 // A wave lane draws from one slot while the other is being filled and swaps when the new picture is complete: the chip
 // re-reads RAM_G on every scan-out, so uploading over a bitmap that is on screen would tear (hal/display.h).
@@ -55,10 +55,15 @@ inline constexpr std::uint32_t kRamGSpare = kRamGBootLogoEnd;
 inline constexpr std::uint32_t kRamGSpareBytes = hal::kRamGBytes - kRamGSpare;
 // The last 64 bytes of RAM_G are the DMA self-test's scratch (platform/mk66/display/display.h kSelfTestBytes, which the composition root checks against this). OS-HIL: the console's
 // `diag shot` writes its snapshot bands (CMD_SNAPSHOT2, platform/mk66/usb/shot_stream.h) into the rest of the spare region, nothing else: every band it asks for is sized to fit
-// kRamGShotBytes. The only user of the spare region so far; a screen that needs memory takes it from the END of the spare region downwards and shortens kRamGShotBytes here.
+// kRamGShotBytes. A screen that needs memory takes it from the END of the spare region downwards and shortens kRamGShotBytes here.
 inline constexpr std::uint32_t kRamGSelfTestBytes = 64;
+// The app's region: the end of the spare region, from a 4 KB page to the self-test's scratch. The app owns it (its bitmaps, uploaded
+// through hal::Display::upload()); the kit never writes it. Sized for o3-303's panel skin (S4 of o3-303 docs/M3B-PLAN.md: 115,632
+// bytes with one palette, 177,072 with two); the fill-rate test (apps/fillrate) puts its two 800-wide test bitmaps (112.5 KiB) at its start.
+inline constexpr std::uint32_t kRamGApp = hal::kRamGBytes - 0x2C000u;
+inline constexpr std::uint32_t kRamGAppBytes = hal::kRamGBytes - kRamGSelfTestBytes - kRamGApp;
 inline constexpr std::uint32_t kRamGShot = kRamGSpare;
-inline constexpr std::uint32_t kRamGShotBytes = kRamGSpareBytes - kRamGSelfTestBytes;
+inline constexpr std::uint32_t kRamGShotBytes = kRamGApp - kRamGShot;
 
 // Bitmap handles of the two wave lanes: after the eight the renderer binds (assets.h), below the coprocessor's 15.
 inline constexpr std::uint8_t kHandleWaveLane0 = 9;
@@ -105,8 +110,11 @@ constexpr bool ram_g_regions_ok(const RamGRegion* regions, unsigned count) noexc
 }
 static_assert(ram_g_regions_ok(kRamGRegions, kRamGRegionCount),
               "RAM_G regions are word aligned, inside RAM_G and disjoint");
-static_assert(kRamGShot % hal::kUploadAlign == 0 && kRamGShot >= kRamGBootLogoEnd && kRamGShot + kRamGShotBytes + kRamGSelfTestBytes == hal::kRamGBytes,
-              "the screenshot's region is the spare region less the self-test's scratch, on a word, behind every fixed region");
+static_assert(kRamGShot % hal::kUploadAlign == 0 && kRamGShot >= kRamGBootLogoEnd && kRamGShot + kRamGShotBytes == kRamGApp,
+              "the screenshot's region is the spare region up to the app's region, on a word, behind every fixed region");
+static_assert(kRamGApp % 4096u == 0 && kRamGApp > kRamGShot && kRamGApp + kRamGAppBytes + kRamGSelfTestBytes == hal::kRamGBytes &&
+                  kRamGAppBytes % hal::kUploadAlign == 0,
+              "the app's region is the end of the spare region, below the self-test's scratch, on a word, and leaves the screenshot's bands something");
 static_assert(kRamGWave >= kRamGEnd, "the wave slots start after the tiles and icons");
 static_assert(kRamGWaveEnd <= hal::kRamGBytes, "the wave slots fit RAM_G");
 static_assert(kWaveSlotBytes >= kWaveMaxBytes && kWaveSlotBytes % 4096u == 0, "a slot holds the largest wave bitmap");

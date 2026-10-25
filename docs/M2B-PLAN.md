@@ -91,7 +91,7 @@ the body of `on_streams` -> `usb_audio::tap().set_enabled(in_active)` plus its t
 | `mem::kRamfuncLSize` (`hex_validator.cpp` static_assert) | update | additive constant in o3-sdk `mem_map.h`: `kRamfuncLSize = 0xC800` ("the SRAM_L window the update path's validator accepts: track3r-os's; o3sdk's `kRamfuncLBudget` fits inside") plus `static_assert(kRamfuncLBudget <= kRamfuncLSize)`; `hex_validator.cpp` stays identical and accepts track3r-os images (the way back) and o3-sdk images |
 | `O3OS_BUILD_LABEL` | version, banner | `o3sdk_build_info.h` (`O3SDK_IMAGE_LABEL`, `O3SDK_APP_VERSION`) and `o3sdk_app().info()` |
 | the crash record for `crash` | console | main: `console::note_boot_crash(mk66::boot_crash_record())` before `clear_crash_record()` |
-| the screenshot RAM_G region (`appimg::shot_region`, `screenshot_active`) | `shot` | `ui::plot::kRamGShot` / `kRamGShotBytes` (already reserved: the spare region minus the 64-byte DMA scratch); `screenshot_active()` is false |
+| the screenshot RAM_G region (`appimg::shot_region`, `screenshot_active`) | `shot` | `ui::plot::kRamGShot` / `kRamGShotBytes` (already reserved: the spare region up to the app region `kRamGApp`, 396 KiB); `screenshot_active()` is false |
 | `app::describe_state`, `appimg::button_code`, `enc_accel_*` | state, key, enc | kit hooks (slice C) and `app::find_button()`; encoder acceleration cut |
 | `Scanner::inject` + `injected_pads_`, `PadLeds::in_sync`, `Ft812Display::bus_idle` (cut by M2) | key/pad/enc, leds, shot | restored from track3r-os line for line, with their test cases |
 | `audio_pipeline()`, `audio_cpu_reset()`, `audio_set_starve_blocks()`, `open_wanted()` (cut by M2) | cpu, guard; the output gate during `fw update` | restored (three one-liners in `audio.cpp`/`audio.h`; `output_gate.h` plus its test cases) |
@@ -132,7 +132,7 @@ only writer); at most 16; a bad row is skipped and logged; the shell gets one ta
 bound to one dispatcher).
 
 Order: **U** first (a mechanical copy) and **T** in parallel from the start. **S** and **D** start once U's `usb` builds (both may copy
-files earlier). **C** starts at once on its pure parts (`console/core`, the kit hooks, `trial_revert`, `usb_mode_guard`) and does
+files earlier). **C** starts at once on its pure parts (`console/core`, the kit hooks, `usb_mode_guard`; no `trial_revert`, D4) and does
 `console.cpp`, `main.cpp` and the image once D's and S's headers are in; the image links when D's and S's `_hw` objects compile. Then
 the integrator gates both images, the docs and the hw-session page; then o3-303 is rebuilt against the new o3-sdk and gated (its own
 `describe_state` and commands come later, in its repository).
@@ -155,7 +155,7 @@ STANDARD golden `usb_golden.h`; `(Audio, P2, false)` passes `validate()` with 2 
 `mk66_console_core_test` (table assembly, the app-command rules, dispatch and the unknown-command error, help layout, `state` = kit
 pairs then app pairs), `mk66_console_e2e_test` (the console core, `Shell`, `ConsolePump` and `UsbDevice` over track3r-os's `usb_rig`
 fake controller with a fake App: `help`, `version`, `state`, an app command, `key f1` reaching the app through a fake injector),
-`trial_revert_test`, `usb_mode_guard_test`, `app_diag_test`, the `<app>_usb` ctest (`check_usb_image.py`); T `mk66_writers`.
+`usb_mode_guard_test`, `app_diag_test`, the `<app>_usb` ctest (`check_usb_image.py`); T `mk66_writers`.
 
 ## 5. Integration
 
@@ -250,7 +250,7 @@ property tests, `mk66_usb_console_test`, the bring-up golden, the e2e console te
 | U | lib 6.8k + tests 9.1k | about 60 (CMake) |
 | S | storage + update 5.6k, FatFs 23.5k (third-party), audio diag about 250, tests about 6.6k, `fw_hex_cross.py` 280 | about 120 |
 | D | about 2.5k (usb0 cut to about 470, `diag_text` about 585, the rest identical) + tests about 2.2k + restorations about 200 | tap about 150 + test 200, bring-up test about 120, CMake about 60 |
-| C | about 450 lines of handler bodies verbatim inside new files; restorations about 50 | `console.cpp` about 650, core about 250 + tests about 500, `appimg` 80, trial revert and mode guard about 210 + tests about 300, kit hooks about 180 + test 150, `main.cpp` +150, image CMake +50 |
+| C | about 450 lines of handler bodies verbatim inside new files; restorations about 50 | `console.cpp` about 650, core about 250 + tests about 500, `appimg` 80, mode guard about 60 + tests about 150 (no trial revert, D4), kit hooks about 180 + test 150, `main.cpp` +150, image CMake +50 |
 | T | tools about 3.95k | `check_writers.py` about 250, `check_usb_image.py` about 150, `hello_smoke.json` about 60 |
 
 Risks: USB does not come up on o3-sdk (mitigations a-f); M2 has never booted on the unit (D6); UAC2 unproven on a Tracker (runtime
