@@ -109,6 +109,19 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
       }
       std::printf("snap %s\n", path.c_str());
       ++result.snapshots;
+    } else if (cmd == "boot") {
+      if (w.size() != 2) {
+        return fail("boot <name>");
+      }
+      if (!h.show_boot_screen()) {
+        return fail("the display took no boot frame");
+      }
+      const std::string path = out_dir + "/" + w[1] + ".png";
+      if (!h.snapshot(path)) {
+        return fail("cannot write " + path);
+      }
+      std::printf("boot %s\n", path.c_str());
+      ++result.snapshots;
     } else if (cmd == "record") {
       if (w.size() != 2 || (w[1] != "on" && w[1] != "off")) {
         return fail("record on|off");

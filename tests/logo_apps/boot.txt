@@ -1,0 +1,3 @@
+# The boot screen of an app with its own logo: the first frame of a unit.
+wait 50
+boot 01_boot

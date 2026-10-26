@@ -167,6 +167,7 @@ bool EveRaster::render(const std::uint32_t* words, std::size_t count) {
     work_[i + 3] = 255;
   }
   ctx_ = Context{};
+  palette_source_ = 0;
   depth_ = 0;
   prim_ = Prim::None;
   have_first_ = false;
@@ -440,8 +441,9 @@ bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t 
   // BITMAP_SIZE: width and height of 0 mean 2048 (guide section 4.9).
   const std::uint32_t width = ((h.width_hi << 9) | h.width_lo) != 0 ? (h.width_hi << 9) | h.width_lo : 2048u;
   const std::uint32_t height = ((h.height_hi << 9) | h.height_lo) != 0 ? (h.height_hi << 9) | h.height_lo : 2048u;
-  if (h.format != 1 && h.format != 2 && h.format != 3 && h.format != 17) {  // L1, L4, L8, L2
-    return fail("bitmap format is not L1/L2/L4/L8", h.format);
+  const bool paletted = h.format == 14;  // PALETTED565
+  if (h.format != 1 && h.format != 2 && h.format != 3 && h.format != 17 && !paletted) {  // L1, L4, L8, L2
+    return fail("bitmap format is not L1/L2/L4/L8/PALETTED565", h.format);
   }
   if (stride == 0 || layout_h == 0) {
     return fail("bitmap stride or layout height is zero", 0);
@@ -465,8 +467,35 @@ bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t 
       case 2:
         return ((sx % 2u) == 0 ? byte >> 4 : byte & 0xFu) * 17u;
       default:
-        return byte;
+        return paletted ? 255u : byte;  // a palette entry is opaque (PALETTED565 has no alpha)
     }
+  };
+  // PALETTED565: the byte is an index into the 256 RGB565 entries (little endian) at PALETTE_SOURCE, drawn in one pass with its own
+  // colour times COLOR_RGB. [A] The 5 and 6 bit channels widen by repeating their top bits (31 -> 255), and COLOR_RGB modulates
+  // (255 leaves the entry as it is); which of the chip's roundings it really is, only a unit can say. paint() draws the source
+  // pixel (sx, sy) at (x, y): an alpha mask through the current colour, or a paletted pixel through its entry.
+  if (paletted && std::uint64_t{palette_source_} + 512u > kRamGBytes) {
+    return fail("PALETTE_SOURCE: the 512-byte palette lies outside RAM_G", palette_source_);
+  }
+  const auto paint = [&](int x, int y, std::uint32_t sx, std::uint32_t sy) {
+    const unsigned sample = alpha_at(sx, sy);
+    if (sample == 0) {
+      return;
+    }
+    if (!paletted) {
+      fill_pixels(x, y, x + 1, y + 1, static_cast<std::uint8_t>(sample));
+      return;
+    }
+    const std::uint8_t index = ram_g_[static_cast<std::size_t>(base + std::uint64_t{sy} * stride + sx)];
+    const std::size_t entry = std::size_t{palette_source_} + 2u * index;
+    const unsigned rgb565 = ram_g_[entry] | (unsigned{ram_g_[entry + 1]} << 8);
+    const unsigned r5 = (rgb565 >> 11) & 31u, g6 = (rgb565 >> 5) & 63u, b5 = rgb565 & 31u;
+    const Context keep = ctx_;
+    ctx_.r = static_cast<std::uint8_t>(mul255(static_cast<std::uint8_t>((r5 << 3) | (r5 >> 2)), keep.r));
+    ctx_.g = static_cast<std::uint8_t>(mul255(static_cast<std::uint8_t>((g6 << 2) | (g6 >> 4)), keep.g));
+    ctx_.b = static_cast<std::uint8_t>(mul255(static_cast<std::uint8_t>((b5 << 3) | (b5 >> 2)), keep.b));
+    fill_pixels(x, y, x + 1, y + 1, 255);
+    ctx_ = keep;
   };
   const int sx0 = std::max(static_cast<int>(ctx_.scissor_x), 0);
   const int sy0 = std::max(static_cast<int>(ctx_.scissor_y), 0);
@@ -502,10 +531,7 @@ bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t 
         } else if (sy < 0 || sy >= layout_h) {
           continue;
         }
-        const unsigned sample = alpha_at(static_cast<std::uint32_t>(sx), static_cast<std::uint32_t>(sy));
-        if (sample != 0) {
-          fill_pixels(px + dx, py + dy, px + dx + 1, py + dy + 1, static_cast<std::uint8_t>(sample));
-        }
+        paint(px + dx, py + dy, static_cast<std::uint32_t>(sx), static_cast<std::uint32_t>(sy));
       }
     }
     return true;
@@ -573,11 +599,7 @@ bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t 
   for (int dy = dy0; dy < dy1; ++dy) {
     const std::uint32_t sy = static_cast<std::uint32_t>(dy) % layout_h;
     for (int dx = dx0; dx < dx1; ++dx) {
-      const std::uint32_t sx = static_cast<std::uint32_t>(dx) % layout_w;
-      const unsigned sample = alpha_at(sx, sy);
-      if (sample != 0) {
-        fill_pixels(px + dx, py + dy, px + dx + 1, py + dy + 1, static_cast<std::uint8_t>(sample));
-      }
+      paint(px + dx, py + dy, static_cast<std::uint32_t>(dx) % layout_w, sy);
     }
   }
   return true;
@@ -663,6 +685,9 @@ bool EveRaster::exec(std::uint32_t word) {
       return true;
     case op::kBitmapSource:
       h.source = word & 0x3FFFFFu;
+      return true;
+    case op::kPaletteSource:
+      palette_source_ = word & 0x3FFFFFu;
       return true;
     case op::kClearColorRgb:
       ctx_.clear_r = static_cast<std::uint8_t>(word >> 16);

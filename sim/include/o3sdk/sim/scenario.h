@@ -11,6 +11,7 @@
 //   paddown <n> / padup <n>
 //   turn <detents>            the encoder (+ clockwise)
 //   snap <name>               <out>/<name>.png: the screen above the pads
+//   boot <name>               the boot screen (the logo of this image, ui/boot_logo.h) as the first frame, to <out>/<name>.png
 //   record on|off             keep the rendered audio
 //   wav <name>                <out>/<name>.wav: what has been recorded so far
 //

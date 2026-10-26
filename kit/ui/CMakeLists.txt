@@ -40,11 +40,13 @@ o3sdk_library(ui
           src/boot_screen.cpp src/boot_logo_data.cpp
   DEPENDS eve)
 
-# OS-003f, the boot logo: assets/boot_logo.png is the project's logo.png byte for byte; tools/logo_convert.py turns it into
-# src/boot_logo_data.cpp, which IS committed (unlike the font and icon data above, which are generated into the build tree): the
-# converter takes seconds and the picture changes about never, so a build does not run it. The ctest `logo_convert_fresh` (host
-# tree) regenerates it in memory and fails when the committed file differs; regenerate with
-#   python3 -I tools/logo_convert.py --png ui/assets/boot_logo.png --out ui/src/boot_logo_data.cpp
+# OS-003f, the boot logo: logo/o3.png (at the root of o3-sdk, the maintainer's O3 logo: the one source, no copy) is the kit's default;
+# tools/logo_convert.py turns it into src/boot_logo_data.cpp, which IS committed (unlike the font and icon data above, which are
+# generated into the build tree): the converter takes seconds and the picture changes about never, so a build does not run it. Its
+# boot_logo() is WEAK (--weak): an app that gives its own picture, o3sdk_app(... LOGO <png>), links a generated file with the strong
+# definition and the default drops out. The ctest `logo_convert_fresh` (host tree) regenerates the default in memory and fails when
+# the committed file differs; regenerate with
+#   python3 -I tools/logo_convert.py --png logo/o3.png --weak --out kit/ui/src/boot_logo_data.cpp
 
 # ---- ui::plot (OS-003d): part of ui, sources and headers under plot/ (ADR 0010 amendment 2) ----
 # Peak-cache mipmap, wave view (vector and bitmap), curves, XY scope, spectrum, meters, the RAM_G map. They draw through
@@ -76,13 +78,13 @@ if(O3SDK_PLATFORM STREQUAL "host" AND O3SDK_BUILD_TESTS)
             --spleen-dir "${_spleen_dir}" --terminus-dir "${_terminus_dir}")
   add_test(NAME icon_convert_selftest
     COMMAND ${Python3_EXECUTABLE} -I "${PROJECT_SOURCE_DIR}/tools/icon_convert.py" --self-test)
-  # OS-003f: the logo converter (PNG decoder on every filter and colour type, grid detection, quantisation, the output) and the
-  # staleness check of the committed boot_logo_data.cpp against assets/boot_logo.png.
+  # OS-003f: the logo converter (PNG decoder on every filter and colour type, grid detection, quantisation, the palette, the output) and
+  # the staleness check of the committed boot_logo_data.cpp against logo/o3.png.
   add_test(NAME logo_convert_selftest
     COMMAND ${Python3_EXECUTABLE} -I "${PROJECT_SOURCE_DIR}/tools/logo_convert.py" --self-test)
   add_test(NAME logo_convert_fresh
     COMMAND ${Python3_EXECUTABLE} -I "${PROJECT_SOURCE_DIR}/tools/logo_convert.py"
-            --png "${CMAKE_CURRENT_SOURCE_DIR}/assets/boot_logo.png" --check "${CMAKE_CURRENT_SOURCE_DIR}/src/boot_logo_data.cpp")
+            --png "${PROJECT_SOURCE_DIR}/logo/o3.png" --weak --check "${CMAKE_CURRENT_SOURCE_DIR}/src/boot_logo_data.cpp")
   set_tests_properties(logo_convert_selftest logo_convert_fresh PROPERTIES TIMEOUT 120)
 endif()
 

@@ -223,7 +223,7 @@ single-writer protocol, stated at the declaration (`AGENTS.md`, "Rules").
 
 ## 8. A scenario and tests
 
-- **Scenario** (`app/scenarios/*.txt`, commands in `sim/README.md`): `wait`, `press`, `release`, `tap`, `pad`, `paddown`, `padup`, `turn`, `snap`,
+- **Scenario** (`app/scenarios/*.txt`, commands in `sim/README.md`): `wait`, `press`, `release`, `tap`, `pad`, `paddown`, `padup`, `turn`, `snap`, `boot`,
   `record`, `wav`. It is the evidence for a screen or a sound change: run it, open the PNGs, listen to or measure the WAV. `tests/app_test.cpp`
   runs every scenario in the directory and fails when a command is wrong or a frame does not fit, so a new scenario is a regression test for free.
 - **Tests** are doctest (`tests/*_test.cpp`, globbed: rerun the configure after adding one; one executable, one ctest per file;
@@ -266,9 +266,25 @@ arm-none-eabi-nm build-mk66/app/<id>.elf | grep ' __aeabi_d'          # must pri
 arm-none-eabi-size -A build-mk66/app/<id>.elf
 ```
 
-The template's image is about 149 KB of flash (14 % of 1 MiB), 78 KB of SRAM_U (39 % of 192 KiB, the kit's console and audio buffers included)
+The template's image is about 180 KB of flash (17 % of 1 MiB; 36 KB of it is the default boot logo), 78 KB of SRAM_U (39 % of 192 KiB, the kit's console and audio buffers included)
 and 64 KB of SDRAM. The image carries the build identity of both trees (`strings build-mk66/app/<id>.bin | grep o3sdk`): `<app git id> / o3sdk
 <kit git id>`, `unknown` without a commit and `-dirty` with changed tracked files. **Commit before an image you will install**, so that it can be traced.
+
+### The boot logo
+
+Without anything the image shows the kit's O3 logo at boot. To show the app's own, put a PNG in the repository and name it in `app/CMakeLists.txt`
+(the template has the line, commented out):
+
+```cmake
+o3sdk_app(<id> SOURCES ... DEPENDS ...
+  LOGO ../logo/logo.png          # a path from this directory; the build converts it (tools/logo_convert.py) and links it instead of the default
+  LOGO_COLOR 0xFF8000)           # optional: a grey logo drawn in this colour (default white); a picture with colour keeps its own colours
+```
+
+Any 8-bit gray, RGB or RGBA PNG on black (alpha is composited on black), up to 800 x 420 px once shown and 64 KiB of bitmap and palette: the converter
+picks the native size, the integer scale and the format (L1, L2, L4, or a 256-colour palette for a picture with colour) and the build stops with its message
+when nothing fits. Look at the choice before you build: `python3 -I ../o3-sdk/tools/logo_convert.py --png logo/logo.png --report --preview /tmp/logo.png`,
+and in the simulator `boot 01_boot` in a scenario (the first frame of the unit; `sim/README.md`). Details: `docs/FRAMEWORK.md`, "The boot logo".
 
 ## 10. The gate
 

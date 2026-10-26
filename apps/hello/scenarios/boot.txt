@@ -1,0 +1,4 @@
+# HELLO's boot screen: the kit's default logo (the O3 halftone of logo/o3.png, L1 at its own size), the app's name and the build line,
+# centred on black: the first frame of a unit. The runtime's next frame replaces it.
+wait 50
+boot 01_boot

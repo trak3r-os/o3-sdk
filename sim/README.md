@@ -47,6 +47,7 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 | `paddown <n>` / `padup <n>` | |
 | `turn <detents>` | the encoder, + clockwise |
 | `snap <name>` | `<out>/<name>.png` |
+| `boot <name>` | the boot screen of this image (its logo: the kit's O3, or the app's own `LOGO`) as the first frame, `<out>/<name>.png`; the runtime's next frame replaces it |
 | `record on\|off` | keep the rendered audio |
 | `wav <name>` | `<out>/<name>.wav`, what has been recorded so far |
 

@@ -66,6 +66,7 @@ inline constexpr std::uint32_t kClear = 0x26;          // §4.21 p.118
 inline constexpr std::uint32_t kVertexFormat = 0x27;   // §4.49 p.147
 inline constexpr std::uint32_t kBitmapLayoutH = 0x28;  // §4.8  p.103
 inline constexpr std::uint32_t kBitmapSizeH = 0x29;    // §4.10 p.105
+inline constexpr std::uint32_t kPaletteSource = 0x2A;  // FT81x PALETTE_SOURCE: the palette of the paletted formats
 inline constexpr std::uint32_t kVertexTranslateX = 0x2B;  // §4.50 p.148
 inline constexpr std::uint32_t kVertexTranslateY = 0x2C;  // §4.51 p.149
 // VERTEX2F and VERTEX2II are told apart by the two top bits [31:30], not by a full opcode byte.
@@ -88,6 +89,7 @@ enum class BitmapFormat : std::uint32_t {  // §4.7 Table 7, p.97
   L4 = 2,
   L8 = 3,
   L2 = 17,  // two bits a pixel, the first pixel in bits 7-6 (Figure 6, p.100)
+  Paletted565 = 14,  // FT81x: an 8-bit index a pixel into a 256-entry RGB565 palette at PALETTE_SOURCE (opaque), one pass
 };
 enum class Filter : std::uint32_t {  // §4.9, pp.103-104
   Nearest = 0,
@@ -251,6 +253,13 @@ constexpr std::uint32_t bitmap_size(Filter filter, Wrap wrap_x, Wrap wrap_y, std
 // the drawn width and height, already separated (see bitmap_layout_h).
 constexpr std::uint32_t bitmap_size_h(std::uint32_t width_high, std::uint32_t height_high) noexcept {
   return detail::op(opcode::kBitmapSizeH) | detail::field(width_high, 3, 2) | detail::field(height_high, 1, 0);
+}
+
+// PALETTE_SOURCE (FT81x). [31:24]=0x2A, addr [21:0]: the RAM_G address of the palette the PALETTED565, PALETTED4444 and PALETTED8
+// bitmaps look their 8-bit index up in (PALETTED565: 256 entries of 2 bytes, RGB565, little endian, so 512 bytes). [A] The address
+// is a multiple of 4 here (the palette follows the index bitmap, which is padded to a word).
+constexpr std::uint32_t palette_source(std::uint32_t addr) noexcept {
+  return detail::op(opcode::kPaletteSource) | detail::field(addr, 21, 0);
 }
 
 // §4.12 BITMAP_TRANSFORM_A, p.108, §4.13 B (p.109), §4.15 D (p.111) and §4.16 E (p.112). [31:24]=0x15 / 0x16 / 0x18 / 0x19,

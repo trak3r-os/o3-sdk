@@ -8,6 +8,9 @@
 #include <o3sdk/ui/style.h>
 #include <o3sdk/ui/theme.h>
 
+#include <o3sdk/ui/boot_logo.h>
+#include <o3sdk/ui/plot/ram_g_map.h>
+
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -137,8 +140,9 @@ TEST_CASE("boot screen: in o3sdk's own tree the line is what it always was, \"<n
       const int name_w = r.text_width(name, ui::Face::Micro);
       const int x = (ui::kScreenW - name_w - r.text_width(rest, ui::Face::Micro)) / 2;
       CHECK(x == 325);  // (800 - 6 * (5 + 2 + 5 + 1 + 12)) / 2
-      r.text(x, ui::kBootTextY, name, ui::Color::Text, ui::Face::Micro);
-      r.text(x + name_w, ui::kBootTextY, rest, ui::Color::TextDim, ui::Face::Micro);
+      const int text_y = ui::boot_layout(ui::boot_logo()).text_y;
+      r.text(x, text_y, name, ui::Color::Text, ui::Face::Micro);
+      r.text(x + name_w, text_y, rest, ui::Color::TextDim, ui::Face::Micro);
     });
     REQUIRE(ref.complete);
     CHECK(boot_frame(translate, "HELLO", "o3sdk d8c4ede2c609").frame == ref.frame);
@@ -164,4 +168,180 @@ TEST_CASE("boot screen: show_boot_screen commits the frame") {
   sink.set_busy(true);
   CHECK_FALSE(ui::show_boot_screen(sink, "O3-303", "x"));  // a busy display takes nothing; the caller tries again
   CHECK(sink.frames() == 1);
+}
+
+// ---- The logo is data: any valid logo draws, and the list bound holds for the default and for the largest one -------------------------
+
+namespace {
+
+namespace op = eve::opcode;
+
+// The words of the logo's own raw section (from binding its bitmap handle to END), whose opcode is `opcode` (the top byte), in order: the
+// renderer's begin() binds its own bitmaps before, and the line's glyphs draw after.
+Words with_opcode(const Words& frame, std::uint32_t opcode) {
+  Words found;
+  bool inside = false;
+  for (const std::uint32_t w : frame) {
+    if (w == eve::dl::bitmap_handle(ui::plot::kHandleBootLogo)) {
+      inside = true;
+    }
+    if (inside && (w >> 24) == opcode) {
+      found.push_back(w);
+    }
+    if (inside && w == eve::dl::end()) {
+      break;
+    }
+  }
+  return found;
+}
+
+// Backing store of the made-up logos: only the address matters to the draw code, and boot_logo_valid() wants a non-null one.
+alignas(4) const std::uint8_t kBlob[4] = {0, 0, 0, 0};
+
+ui::BootLogo made(unsigned w, unsigned h, unsigned scale, eve::BitmapFormat format, std::uint32_t color = ui::kBootLogoWhite) {
+  ui::BootLogo l{};
+  l.bytes = kBlob;
+  l.width = static_cast<std::uint16_t>(w);
+  l.height = static_cast<std::uint16_t>(h);
+  l.scale = static_cast<std::uint8_t>(scale);
+  l.format = format;
+  l.color = color;
+  const unsigned bits = ui::boot_logo_bits(format);
+  l.stride = static_cast<std::uint16_t>((w * bits + 7) / 8);
+  const std::uint32_t bitmap = (static_cast<std::uint32_t>(l.stride) * h + 3) / 4 * 4;
+  const bool paletted = format == eve::BitmapFormat::Paletted565;
+  l.palette_offset = paletted ? bitmap : 0;
+  l.size = bitmap + (paletted ? ui::kBootLogoPaletteBytes : 0);
+  return l;
+}
+
+Drawn logo_frame(bool translate, const ui::BootLogo& logo, const std::string& name, const std::string& build) {
+  return drawn(translate, ui::kBootScreenMaxWords, [&](ui::Renderer& r) { ui::draw_boot_screen(r, logo, name.c_str(), build.c_str()); });
+}
+
+}  // namespace
+
+TEST_CASE("boot logo: the kit's default is O3 (logo/o3.png), a valid L1 logo of the finest native size within the limits") {
+  const ui::BootLogo d = ui::boot_logo();
+  CHECK(ui::boot_logo_valid(d));
+  CHECK(d.format == eve::BitmapFormat::L1);
+  CHECK(d.scale == 1);  // the bitmap is shown at its own size: round dots, no block edges
+  CHECK(d.width == 684);
+  CHECK(d.height == 420);
+  CHECK(d.size == 36120);  // flash and RAM_G: under the 64 KiB a logo may be
+  CHECK(d.palette_offset == 0);
+  CHECK(d.color == ui::kBootLogoWhite);
+  CHECK(d.size <= ui::kBootLogoMaxBytes);
+  CHECK(reinterpret_cast<std::uintptr_t>(d.bytes) % 4 == 0);
+}
+
+TEST_CASE("boot logo: boot_logo_valid holds the limits") {
+  using eve::BitmapFormat;
+  CHECK(ui::boot_logo_valid(made(124, 124, 3, BitmapFormat::L4)));
+  CHECK(ui::boot_logo_valid(made(800, 420, 1, BitmapFormat::L1)));  // the largest drawn size
+  CHECK_FALSE(ui::boot_logo_valid(made(801, 420, 1, BitmapFormat::L1)));
+  CHECK_FALSE(ui::boot_logo_valid(made(800, 421, 1, BitmapFormat::L1)));
+  CHECK_FALSE(ui::boot_logo_valid(made(401, 210, 2, BitmapFormat::L1)));  // the drawn size is native x scale
+  CHECK_FALSE(ui::boot_logo_valid(made(10, 10, 0, BitmapFormat::L1)));
+  CHECK_FALSE(ui::boot_logo_valid(made(10, 10, 17, BitmapFormat::L1)));
+  CHECK_FALSE(ui::boot_logo_valid(made(10, 10, 1, BitmapFormat::L8)));  // not a logo format
+  // The byte limit: 800 x 80 at L4 is 32 KB; 800 x 163 L4 is 65,200 (fits), 800 x 164 is 65,600 (does not); the drawn height is 420 at most.
+  CHECK(ui::boot_logo_valid(made(800, 163, 1, BitmapFormat::L4)));
+  CHECK_FALSE(ui::boot_logo_valid(made(800, 164, 1, BitmapFormat::L4)));
+  // A colour logo counts its palette inside the limit: 250 x 260 is 65,000 bytes + 512 = 65,512 (fits); 250 x 261 is 65,252 + 512, over.
+  CHECK(ui::boot_logo_valid(made(250, 260, 1, BitmapFormat::Paletted565)));
+  CHECK_FALSE(ui::boot_logo_valid(made(250, 261, 1, BitmapFormat::Paletted565)));
+  // A palette that is not where the bitmap ends, or a size that is not the sum, is not consistent.
+  ui::BootLogo bad = made(100, 100, 1, BitmapFormat::Paletted565);
+  bad.palette_offset += 4;
+  CHECK_FALSE(ui::boot_logo_valid(bad));
+  bad = made(100, 100, 1, BitmapFormat::L1);
+  bad.size += 4;
+  CHECK_FALSE(ui::boot_logo_valid(bad));
+  bad = made(100, 100, 1, BitmapFormat::L1);
+  bad.stride += 1;
+  CHECK_FALSE(ui::boot_logo_valid(bad));
+}
+
+TEST_CASE("boot logo: the RAM_G region holds the largest logo and the map stays valid") {
+  CHECK(ui::plot::kRamGBootLogoBytes >= ui::kBootLogoMaxBytes);
+  CHECK(ui::plot::kRamGBootLogoBytes % 4096 == 0);
+  CHECK(ui::plot::kRamGShot >= ui::plot::kRamGBootLogo + ui::kBootLogoMaxBytes);
+  CHECK(ui::plot::kRamGShot + ui::plot::kRamGShotBytes == ui::plot::kRamGApp);
+  CHECK(ui::plot::ram_g_regions_ok(ui::plot::kRamGRegions, ui::plot::kRamGRegionCount));
+}
+
+TEST_CASE("boot logo: the layout centres the logo whatever its size, and the line fits under the largest") {
+  const ui::BootLayout dflt = ui::boot_layout(ui::boot_logo());
+  CHECK(dflt.w == 684);
+  CHECK(dflt.h == 420);
+  CHECK(dflt.x == 58);  // (800 - 684) / 2
+  CHECK(dflt.y == 30);  // (480 - 420) / 2
+  CHECK(dflt.text_y == 30 + 420 + ui::kBootTextGap);
+  const ui::BootLayout small = ui::boot_layout(made(124, 124, 3, eve::BitmapFormat::L4));
+  CHECK(small.w == 372);
+  CHECK(small.h == 372);
+  CHECK(small.x == 214);
+  CHECK(small.y == 54);
+  const ui::BootLayout largest = ui::boot_layout(made(800, 420, 1, eve::BitmapFormat::L1));
+  CHECK(largest.x == 0);
+  CHECK(largest.text_y + ui::kBootTextH <= ui::kScreenH);
+}
+
+TEST_CASE("boot logo: the default is drawn from its own data (size, format, stride; no transform at scale 1; BITMAP_SIZE_H past 511)") {
+  using eve::BitmapFormat;
+  for (const bool translate : {true, false}) {
+    const Drawn d = boot_frame(translate, "HELLO", "o3sdk d8c4ede2c609");
+    REQUIRE(d.complete);
+    CHECK(with_opcode(d.frame, op::kBitmapLayout) == Words{eve::dl::bitmap_layout(BitmapFormat::L1, 86, 420)});
+    CHECK(with_opcode(d.frame, op::kBitmapSize) == Words{eve::dl::bitmap_size(eve::Filter::Nearest, eve::Wrap::Border, eve::Wrap::Border, 684, 420)});
+    CHECK(with_opcode(d.frame, op::kBitmapSizeH) == Words{eve::dl::bitmap_size_h(1, 0)});  // 684 = 512 + 172
+    CHECK(with_opcode(d.frame, op::kBitmapSource) == Words{eve::dl::bitmap_source(ui::plot::kRamGBootLogo)});
+    CHECK(with_opcode(d.frame, op::kBitmapTransformA).empty());
+    CHECK(with_opcode(d.frame, op::kBitmapTransformE).empty());
+    CHECK(with_opcode(d.frame, op::kPaletteSource).empty());
+    CHECK(with_opcode(d.frame, op::kColorRgb).front() == eve::dl::color_rgb(255, 255, 255));
+  }
+}
+
+TEST_CASE("boot logo: a grey logo at scale 3 is transformed by 85 / 256 and tinted; a small one needs no BITMAP_SIZE_H") {
+  const ui::BootLogo tinted = made(124, 124, 3, eve::BitmapFormat::L4, 0xFF8000);
+  REQUIRE(ui::boot_logo_valid(tinted));
+  const Drawn d = logo_frame(true, tinted, "HELLO", "x");
+  REQUIRE(d.complete);
+  CHECK(with_opcode(d.frame, op::kBitmapTransformA) == Words{eve::dl::bitmap_transform_a(85)});
+  CHECK(with_opcode(d.frame, op::kBitmapTransformE) == Words{eve::dl::bitmap_transform_e(85)});
+  CHECK(with_opcode(d.frame, op::kBitmapSize) == Words{eve::dl::bitmap_size(eve::Filter::Nearest, eve::Wrap::Border, eve::Wrap::Border, 372, 372)});
+  CHECK(with_opcode(d.frame, op::kBitmapSizeH).empty());
+  CHECK(with_opcode(d.frame, op::kColorRgb).front() == eve::dl::color_rgb(0xFF, 0x80, 0x00));
+}
+
+TEST_CASE("boot logo: a colour logo is drawn through its palette, in white (unmodulated), in one pass") {
+  const ui::BootLogo c = made(300, 100, 2, eve::BitmapFormat::Paletted565);
+  REQUIRE(ui::boot_logo_valid(c));
+  REQUIRE(c.palette_offset == 30000);
+  const Drawn d = logo_frame(true, c, "HELLO", "x");
+  REQUIRE(d.complete);
+  CHECK(with_opcode(d.frame, op::kPaletteSource) == Words{eve::dl::palette_source(ui::plot::kRamGBootLogo + 30000)});
+  CHECK(with_opcode(d.frame, op::kColorRgb).front() == eve::dl::color_rgb(255, 255, 255));
+  CHECK(with_opcode(d.frame, op::kBitmapSizeH) == Words{eve::dl::bitmap_size_h(1, 0)});  // 600 px drawn
+  CHECK(with_opcode(d.frame, op::kBegin).size() >= 1);
+}
+
+TEST_CASE("boot logo: the frame fits kBootScreenMaxWords for the default and for the logo that needs the most words, in both modes") {
+  // The most words a valid logo costs: a colour one (PALETTE_SOURCE), transformed (two words), with BITMAP_SIZE_H (drawn 512 or more).
+  const ui::BootLogo most = made(300, 100, 2, eve::BitmapFormat::Paletted565);
+  REQUIRE(ui::boot_logo_valid(most));
+  const std::string name(16, 'W');
+  const std::string build(ui::kBootBuildChars, 'W');  // and the longest line: every glyph a word
+  for (const bool translate : {true, false}) {
+    CAPTURE(translate);
+    const Drawn def = boot_frame(translate, name, build);
+    const Drawn big = logo_frame(translate, most, name, build);
+    REQUIRE(def.complete);
+    REQUIRE(big.complete);
+    CHECK(def.frame.size() + 16 <= ui::kBootScreenMaxWords);
+    CHECK(big.frame.size() + 16 <= ui::kBootScreenMaxWords);
+    CHECK(big.frame.size() == def.frame.size() + 3);  // the transform's two words and the palette's one; both have BITMAP_SIZE_H
+  }
 }

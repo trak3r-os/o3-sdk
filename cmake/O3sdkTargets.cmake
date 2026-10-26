@@ -89,17 +89,50 @@ function(o3sdk_unit name)
   endif()
 endfunction()
 
-# o3sdk_app(<name> SOURCES <src>... [DEPENDS <lib>...])
+# o3sdk_app(<name> SOURCES <src>... [DEPENDS <lib>...] [LOGO <png> [LOGO_COLOR 0xRRGGBB]])
 #
-# An app: one firmware image (docs/FRAMEWORK.md, "Apps"). Its sources define `o3sdk::app::App& o3sdk_app() noexcept`. Builds:
+# An app: one firmware image (docs/FRAMEWORK.md, "Apps"). Its sources define `o3sdk::app::App& o3sdk_app() noexcept`.
+# LOGO: the boot logo of this app's image (docs/FRAMEWORK.md, "The boot logo"). <png> (a path relative to the calling directory, or
+# absolute) is converted by tools/logo_convert.py into the app's build directory at build time and its bitmap is linked in place of the kit's
+# default (the O3 logo); without LOGO the app has the default. A grey picture is drawn white, or in LOGO_COLOR; a picture with colour in
+# its own colours (a 256-colour palette). A logo that does not fit (ui/boot_logo.h: 800 x 420 drawn, 64 KiB of bitmap and palette) fails
+# the build with the converter's message. Builds:
 #   * the library `app_<name>` (the app and its devices), on every platform;
 #   * host: the executable `<name>_sim`, the headless simulator running this app (sim/README.md);
 #   * mk66: the firmware image `<name>.elf` and, behind the static checks, `<name>.hex`, `<name>.bin` and `<name>.ptf`, with their
 #     ctests (o3sdk_mk66_image, platform/mk66/CMakeLists.txt; platform/mk66/README.md).
 function(o3sdk_app name)
-  cmake_parse_arguments(ARG "" "" "SOURCES;DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "LOGO;LOGO_COLOR" "SOURCES;DEPENDS" ${ARGN})
+  if(ARG_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "o3sdk_app(${name}): unknown argument(s) '${ARG_UNPARSED_ARGUMENTS}' (SOURCES, DEPENDS, LOGO, LOGO_COLOR)")
+  endif()
   set(target app_${name})
   add_library(${target} STATIC ${ARG_SOURCES})
+  if(ARG_LOGO_COLOR AND NOT ARG_LOGO)
+    message(FATAL_ERROR "o3sdk_app(${name}): LOGO_COLOR needs LOGO")
+  endif()
+  if(ARG_LOGO)
+    get_filename_component(logo_png "${ARG_LOGO}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(NOT EXISTS "${logo_png}")
+      message(FATAL_ERROR "o3sdk_app(${name}): LOGO '${ARG_LOGO}' does not exist (${logo_png})")
+    endif()
+    set(logo_tint "")
+    if(ARG_LOGO_COLOR)
+      if(NOT ARG_LOGO_COLOR MATCHES "^0[xX][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f][0-9A-Fa-f]$")
+        message(FATAL_ERROR "o3sdk_app(${name}): LOGO_COLOR '${ARG_LOGO_COLOR}' is not 0xRRGGBB")
+      endif()
+      set(logo_tint --tint ${ARG_LOGO_COLOR})
+    endif()
+    # The generated file defines boot_logo() strongly; the kit's default is weak, so the linker takes this one (ui/boot_logo.h).
+    set(logo_cpp "${CMAKE_CURRENT_BINARY_DIR}/${name}_boot_logo.cpp")
+    add_custom_command(
+      OUTPUT "${logo_cpp}"
+      COMMAND ${O3SDK_PYTHON} -I "${O3SDK_ROOT}/tools/logo_convert.py" --png "${logo_png}" --out "${logo_cpp}" ${logo_tint}
+      DEPENDS "${logo_png}" "${O3SDK_ROOT}/tools/logo_convert.py"
+      COMMENT "Converting the boot logo of ${name}: ${ARG_LOGO}"
+      VERBATIM)
+    target_sources(${target} PRIVATE "${logo_cpp}")
+  endif()
   set_target_properties(${target} PROPERTIES OUTPUT_NAME o3sdk_${target})
   target_link_libraries(${target} PUBLIC app ${ARG_DEPENDS})
   o3sdk_strict_warnings(${target})

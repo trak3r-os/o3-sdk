@@ -264,6 +264,12 @@ TEST_CASE("dl: BITMAP_TRANSFORM_C and F are signed 24-bit 15.8 offsets in [23:0]
   CHECK(o3sdk::eve::opcode::kBitmapTransformF == 0x1Au);
 }
 
+TEST_CASE("dl: PALETTE_SOURCE 0x2A, a 22-bit address; PALETTED565 is format 14") {
+  CHECK_WORD(dl::palette_source(0x6F000), 0x2A06F000);
+  CHECK_WORD(dl::palette_source(0xFFFFFFFFu), 0x2A3FFFFF);
+  CHECK_WORD(dl::bitmap_layout(BitmapFormat::Paletted565, 86, 5), 0x07000000 | (14u << 19) | (86u << 9) | 5u);
+}
+
 TEST_CASE("dl: BITMAP_SIZE_H width [3:2], height [1:0]") {
   CHECK_WORD(dl::bitmap_size_h(1, 0), 0x29000004);  // §4.10 p.105; guide example (an 800-pixel width)
   CHECK_WORD(dl::bitmap_size_h(0, 1), 0x29000001);
@@ -312,6 +318,7 @@ TEST_CASE("dl: opcodes stay in the top byte whatever the arguments") {
       {dl::bitmap_size(static_cast<Filter>(kAll), static_cast<Wrap>(kAll), static_cast<Wrap>(kAll), kAll, kAll),
        o3sdk::eve::opcode::kBitmapSize},
       {dl::bitmap_size_h(kAll, kAll), o3sdk::eve::opcode::kBitmapSizeH},
+      {dl::palette_source(kAll), o3sdk::eve::opcode::kPaletteSource},
       {dl::cell(kAll), o3sdk::eve::opcode::kCell},
   };
   for (const Row& row : rows) {
@@ -339,6 +346,7 @@ TEST_CASE("dl: reserved bits stay zero (§4.2 p.90)") {
   CHECK_WORD(dl::vertex_format(kAll) & ~0x27000007u, 0);
   CHECK_WORD(dl::bitmap_layout_h(kAll, kAll) & ~0x2800000Fu, 0);
   CHECK_WORD(dl::bitmap_size_h(kAll, kAll) & ~0x2900000Fu, 0);
+  CHECK_WORD(dl::palette_source(kAll) & ~0x2A3FFFFFu, 0);  // the address is 22 bits
   CHECK_WORD(dl::scissor_xy(kAll, kAll) & ~0x1B3FFFFFu, 0);       // bits 23:22 are reserved
   CHECK_WORD(dl::bitmap_layout(static_cast<BitmapFormat>(kAll), kAll, kAll) & ~0x07FFFFFFu, 0);
   CHECK_WORD(dl::bitmap_size(static_cast<Filter>(kAll), static_cast<Wrap>(kAll), static_cast<Wrap>(kAll), kAll, kAll) &

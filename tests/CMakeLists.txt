@@ -20,4 +20,5 @@ foreach(src IN LISTS test_sources)
   add_test(NAME ${name} COMMAND o3sdk_tests --source-file=*${name}.cpp)
 endforeach()
 add_subdirectory(sim_refusal)  # bad_setup_sim: the runner on an app whose setup was refused (exit 1 and a message)
+add_subdirectory(logo_apps)  # apps with their own boot logo (LOGO, LOGO_COLOR): a colour one and a tinted grey one
 add_subdirectory(usb)  # o3sdk_usb_tests: the USB library's suite, ported from track3r-os

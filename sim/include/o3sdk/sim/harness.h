@@ -74,6 +74,10 @@ class Harness {
   std::vector<std::uint8_t> panel_image(int& width, int& height) const;
   bool snapshot(const std::string& path) const;
 
+  // Draws the boot frame (ui::show_boot_screen: the logo, this app's name and the line "o3sdk simulator") as the unit's first frame is.
+  // The next frame the runtime draws replaces it. false: the display took no frame.
+  bool show_boot_screen();
+
   // Audio capture: while on, every rendered block is kept (interleaved L, R int16).
   void record(bool on) { recording_ = on; }
   const std::vector<std::int16_t>& audio() const { return audio_; }

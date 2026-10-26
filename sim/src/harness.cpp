@@ -4,6 +4,7 @@
 #include <o3sdk/core/audio_clock.h>
 #include <o3sdk/hal/audio.h>
 #include <o3sdk/platform/host/png.h>
+#include <o3sdk/ui/boot_screen.h>
 
 #include <cstdio>
 
@@ -175,6 +176,8 @@ std::vector<std::uint8_t> Harness::panel_image(int& width, int& height) const {
   }
   return px;
 }
+
+bool Harness::show_boot_screen() { return ui::show_boot_screen(*display_, app_.info().name, "o3sdk simulator"); }
 
 bool Harness::snapshot(const std::string& path) const {
   int w = 0;

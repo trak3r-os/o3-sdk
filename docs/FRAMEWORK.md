@@ -325,11 +325,26 @@ add_subdirectory(tests)                             # o3sdk_app_test_suite(myapp
 - **The helpers** (`cmake/O3sdkTargets.cmake`) run in the caller's directory, so sources and `include/` are the project's own:
   `o3sdk_unit`, `o3sdk_library`, `o3sdk_app` (the library `app_<name>`; on the host the simulator `<name>_sim` in the app's binary
   directory; on mk66 `<name>.elf`, `.hex`, `.bin`, `.ptf` there too, and the ctests `<name>_image`, `<name>_flashconfig`,
-  `<name>_ramfunc` and, for an image with the console, `<name>_usb`), `o3sdk_test_suite` (doctest: one executable, one ctest per
+  `<name>_ramfunc` and, for an image with the console, `<name>_usb`; `LOGO`, below), `o3sdk_test_suite` (doctest: one executable, one ctest per
   `*_test.cpp`; a test that names `o3sdk_app()` links the app library whole, `DEPENDS "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<name>>"`) and
   `o3sdk_app_test_suite(<name> SOURCES ... [DEPENDS ...])`, the same with an app's wiring done: the executable `<name>_tests` linked with
   `app`, `sim`, `platform_host`, the DEPENDS and the app library whole, and `../app/scenarios` as the macro `APP_SCENARIO_DIR`
   (`SCENARIO_DIR`, `SCENARIO_DEFINE` and `EXE` change that). The explicit `o3sdk_test_suite` form keeps working.
+- **The boot logo** (`LOGO <png> [LOGO_COLOR 0xRRGGBB]` in `o3sdk_app`; OS-003f): the first frame the display shows is the logo centred on black with
+  the app's name and build line under it (`ui/boot_screen.h`). The kit's default is the O3 logo (`logo/o3.png`, a halftone: 684 x 420, one bit a pixel
+  at its own size, 36,120 bytes of flash). An app gives its own: the build runs `tools/logo_convert.py` on the PNG (a path from the app's directory)
+  into the app's build directory and links that bitmap instead; without `LOGO` the app has the default. The converter chooses the native size, the scale
+  and the format: the finest native size whose bitmap, padding and palette fit `kBootLogoMaxBytes` (64 KiB, `ui/boot_logo.h`: the RAM_G region of the map
+  and the most flash a logo costs), shown at most 800 x 420 px, at an integer scale (1 up to 16); a nearly black-and-white picture (a halftone, line art)
+  is **L1**, any other grey picture **L2 or L4**, and a picture with colour (any pixel with chroma over 32) **PALETTED565**: an 8-bit index a pixel and a
+  palette of at most 256 colours (index 0 black, median cut, no dithering) after it in the same blob, drawn in one pass with `PALETTE_SOURCE`, which costs
+  512 bytes more and one more display-list word. A grey logo is drawn white, or in `LOGO_COLOR` (`COLOR_RGB`; refused for a picture with colour). A
+  picture over a limit fails the build with the converter's message, and so does a header that disagrees with the tool. The draw code reads width, height,
+  format, stride, scale, palette and tint from the linked data (`ui::BootLogo`, `boot_logo()`): the generated file defines `boot_logo()` strongly and the kit's
+  default is weak, so there is one definition in an image and no duplicate symbol. `python3 -I tools/logo_convert.py --png <png> --report --preview <out.png>`
+  says what it chose and writes the native bitmap at the size it is shown; the simulator's `boot <name>` command draws the boot frame (`sim/README.md`).
+  Hardware facts a unit still has to show: the 565 palette's channel widening, that `COLOR_RGB` white leaves a palette untouched, and the block edges of a
+  scale that is not a power of two.
 - **Where o3sdk is**: `-DO3SDK_DIR=<path>` or the environment variable `O3SDK_DIR` (the template reads it; `tools/ci.sh` too), default the
   sibling `../o3-sdk`. A cache entry keeps the value of the first configure.
 - **A path inside o3sdk** is `O3SDK_ROOT` (set by the platform file), never `PROJECT_SOURCE_DIR`, which belongs to the project that

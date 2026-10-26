@@ -152,6 +152,7 @@ class EveRaster {
 
   // Interpreter state, reset at the start of every frame except `handles_` and RAM_G.
   Context ctx_;
+  std::uint32_t palette_source_ = 0;  // PALETTE_SOURCE: where the PALETTED565 palette is in RAM_G (reset per frame)
   Context stack_[4];
   unsigned depth_ = 0;
   Prim prim_ = Prim::None;
