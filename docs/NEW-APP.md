@@ -210,11 +210,15 @@ single-writer protocol, stated at the declaration (`AGENTS.md`, "Rules").
   `record`, `wav`. It is the evidence for a screen or a sound change: run it, open the PNGs, listen to or measure the WAV. `tests/app_test.cpp`
   runs every scenario in the directory and fails when a command is wrong or a frame does not fit, so a new scenario is a regression test for free.
 - **Tests** are doctest (`tests/*_test.cpp`, globbed: rerun the configure after adding one; one executable, one ctest per file;
-  `o3sdk_test_suite` in `tests/CMakeLists.txt`). Pure logic gets a test (maths, mappings, sequencer arithmetic); a unit is tested against the engine
+  `o3sdk_app_test_suite` in `tests/CMakeLists.txt`). Pure logic gets a test (maths, mappings, sequencer arithmetic); a unit is tested against the engine
   (`tests/voice_test.cpp`: attach, route, start, send notes and parameters, render blocks, look at the samples); the app is tested end to end
   with `sim::Harness` (`h.start()`, which is `false` when the app's `setup()` had a call the engine refused, with the reason on stderr;
-  `run_ms`, `pad_down`, `press`, `turn`, `audio()`, `leds()`, `runtime().state_line()`). A test that names
-  `o3sdk_app()` links the app library whole (`$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>`), as the template's CMake does. **`o3sdk_app()` returns one
+  `run_ms`, `pad_down`, `press`, `turn`, `audio()`, `leds()`, `runtime().state_line()`). **`tests/CMakeLists.txt` is one call**,
+  `o3sdk_app_test_suite(<id> SOURCES ${test_sources} DEPENDS <your units>)`: it builds the executable `<id>_tests`, links the kit, the
+  simulator, the host platform and the app library **whole** (that library defines `o3sdk_app()`, which only the test names), and defines
+  `APP_SCENARIO_DIR` as `app/scenarios` for the test that runs every scenario (`SCENARIO_DIR`, `SCENARIO_DEFINE` and `EXE` change those
+  defaults). The older explicit form, `o3sdk_test_suite(<exe> SOURCES ... DEPENDS app sim platform_host
+  "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>")` plus a `target_compile_definitions`, still works (o3-303 uses it). **`o3sdk_app()` returns one
   object**, so every `Harness` in a test run drives the same app: `setup()` runs again, and whatever your screens and hook keep in members must be reset
   there (the template's `PlayScreen::init` does), or one test case leaks into the next.
 - **Sanitizers** for buffer and DSP code, once: `cmake -S . -B build-host-asan -DO3SDK_SANITIZE=ON && cmake --build build-host-asan -j4 && ctest --test-dir build-host-asan`.
@@ -348,7 +352,7 @@ matter for an instrument today:
 |---|---|
 | `O3SDK_DIR='...' is not an o3-sdk checkout` | o3-sdk is not at `../o3-sdk`: `-DO3SDK_DIR=<path>` or `$O3SDK_DIR`; a cached value stays until you pass `-D` or use a fresh build directory |
 | `cmake/O3sdkPlatform.cmake must be included before project()` | the app's `CMakeLists.txt` includes it after `project()`: keep the template's order |
-| `undefined reference to o3sdk_app` in a test or an image | the app library is not linked whole: `$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>` (`o3sdk_app()` does it for the simulator and the image; a test does it itself) |
+| `undefined reference to o3sdk_app` in a test or an image | the app library is not linked whole: `$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>` (`o3sdk_app()` does it for the simulator and the image; `o3sdk_app_test_suite()` for the tests; a hand-written `o3sdk_test_suite` does it itself) |
 | the simulator exits 1 with `setup refused: ...`, or `REQUIRE(h->start())` fails | a call in `setup()` was refused (a slot or index out of range, a unit that was never attached or is the wrong kind, a full engine, a call after `start()`): fix the call; the line names it |
 | a unit header "file not found" in the app | the unit is not in the app's `DEPENDS`, or the include path of its `include/` has another prefix than the one you spell |
 | `only zero initializers are allowed in section` | an `O3SDK_BIG` object with an initialiser: it starts at zero, give it a value in a constructor |

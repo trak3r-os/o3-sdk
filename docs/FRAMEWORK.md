@@ -301,7 +301,7 @@ enable_testing()                                    # the project's own root, fo
 add_subdirectory(${O3SDK_DIR} o3sdk)
 add_subdirectory(units)                             # o3sdk_unit(...)
 add_subdirectory(app)                               # o3sdk_app(myapp SOURCES ... DEPENDS ...)
-add_subdirectory(tests)                             # o3sdk_test_suite(...), host only
+add_subdirectory(tests)                             # o3sdk_app_test_suite(myapp ...), host only
 ```
 
 - **The platform file** decides what has to be decided before `project()`: `-DO3SDK_PLATFORM=host|mk66`, the Arm toolchain file
@@ -314,8 +314,11 @@ add_subdirectory(tests)                             # o3sdk_test_suite(...), hos
 - **The helpers** (`cmake/O3sdkTargets.cmake`) run in the caller's directory, so sources and `include/` are the project's own:
   `o3sdk_unit`, `o3sdk_library`, `o3sdk_app` (the library `app_<name>`; on the host the simulator `<name>_sim` in the app's binary
   directory; on mk66 `<name>.elf`, `.hex`, `.bin`, `.ptf` there too, and the ctests `<name>_image`, `<name>_flashconfig`,
-  `<name>_ramfunc` and, for an image with the console, `<name>_usb`) and `o3sdk_test_suite` (doctest: one executable, one ctest per
-  `*_test.cpp`; a test that names `o3sdk_app()` links the app library whole, `DEPENDS "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<name>>"`).
+  `<name>_ramfunc` and, for an image with the console, `<name>_usb`), `o3sdk_test_suite` (doctest: one executable, one ctest per
+  `*_test.cpp`; a test that names `o3sdk_app()` links the app library whole, `DEPENDS "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<name>>"`) and
+  `o3sdk_app_test_suite(<name> SOURCES ... [DEPENDS ...])`, the same with an app's wiring done: the executable `<name>_tests` linked with
+  `app`, `sim`, `platform_host`, the DEPENDS and the app library whole, and `../app/scenarios` as the macro `APP_SCENARIO_DIR`
+  (`SCENARIO_DIR`, `SCENARIO_DEFINE` and `EXE` change that). The explicit `o3sdk_test_suite` form keeps working.
 - **Where o3sdk is**: `-DO3SDK_DIR=<path>` or the environment variable `O3SDK_DIR` (the template reads it; `tools/ci.sh` too), default the
   sibling `../o3-sdk`. A cache entry keeps the value of the first configure.
 - **A path inside o3sdk** is `O3SDK_ROOT` (set by the platform file), never `PROJECT_SOURCE_DIR`, which belongs to the project that

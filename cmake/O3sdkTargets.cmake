@@ -134,3 +134,49 @@ function(o3sdk_test_suite exe)
     add_test(NAME ${test} COMMAND ${exe} --source-file=*${test}.cpp)
   endforeach()
 endfunction()
+
+# o3sdk_app_test_suite(<app-id> SOURCES <*_test.cpp>... [DEPENDS <lib>...] [EXE <name>] [SCENARIO_DIR <dir>] [SCENARIO_DEFINE <NAME>])
+#   -- host only; the app must already be defined with o3sdk_app(<app-id> ...) (add_subdirectory(app) before add_subdirectory(tests))
+#
+# The tests of an app repository: o3sdk_test_suite() with the wiring an app's tests need, spelled once.
+#   * the executable is `<app-id>_tests` (EXE renames it) and links `app`, `sim`, `platform_host`, DEPENDS (the units under test, say) and
+#     the app library `app_<app-id>` WHOLE, because that library defines o3sdk_app() and nothing else in the test names it first;
+#   * SCENARIO_DIR (default: ../app/scenarios next to the tests directory, when it exists) is handed to the sources as the string macro
+#     SCENARIO_DEFINE (default APP_SCENARIO_DIR), so a test can run every scenario of the app as it is (templates/app/tests/app_test.cpp).
+# One ctest per source file, as o3sdk_test_suite(). The explicit form (o3sdk_test_suite with the whole-archive item in DEPENDS) is still
+# fine, and what o3-303 uses.
+function(o3sdk_app_test_suite app_id)
+  cmake_parse_arguments(ARG "" "EXE;SCENARIO_DIR;SCENARIO_DEFINE" "SOURCES;DEPENDS" ${ARGN})
+  if(ARG_UNPARSED_ARGUMENTS)
+    message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): unknown argument(s) '${ARG_UNPARSED_ARGUMENTS}' "
+                        "(SOURCES, DEPENDS, EXE, SCENARIO_DIR, SCENARIO_DEFINE)")
+  endif()
+  if(NOT TARGET app_${app_id})
+    message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): there is no app library app_${app_id}: call o3sdk_app(${app_id} ...) first, "
+                        "that is add_subdirectory(app) before add_subdirectory(tests)")
+  endif()
+  if(NOT ARG_SOURCES)
+    message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): no SOURCES")
+  endif()
+  if(NOT ARG_EXE)
+    set(ARG_EXE ${app_id}_tests)
+  endif()
+  if(NOT ARG_SCENARIO_DEFINE)
+    set(ARG_SCENARIO_DEFINE APP_SCENARIO_DIR)
+  endif()
+  if(ARG_SCENARIO_DIR)
+    get_filename_component(scenario_dir "${ARG_SCENARIO_DIR}" ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+    if(NOT IS_DIRECTORY "${scenario_dir}")
+      message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): SCENARIO_DIR '${ARG_SCENARIO_DIR}' is not a directory")
+    endif()
+  else()
+    get_filename_component(scenario_dir "${CMAKE_CURRENT_SOURCE_DIR}/../app/scenarios" ABSOLUTE)
+  endif()
+  o3sdk_test_suite(${ARG_EXE}
+    SOURCES ${ARG_SOURCES}
+    DEPENDS app sim platform_host ${ARG_DEPENDS} "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_${app_id}>")
+  if(IS_DIRECTORY "${scenario_dir}")
+    set(scenario_macro "${ARG_SCENARIO_DEFINE}=\"${scenario_dir}\"")
+    target_compile_definitions(${ARG_EXE} PRIVATE "${scenario_macro}")
+  endif()
+endfunction()

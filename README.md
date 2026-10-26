@@ -117,7 +117,7 @@ inspects. `docs/NEW-APP.md` explains each one.
 `kit/` the framework (`core` `hal` `eve` `ui` `dsp` `app` `usb`) · `units/` the kit's example units (`synth`, `delay`) · `apps/` the kit's example apps
 (`hello`, `fillrate`; a new instrument lives in its own repository) · `platform/` the HAL implementations (`host` for the simulator, `mk66` for the
 unit) · `sim/` the simulator · `templates/app/` the starter for a new app · `tests/` host tests · `docs/` · `tools/` (`ci.sh`, `remote_ci.sh`,
-`gate.py`, `new_app.py`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, the toolchain) · `.claude/` the agent
+`gate.py`, `new_app.py`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, `o3sdk_app_test_suite`, the toolchain) · `.claude/` the agent
 harness · `third_party/` (see `THIRD_PARTY.md`).
 
 ## Licence and origin

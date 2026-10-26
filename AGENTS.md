@@ -40,7 +40,7 @@ kit/{core,hal,eve,ui,dsp,app,usb}   the framework (one library each)    units/{s
 platform/host                       HAL fakes for the simulator         apps/{hello,fillrate}  the kit's example apps
 platform/mk66                       the Tracker: drivers, image, USB    sim/                   the headless simulator
 templates/app, tools/new_app.py     the starter for a new app           tests/                 host tests (doctest)
-cmake/                              o3sdk_app, o3sdk_unit, o3sdk_test_suite, the toolchain files
+cmake/                              o3sdk_app, o3sdk_unit, o3sdk_test_suite, o3sdk_app_test_suite, the toolchain files
 ```
 
 Layering is enforced by link dependency, not by convention: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- usb` (linked by
@@ -202,7 +202,8 @@ result with exit codes and counts, tests and scenarios added, docs touched, risk
 
 ## 10. Pitfalls that have cost time
 
-- The app library defines `o3sdk_app()` and is linked **whole**; a test that names it needs `$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>`.
+- The app library defines `o3sdk_app()` and is linked **whole**; a test that names it needs `$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>`
+  (`o3sdk_app_test_suite(<id> ...)` does it).
 - `(void)e.set_source(...)` hides nothing: a refused setup call is counted (`Engine::setup_errors()`), and `<id>_sim` and `sim::Harness::start()` fail on one.
 - A cached `O3SDK_DIR` survives in a build directory; pass `-DO3SDK_DIR` again or use a fresh directory.
 - `O3SDK_BIG` objects start at zero and refuse initialisers on the cross compiler (the host accepts them: a host-green change can break the cross build).
