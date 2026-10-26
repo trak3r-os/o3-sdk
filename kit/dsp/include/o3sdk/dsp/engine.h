@@ -11,7 +11,9 @@
 // one effect each, kMaxInserts master inserts. Every unit is attached once and addressed by its UnitId.
 //
 // Three phases and three contexts:
-//   Setup     main loop, before start(): attach units, route them, add the clocked hooks. Not allowed after start().
+//   Setup     main loop, before start(): attach units, route them, add the clocked hooks. Not allowed after start(). A setup call
+//             that is refused returns false (attach: kNoUnit) and is also recorded: setup_errors() says how many, setup_error(i)
+//             which, so an app that ignores the return values still has a refusal to find (the simulator fails on one).
 //   Running   main loop: notes, parameter changes, mixer values, transport commands. Each call queues a command on a lock-free ring
 //             (one producer: the main loop) and returns at once; the render applies it at frame 0 of its next block. A full ring
 //             refuses the command (false) and counts it; nothing blocks.
@@ -49,6 +51,25 @@ inline constexpr unsigned kMaxCommandsPerBlock = 256;  // a bound on the drain, 
 
 using UnitId = std::uint8_t;
 inline constexpr UnitId kNoUnit = 0xFF;
+
+// A refused setup call (Engine::setup_error). The record is main-loop data: written by the setup calls, read by the main loop.
+enum class SetupCall : std::uint8_t { Attach, SetSource, SetInsert, SetSendEffect, SetMasterInsert, AddHook };
+enum class SetupReason : std::uint8_t {
+  AfterStart,     // start() has run: the setup is over
+  Full,           // attach: kMaxUnits are attached; add_hook: kMaxHooks are added
+  TooManyParams,  // attach: the unit declares more than kMaxParamsPerUnit parameters
+  OutOfRange,     // a slot, bus or insert index outside the topology
+  UnknownUnit,    // the unit id was never returned by attach (kNoUnit, after an attach that was refused, for one)
+  WrongKind,      // a source that is not an instrument, or an effect slot given a unit that is not an effect
+};
+struct SetupError {
+  SetupCall call;
+  SetupReason reason;
+  std::uint8_t slot;   // the call's slot, or the send bus; 0 where the call has none
+  std::uint8_t index;  // the insert index (set_insert, set_master_insert); 0 elsewhere
+  std::uint8_t unit;   // the UnitId the call was given (kNoUnit for attach, add_hook)
+};
+inline constexpr unsigned kMaxSetupErrors = 8;  // records kept; the count goes on past it
 
 // A slot's mixer values. Level and the sends are linear gains (0..1.5, 1 = unity), pan -1 (left) .. 1 (right), mute 0 or 1.
 enum class MixField : std::uint8_t { Level, Pan, SendA, SendB, Mute };
@@ -130,6 +151,17 @@ class Engine {
   // Ends the setup: every unit receives its stored parameter values. Then render() may run.
   void start() noexcept;
   bool started() const noexcept { return started_; }
+  // The refused setup calls (attach, set_source, set_insert, set_send_effect, set_master_insert, add_hook), counted since construction:
+  // 0 for an app whose setup went through. A call made after start() is refused and counted too. Nothing changes for the caller of the
+  // setup calls; this is the way to see a refusal that was not checked. Main loop only, like the setup itself.
+  unsigned setup_errors() const noexcept { return setup_error_count_; }
+  // The i-th refusal in order (the first kMaxSetupErrors are kept), nullptr for i >= min(setup_errors(), kMaxSetupErrors).
+  const SetupError* setup_error(unsigned i) const noexcept {
+    return i < setup_error_count_ && i < kMaxSetupErrors ? &setup_error_log_[i] : nullptr;
+  }
+  // The names for a message: "set_source", "slot out of range" (static text).
+  static const char* setup_call_name(SetupCall call) noexcept;
+  static const char* setup_reason_name(SetupReason reason) noexcept;
 
   // ---- Running (main loop) ----------------------------------------------------------------------------------------------
   bool send(UnitId unit, const Event& e) noexcept;
@@ -196,6 +228,7 @@ class Engine {
     float send_gain[kSendCount] = {0.0f, 0.0f};
   };
 
+  bool refuse(SetupCall call, SetupReason reason, unsigned slot, unsigned index, unsigned unit) noexcept;  // records, returns false
   bool push(const Command& c) noexcept;
   bool queue_event(UnitId unit, const Event& e) noexcept;  // render side
   void apply_mix(unsigned slot, MixField field, float value) noexcept;  // render side: `value` already clamped, `slot` and `field` valid
@@ -217,6 +250,8 @@ class Engine {
   std::uint32_t tempo_main_ = 120'000;
   bool playing_main_ = false;
   std::uint32_t dropped_commands_ = 0;
+  unsigned setup_error_count_ = 0;
+  SetupError setup_error_log_[kMaxSetupErrors] = {};
   std::uint32_t (*cycles_)() noexcept = nullptr;
   core::SpscRing<Command, kCommandRingSize> ring_;
 

@@ -203,6 +203,7 @@ result with exit codes and counts, tests and scenarios added, docs touched, risk
 ## 10. Pitfalls that have cost time
 
 - The app library defines `o3sdk_app()` and is linked **whole**; a test that names it needs `$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<id>>`.
+- `(void)e.set_source(...)` hides nothing: a refused setup call is counted (`Engine::setup_errors()`), and `<id>_sim` and `sim::Harness::start()` fail on one.
 - A cached `O3SDK_DIR` survives in a build directory; pass `-DO3SDK_DIR` again or use a fresh directory.
 - `O3SDK_BIG` objects start at zero and refuse initialisers on the cross compiler (the host accepts them: a host-green change can break the cross build).
 - The display list is 2048 words; a frame that does not fit is dropped silently on the unit and is `refused` (exit 1) in the simulator.

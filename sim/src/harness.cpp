@@ -73,7 +73,50 @@ Harness::~Harness() = default;
 bool Harness::start() {
   const bool ok = runtime_->start();
   runtime_->poll();
-  return ok;
+  const std::string refused = setup_report();
+  if (!refused.empty()) {
+    std::fputs(refused.c_str(), stderr);
+  }
+  return ok && refused.empty();
+}
+
+std::string Harness::setup_report() const {
+  std::string text;
+  const dsp::Engine& e = *engine_;
+  for (unsigned i = 0; i < e.setup_errors(); ++i) {
+    const dsp::SetupError* err = e.setup_error(i);
+    if (err == nullptr) {
+      break;  // the rest are counted, not kept
+    }
+    char args[64] = "";
+    const unsigned unit = err->unit;
+    switch (err->call) {
+      case dsp::SetupCall::Attach:
+      case dsp::SetupCall::AddHook:
+        break;
+      case dsp::SetupCall::SetSource:
+        std::snprintf(args, sizeof args, "slot %u, unit %u", unsigned{err->slot}, unit);
+        break;
+      case dsp::SetupCall::SetInsert:
+        std::snprintf(args, sizeof args, "slot %u, insert %u, unit %u", unsigned{err->slot}, unsigned{err->index}, unit);
+        break;
+      case dsp::SetupCall::SetSendEffect:
+        std::snprintf(args, sizeof args, "bus %u, unit %u", unsigned{err->slot}, unit);
+        break;
+      case dsp::SetupCall::SetMasterInsert:
+        std::snprintf(args, sizeof args, "insert %u, unit %u", unsigned{err->index}, unit);
+        break;
+    }
+    char line[192];
+    std::snprintf(line, sizeof line, "setup refused: %s(%s): %s%s\n", dsp::Engine::setup_call_name(err->call), args,
+                  dsp::Engine::setup_reason_name(err->reason),
+                  unit == dsp::kNoUnit && err->reason == dsp::SetupReason::UnknownUnit ? " (255 is kNoUnit: an attach was refused before)" : "");
+    text += line;
+  }
+  if (e.setup_errors() > dsp::kMaxSetupErrors) {
+    text += "setup refused: " + std::to_string(e.setup_errors() - dsp::kMaxSetupErrors) + " more\n";
+  }
+  return text;
 }
 
 void Harness::push(core::InputKind kind, std::uint8_t id, std::int16_t value) {

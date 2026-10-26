@@ -15,6 +15,9 @@ constexpr float kQuarterPi = 0.785398163f;
 float clampf(float v, float lo, float hi) noexcept { return v < lo ? lo : (v > hi ? hi : v); }
 float absf(float v) noexcept { return v < 0.0f ? -v : v; }
 
+// An argument of a refused setup call, kept in a byte (a larger one is recorded as 255).
+std::uint8_t clip8(unsigned v) noexcept { return static_cast<std::uint8_t>(v < 0xFFu ? v : 0xFFu); }
+
 // Linear under 0.8, then a soft knee that reaches 1.0 asymptotically: x' = 0.8 + 0.2 * s(u), s(u) = u / (1 + u), u = (|x| - 0.8) / 0.2.
 float soft_clip(float x) noexcept {
   const float a = absf(x);
@@ -121,9 +124,57 @@ Engine::Engine() noexcept {
 
 // ---- Setup ------------------------------------------------------------------------------------------------------------------
 
+const char* Engine::setup_call_name(SetupCall call) noexcept {
+  switch (call) {
+    case SetupCall::Attach:
+      return "attach";
+    case SetupCall::SetSource:
+      return "set_source";
+    case SetupCall::SetInsert:
+      return "set_insert";
+    case SetupCall::SetSendEffect:
+      return "set_send_effect";
+    case SetupCall::SetMasterInsert:
+      return "set_master_insert";
+    case SetupCall::AddHook:
+      return "add_hook";
+  }
+  return "?";
+}
+
+const char* Engine::setup_reason_name(SetupReason reason) noexcept {
+  switch (reason) {
+    case SetupReason::AfterStart:
+      return "the engine has started";
+    case SetupReason::Full:
+      return "no room left";
+    case SetupReason::TooManyParams:
+      return "more parameters than kMaxParamsPerUnit";
+    case SetupReason::OutOfRange:
+      return "slot, bus or index out of range";
+    case SetupReason::UnknownUnit:
+      return "the unit id was never attached";
+    case SetupReason::WrongKind:
+      return "the unit is the wrong kind (an instrument is a source, an effect an insert or send)";
+  }
+  return "?";
+}
+
+bool Engine::refuse(SetupCall call, SetupReason reason, unsigned slot, unsigned index, unsigned unit) noexcept {
+  if (setup_error_count_ < kMaxSetupErrors) {
+    setup_error_log_[setup_error_count_] = SetupError{call, reason, clip8(slot), clip8(index), clip8(unit)};
+  }
+  if (setup_error_count_ != ~0u) {  // a runaway caller saturates the count instead of wrapping it to 0
+    ++setup_error_count_;
+  }
+  return false;
+}
+
 UnitId Engine::attach(Unit& unit) noexcept {
   const UnitInfo& info = unit.info();
   if (started_ || unit_count_ >= kMaxUnits || info.param_count > kMaxParamsPerUnit) {
+    const SetupReason why = started_ ? SetupReason::AfterStart : (unit_count_ >= kMaxUnits ? SetupReason::Full : SetupReason::TooManyParams);
+    (void)refuse(SetupCall::Attach, why, 0, 0, kNoUnit);
     return kNoUnit;
   }
   const auto id = static_cast<UnitId>(unit_count_++);
@@ -136,41 +187,79 @@ UnitId Engine::attach(Unit& unit) noexcept {
 }
 
 bool Engine::set_source(unsigned slot, UnitId instrument) noexcept {
-  if (started_ || slot >= kMaxSlots || instrument >= unit_count_ || units_[instrument]->info().kind != UnitKind::Instrument) {
-    return false;
+  if (started_) {
+    return refuse(SetupCall::SetSource, SetupReason::AfterStart, slot, 0, instrument);
+  }
+  if (slot >= kMaxSlots) {
+    return refuse(SetupCall::SetSource, SetupReason::OutOfRange, slot, 0, instrument);
+  }
+  if (instrument >= unit_count_) {
+    return refuse(SetupCall::SetSource, SetupReason::UnknownUnit, slot, 0, instrument);
+  }
+  if (units_[instrument]->info().kind != UnitKind::Instrument) {
+    return refuse(SetupCall::SetSource, SetupReason::WrongKind, slot, 0, instrument);
   }
   slots_[slot].source = instrument;
   return true;
 }
 
 bool Engine::set_insert(unsigned slot, unsigned index, UnitId effect) noexcept {
-  if (started_ || slot >= kMaxSlots || index >= kMaxInserts || effect >= unit_count_ ||
-      units_[effect]->info().kind != UnitKind::Effect) {
-    return false;
+  if (started_) {
+    return refuse(SetupCall::SetInsert, SetupReason::AfterStart, slot, index, effect);
+  }
+  if (slot >= kMaxSlots || index >= kMaxInserts) {
+    return refuse(SetupCall::SetInsert, SetupReason::OutOfRange, slot, index, effect);
+  }
+  if (effect >= unit_count_) {
+    return refuse(SetupCall::SetInsert, SetupReason::UnknownUnit, slot, index, effect);
+  }
+  if (units_[effect]->info().kind != UnitKind::Effect) {
+    return refuse(SetupCall::SetInsert, SetupReason::WrongKind, slot, index, effect);
   }
   slots_[slot].inserts[index] = effect;
   return true;
 }
 
 bool Engine::set_send_effect(unsigned bus, UnitId effect) noexcept {
-  if (started_ || bus >= kSendCount || effect >= unit_count_ || units_[effect]->info().kind != UnitKind::Effect) {
-    return false;
+  if (started_) {
+    return refuse(SetupCall::SetSendEffect, SetupReason::AfterStart, bus, 0, effect);
+  }
+  if (bus >= kSendCount) {
+    return refuse(SetupCall::SetSendEffect, SetupReason::OutOfRange, bus, 0, effect);
+  }
+  if (effect >= unit_count_) {
+    return refuse(SetupCall::SetSendEffect, SetupReason::UnknownUnit, bus, 0, effect);
+  }
+  if (units_[effect]->info().kind != UnitKind::Effect) {
+    return refuse(SetupCall::SetSendEffect, SetupReason::WrongKind, bus, 0, effect);
   }
   send_fx_[bus] = effect;
   return true;
 }
 
 bool Engine::set_master_insert(unsigned index, UnitId effect) noexcept {
-  if (started_ || index >= kMaxInserts || effect >= unit_count_ || units_[effect]->info().kind != UnitKind::Effect) {
-    return false;
+  if (started_) {
+    return refuse(SetupCall::SetMasterInsert, SetupReason::AfterStart, 0, index, effect);
+  }
+  if (index >= kMaxInserts) {
+    return refuse(SetupCall::SetMasterInsert, SetupReason::OutOfRange, 0, index, effect);
+  }
+  if (effect >= unit_count_) {
+    return refuse(SetupCall::SetMasterInsert, SetupReason::UnknownUnit, 0, index, effect);
+  }
+  if (units_[effect]->info().kind != UnitKind::Effect) {
+    return refuse(SetupCall::SetMasterInsert, SetupReason::WrongKind, 0, index, effect);
   }
   master_inserts_[index] = effect;
   return true;
 }
 
 bool Engine::add_hook(Clocked& hook) noexcept {
-  if (started_ || hook_count_ >= kMaxHooks) {
-    return false;
+  if (started_) {
+    return refuse(SetupCall::AddHook, SetupReason::AfterStart, 0, 0, kNoUnit);
+  }
+  if (hook_count_ >= kMaxHooks) {
+    return refuse(SetupCall::AddHook, SetupReason::Full, 0, 0, kNoUnit);
   }
   hooks_[hook_count_++] = &hook;
   return true;

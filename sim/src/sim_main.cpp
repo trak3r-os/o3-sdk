@@ -5,7 +5,9 @@
 //   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
-// scenario fails, when a frame did not fit the display list or the raster refused one, so a script can gate on it.
+// scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
+// refused (an attach, a route or a hook that was not taken: Engine::setup_errors(); the refusals are listed on stderr), so a script can
+// gate on it.
 #include <o3sdk/app/app.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
@@ -59,7 +61,13 @@ int main(int argc, char** argv) {
   o3sdk::app::App& app = o3sdk_app();
   o3sdk::sim::Harness h(app);
   if (!h.start()) {
-    std::fprintf(stderr, "the display refused the UI assets\n");
+    // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
+    if (h.engine().setup_errors() != 0u) {
+      std::fprintf(stderr, "%s: the app's setup had %u refused call(s): fix the wiring in setup() (the return values of attach, set_source, ...)\n",
+                   app.info().name, h.engine().setup_errors());
+    } else {
+      std::fprintf(stderr, "the display refused the UI assets\n");
+    }
     return 1;
   }
   if (!wav.empty()) {

@@ -34,7 +34,9 @@ class MyApp final : public app::App {
   void setup(app::Context& ctx) noexcept override {
     dsp::Engine& e = ctx.engine();
     const dsp::UnitId voice = e.attach(voice_);
-    (void)e.set_source(0, voice);  // slot 0 plays the voice; the mixer's level, pan and sends are the slot's
+    // Slot 0 plays the voice; the mixer's level, pan and sends are the slot's. A refused call is counted (Engine::setup_errors) and the
+    // simulator and app_test fail on it, so the result need not be checked here.
+    (void)e.set_source(0, voice);
     play_.init(voice);
     ctx.show(play_);
   }

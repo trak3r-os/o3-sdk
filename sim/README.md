@@ -16,7 +16,11 @@ The `--out` directory must exist (`mkdir -p`). In a test the same app runs throu
 one object, so every Harness of a test run drives the same app: reset your members in `setup()`.
 
 It prints each file it writes and a summary line (frames drawn and refused, the largest display list, audio blocks, dropped events
-and commands). Exit 1 when the scenario fails or a frame did not fit, so a script can gate on it.
+and commands). Exit 1 when the scenario fails or a frame did not fit, so a script can gate on it. Exit 1 also, before anything runs, when
+the app's `setup()` had a call the engine refused (a route to a slot that does not exist, an effect as a source, a hook past the fourth:
+`Engine::setup_errors()`); stderr then names each one (`setup refused: set_source(slot 9, unit 0): slot, bus or index out of range`).
+`Harness::start()` returns `false` for the same reason and writes the same lines, so a test that `REQUIRE`s it shows why it failed;
+`Harness::setup_report()` returns the text.
 
 ## What it is
 

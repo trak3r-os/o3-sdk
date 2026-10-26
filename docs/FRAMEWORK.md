@@ -101,7 +101,15 @@ main loop ──commands──▶                                               
 ```
 
 - **Setup** (main loop, before `start()`): `attach()` units (up to 16), `set_source()`, `set_insert()`, `set_send_effect()`,
-  `set_master_insert()`, `add_hook()`.
+  `set_master_insert()`, `add_hook()`. A refused call (a slot or index out of range, an id never attached, an effect given as a source,
+  the engine full, a call after `start()`) returns `false` (`attach`: `kNoUnit`) as it always did, and is also **recorded**:
+  `Engine::setup_errors()` is the count (0 for a setup that went through), `setup_error(i)` the i-th record (`SetupError`: the call,
+  the `SetupReason`, the slot or bus, the insert index and the unit id it was given; the first `kMaxSetupErrors` = 8 are kept) and
+  `setup_call_name()` / `setup_reason_name()` give text. So `(void)e.set_source(...)` no longer hides a mistake: `sim::Harness::start()`
+  returns `false` when the count is not 0, writes the refusals to stderr (`setup refused: set_source(slot 9, unit 0): slot, bus or index
+  out of range`) and `<app>_sim` exits 1 with that message before it runs anything. Setup-time bookkeeping only: nothing in the render
+  path reads it, and an app whose setup succeeds sees no change. The image on the Tracker does not show it yet (the count is
+  kept and not reported: a follow-up for the console's `state`).
 - **Running** (main loop): `note_on()`, `set_param()`, `step_param()`, `set_mix()`, `play()`, `stop()`, `set_tempo()`. Each queues a
   command on a lock-free ring; the render applies it at frame 0 of its next block. A full ring refuses and counts; nothing blocks.
 - **Render**: `render()`, once per block, from the platform's audio callback (`Runtime::block_callback()`).
@@ -218,6 +226,7 @@ it for every screen change and every sound change before a unit sees it; it is n
 not the unit's. Its PNGs are 800 x 697 (the screen above the pads); the unit's `o3console.py --shot` is the 800 x 480 screen alone. The
 `--out` directory must exist. The same app runs in tests through `sim::Harness` (`sim/include/o3sdk/sim/harness.h`: `start`, `run_ms`,
 `press`, `pad_down`, `turn`, `audio`, `leds`, `runtime().state_line()`), as `templates/app/tests/app_test.cpp` and `tests/sim_hello_test.cpp` do.
+`Harness::start()` and the `<app>_sim` runner fail on an app whose setup had a call the engine refused (section 4, "Setup").
 
 ## 8. Rules
 

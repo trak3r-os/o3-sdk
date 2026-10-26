@@ -54,8 +54,13 @@ class Harness {
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
 
-  // Runtime::start(): the assets, App::setup, the engine. false: the display refused the assets.
+  // Runtime::start(): the assets, App::setup, the engine. false: the display refused the assets, or the app's setup had a call that
+  // the engine refused (Engine::setup_errors() != 0: an attach, a route or a hook it did not take). Then setup_report() says which,
+  // and start() has also written it to stderr, so a test that REQUIREs start() shows why it failed.
   bool start();
+  // One line per refused setup call, e.g. "setup refused: set_source(slot 9, unit 0): slot, bus or index out of range\n"; "" when the
+  // setup went through (at most Engine's kMaxSetupErrors lines, then a count of the rest).
+  std::string setup_report() const;
   // Moves time on by `ms` milliseconds.
   void run_ms(std::uint32_t ms);
 
