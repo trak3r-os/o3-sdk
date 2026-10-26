@@ -10,8 +10,7 @@
 //   ParamChange   {ParamId, value, ramp}: what goes to the audio side over an SPSC ring (ParamRing), drained in the graph's pass (after the block's voices).
 //                 `value` is in the descriptor's own units, which are the model's: a cutoff is 0..1 as the instrument stores it.
 //                 `ramp_samples` 0 means "the engine's smoothing for this parameter" (its `kParamSmooth` flag); other values are
-//                 for callers that know better (a preset load wants an instant change: 1). o3sdk: its engine does not use ParamChange (it
-//                 sends a Param event, dsp/event.h) and nothing ramps for the unit: see kParamSmooth.
+//                 for callers that know better (a preset load wants an instant change: 1).
 //   ParamDesc     what a value is: range, default, display (unit and formatter), curve, steps, flags. Constexpr tables; the
 //                 tables themselves live where the storage does (model/params.h). This header is the type and the pure maths:
 //                 normalising through the curve (the bar of a field, the position of a knob), stepping by encoder detents,
@@ -99,18 +98,8 @@ struct ParamKnot {
 
 inline constexpr std::uint8_t kParamModulatable = 1u << 0;  // a mod matrix may route a source to it (ADR 0013 D6)
 inline constexpr std::uint8_t kParamLearnable = 1u << 1;    // MIDI Learn may bind a CC to it
-// kParamSmooth (o3sdk: advisory metadata; track3r-os's engine ramps such a parameter, o3sdk's does not). The unit's author states that the
-// unit smooths this parameter itself, so a UI or host may change it as often and as far as it likes (an encoder turned fast, a motion lane,
-// automation) without a click.
-//   * The kit never reads the flag and never ramps. Engine::set_param and step_param clamp the value, store it as the target and send it as
-//     one Param event, a step: at frame 0 of the next block, or at its own frame from a clocked hook. Engine::param() always reports that
-//     target, never the unit's smoothed value. ParamChange::ramp_samples is not used by o3sdk's engine either.
-//   * The smoothing is inside the unit's process(): dsp/smooth.h (Ramp, OnePole) or any scheme that makes a step in the value inaudible.
-//   * Set: a promise of the unit's author that a step does not click; the unit's test should prove it (voice_test.cpp of templates/app does
-//     so for a ramped level). Clear: no promise, the unit applies the value at the event's frame (a switch, a choice, a time, a value that is
-//     meant to jump).
-//   * A UI or host may take it as the author's word only. Nothing in the kit enforces it, and a missing flag is not a defect.
-inline constexpr std::uint8_t kParamSmooth = 1u << 2;       // advisory: the unit smooths it itself (above); o3sdk's engine does not ramp it
+inline constexpr std::uint8_t kParamSmooth = 1u << 2;       // the engine ramps it (volume, pan, cutoff: PAR-126 and the 1.7.0 notes)
+// o3sdk: kParamSmooth is advisory here; its engine does not ramp (docs/FRAMEWORK.md, "Units"). This header is otherwise as track3r-os has it.
 inline constexpr std::uint8_t kParamApply = 1u << 3;        // OS-USBAUDIO: press to apply. The encoder only changes a pending value (the page marks it); the setting is written, once, by param.apply
                                                             // (pressed twice). A value whose change is costly (re-enumerating USB). Never learnable
 
