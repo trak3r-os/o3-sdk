@@ -80,7 +80,7 @@ What the integrator's `main.cpp` calls. Keep these names unless there is a reaso
 |---|---|
 | boot | `system_clock()` -> `const hal::Clock&` (SysTick, 1 ms); `hal::cycles()`; `boot::delay_ms()`; the crash record (`boot_crash_record()`, `clear_crash_record()`, `set_module()`); blink codes and the status LED; the idle hook a blocking wait calls |
 | display | `display::device::bring_up()` -> `{up, dma}`; `display::device::display()` -> `hal::Display&`; `hold_dark()`; whatever the main loop must call to service it |
-| input | `input::device::init()` (true when every scanner answered); `input::device::input()` -> `hal::Input&`; `input::device::leds()` -> `hal::Leds&`; the per-pass service call. Button codes are kit/app/include/o3sdk/app/panel.h (`Button::F1` = 0 ... `Button::Right` = 32), pads 0..47 row by row from the top left, the encoder id 0 with signed detents |
+| input | `input::device::init()` (true when the control-button scanner answered; the pad bus is opened later by `input::device::audio_started()`, OS-BUG-PADS); `input::device::input()` -> `hal::Input&`; `input::device::leds()` -> `hal::Leds&`; the per-pass service call. Button codes are kit/app/include/o3sdk/app/panel.h (`Button::F1` = 0 ... `Button::Right` = 32), pads 0..47 row by row from the top left, the encoder id 0 with signed detents |
 | audio | `audio_device()` -> `hal::audio::Device&` (`start(callback)` muted, `unmute()`, `mute()`); a status snapshot (boundaries, underruns, hardware faults, render cycles); the main-loop beat and the starvation guard; `OutputGate` (open the outputs after a clean run) |
 
 ## Ownership (other slices edit other files at the same time)

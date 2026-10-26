@@ -77,10 +77,11 @@ measured on a unit: the CPU cost of the USB interrupt and the tap (`cpu` with an
 
 ## Reset sequence (`src/startup.cpp`, `src/boot.cpp`)
 
-Interrupts off; watchdog unlocked and disabled; FPU on; the quiet pins (amplifier muted first, `board.h` `kQuietPins`); crash
+Interrupts off; watchdog unlocked and disabled; FPU on; the power key PTA24 HIGH first (PCR `0x144`), the amplifier muted at once, a 2 ms wait on the cycle
+counter (`board::kRailSettleUs`), then the other quiet pins (`board.h` `kQuietPins`; OS-BUG-PADS, **untested on both units**); crash
 context reset; `.data` and `.ramfunc_l` copied, `.bss` cleared (`.noinit` left alone); code cache on; reset cause and crash record
 captured; DWT; clocks (16 MHz crystal, HSRUN, PLL: 180 MHz core, 90 MHz bus); NVIC priorities (hal/irq.h via `irq_map.h`), fault
-handlers, SysTick 1 kHz, interrupts on; SDRAM power, controller, JEDEC sequence, wiring and full tests, ICode alias; `.sdram_bss`
+handlers, SysTick 1 kHz, interrupts on; SDRAM power (PTA24 again, the same value), controller, JEDEC sequence, wiring and full tests, ICode alias; `.sdram_bss`
 cleared; `boot::dma_init()` (DMA_CR and every DCHPRI from `resources.h`); constructors; `main`. Every hardware value is
 track3r-os's, unchanged. Every wait is bounded; a failure stops with a blink code.
 
@@ -89,6 +90,11 @@ What `main` may use: `system_clock()`, `boot_info()`, `boot_crash_record()`, `cl
 `boot::set_idle_hook()` (`idle_hook.h`), `boot::led_set()`, `boot::led_from_sram_l()`, `boot::play_code()`, `boot::fail()`,
 `i2c::init()`/`bus()`/`write_reg()`/`read_reg()`, `cache::*`. `main.cpp` is the composition root (the order is in `docs/M2-PLAN.md`). `main_skeleton.cpp`, the skeleton image's main, plays a
 crash record's code, clears it, then runs the heartbeat in a `wfi` loop.
+
+The pad bus (I2C2, OS-BUG-PADS; `input/pad_bus.h`; track3r-os behaviour, **untested on the later board revision**): not touched at the input bring-up. A gate opens it
+1 s after the power key and after `input::device::audio_started()` (called by `main` right after the audio start); the first access initialises the module (glitch filter
+FLT = 4, C2 = 0), a NAK no longer re-initialises it, and a pad chip that never answered is asked again every second for ever. The control buttons (I2C0) and the boot chords do
+not wait for it. `diag input stats` and `diag log` say what each pad chip answered and the bus lines' levels.
 
 ## Faults and blink codes
 
@@ -105,7 +111,7 @@ The status LED is `PTC19`, active low (`blink.h`):
 | 6 flashes, twice, then heartbeat | a crash record from the previous run |
 | 4, 5, 8, 9 | display codes (no chip, polled path, stalled, app failure) |
 | 10, 11, 12 | audio codes (bring-up failed, fault seen, over budget) |
-| 13 | a key scanner did not answer at boot |
+| 13 | a key scanner did not answer: the control buttons' at boot (before the audio start); the pads' from the main loop, once the pad bus has opened and the pad scanner has refused 3 tries since then and never answered, once in place of one heartbeat period (the retries go on every second) |
 | 14 flashes, for two periods (about 14 s), then the heartbeat | `usb0::start()` refused: the image runs without USB (the console, the audio device and `fw` are out of reach, and the log that says why cannot be read: the code is all the image can say) |
 | dark | the image never reached `early_pins`, or the LED is not where `board.h` says |
 

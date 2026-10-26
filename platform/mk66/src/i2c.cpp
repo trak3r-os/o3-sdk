@@ -176,7 +176,7 @@ bool bus_clear(const InstanceFacts& f) noexcept {
   return (regs::gpio_pdir(f.sda) & regs::mask_of(f.sda)) != 0u;
 }
 
-// Clock gate, bus clear, pins to the peripheral, divider, enable. Ok when the bus was released (or was never held).
+// Clock gate, bus clear, pins to the peripheral, divider, glitch filter, enable. Ok when the bus was released (or was never held).
 Result init_instance(const InstanceFacts& f) noexcept {
   regs::at<std::uint32_t>(f.scgc_register) = regs::at<std::uint32_t>(f.scgc_register) | f.scgc_bit;
   reg_c1(f) = 0;
@@ -185,6 +185,10 @@ Result init_instance(const InstanceFacts& f) noexcept {
   regs::port_pcr(f.scl) = mux | regs::kPcrOdeDseSre;
   regs::port_pcr(f.sda) = mux | regs::kPcrOdeDseSre;
   reg_f(f) = i2c_cfg::kFrequencyDivider;
+  if (f.filter != 0u) {  // (OS-BUG-PADS: the grid bus only; the module is still disabled, so the filter takes effect at the enable below)
+    regs::at<std::uint8_t>(f.base + i2c_cfg::kRegC2) = 0;
+    regs::at<std::uint8_t>(f.base + i2c_cfg::kRegFlt) = f.filter;  // FLT[3:0] = the filter, the STARTF / STOPF flags (write 1 to clear) and SHEN zero
+  }
   reg_c1(f) = regs::kI2cC1Iicen;
   reg_s(f) = static_cast<std::uint8_t>(regs::kI2cSIicif | regs::kI2cSArbl);  // clear stale flags
   return clear ? Result::Ok : Result::BusStuck;

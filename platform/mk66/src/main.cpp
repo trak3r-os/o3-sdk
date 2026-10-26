@@ -7,6 +7,9 @@
 //   crash record of the last run -> display bring-up -> input init -> app::Runtime over the app (assets, App::setup, engine start)
 //   -> audio start (muted) -> loop { wfi; input; display; rt.poll(); audio beat; the outputs opened once after a clean run; LED }
 //
+// The pad bus (I2C2) is not touched by the input init: input::audio_started() after the audio start is the second condition of its gate, which
+// opens a second after the board's rail, and the loop's input pass brings the pad chips up then (OS-BUG-PADS, input/pad_bus.h).
+//
 // The order and the LED rules follow track3r-os's composition root (src/app_main.cpp there), which ran on the unit. With the console
 // (O3SDK_CONSOLE, the default image: docs/M2B-PLAN.md section 5) the same sequence also brings up, in this order:
 //
@@ -29,6 +32,7 @@
 #include <o3sdk/platform/mk66/crash_record.h>
 #include <o3sdk/platform/mk66/display/device.h>
 #include <o3sdk/platform/mk66/input/device.h>
+#include <o3sdk/platform/mk66/input/pad_bus_log.h>
 #include <o3sdk/platform/mk66/output_gate.h>
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/ui/assets.h>
@@ -170,6 +174,38 @@ void poll_card(std::uint32_t now) noexcept {
   }
   console::log(line);
 }
+
+// ---- The pad bus in `diag log` (OS-BUG-PADS; track3r-os app_main.cpp watch_pad_bus, the same text) --------------------------------------------------------------------------------------
+// What the pad bus said, in `diag log`: three short lines (the headline, the chips' results, then the bus clears and the lines) at the first answer or refusal of each chip and for the
+// first changes of the pad scanner's online state, then one line per input::PadBusLogPolicy::kSummaryEvery changes (a flapping chip must not wrap the log over the boot lines). Read only. Main thread.
+// Every pass looks at the record alone (no pin is read); the levels are read, once, for a full entry.
+mk66::input::PadBusLogPolicy g_pad_bus_log;
+void log_pad_bus(const o3sdk::hal::PadBusStats& bus) noexcept {
+  char line[64];
+  console::format_pad_bus_chips(bus, line, sizeof line);
+  console::log(line);
+  console::format_pad_bus_lines(bus, line, sizeof line);
+  console::log(line);
+}
+void watch_pad_bus() noexcept {
+  const o3sdk::hal::InputStats seen = input::scanner().stats_without_levels();
+  const bool online = (seen.online & o3sdk::hal::InputStats::kPadsOnline) != 0u;
+  switch (g_pad_bus_log.update(online, seen.pad_bus.scanner.count != 0u, seen.pad_bus.leds.count != 0u)) {
+    case mk66::input::PadBusLogPolicy::Entry::None:
+      break;
+    case mk66::input::PadBusLogPolicy::Entry::Full:
+      console::log(online ? "pads: scanner answers" : "pads: scanner not answering");
+      log_pad_bus(input::scanner().stats().pad_bus);
+      break;
+    case mk66::input::PadBusLogPolicy::Entry::Summary: {
+      char line[64];
+      mk66::audio::diag::Text text(line, sizeof line);
+      text.str("pads: ").dec(g_pad_bus_log.flips()).str(" changes, now ").str(online ? "answering" : "not answering");
+      console::log(line);
+      break;
+    }
+  }
+}
 #endif
 
 // Which blink pattern the audio counters call for: the heartbeat (0) while everything is clean, else a sticky code.
@@ -226,7 +262,7 @@ int main() {
 
   // ---- Input: the two key scanners and the pad LED driver, on I2C0 with the codec (main thread only, for both).
   mk66::set_module(kInputModule);
-  const bool input_ok = input::init();
+  const bool input_ok = input::init();  // the control buttons' verdict; the pad bus is not touched here (OS-BUG-PADS: input::audio_started() below, the pads' verdict from the loop)
 
   // ---- The app: the Runtime uploads the UI's bitmaps, runs App::setup and starts the engine.
   mk66::set_module(kAppModule);
@@ -258,7 +294,7 @@ int main() {
     mk66::boot::play_code(mk66::blink::kDisplayFailure, 2);
   }
   if (!input_ok) {
-    mk66::boot::play_code(mk66::blink::kInputDegraded, 1);  // the app runs with the scanner that answered
+    mk66::boot::play_code(mk66::blink::kInputDegraded, 1);  // the control buttons did not answer; the app runs, their scanner is retried
   }
 
   // ---- Audio: the codec brought up muted and the I2S/DMA path running; the render line calls the Runtime once per block. A
@@ -284,6 +320,8 @@ int main() {
     console::log_audio_clock_fault("boot: audio", mk66::audio_clock_fault());  // which wait, MCR and MDR
 #endif
   }
+  // OS-BUG-PADS: the audio start is over, worked or not: the pad bus (I2C2) may open a second after the board's rail came up, and the pads are brought up from the loop below.
+  input::audio_started();
   mk66::set_module(0);
 
 #if O3SDK_CONSOLE
@@ -366,6 +404,8 @@ int main() {
   std::uint32_t last_audio_poll = 0;
   std::uint32_t last_boundaries = 0;
   std::uint32_t last_progress_ms = static_cast<std::uint32_t>(clock.uptime_ms());
+  bool pads_code_done = false;       // OS-BUG-PADS: the pad scanner's blink code 13 has been started (it plays once)
+  std::uint32_t pads_code_from = 0;  // and when
 
   // From here the loop beats once per pass (audio_main_pass), so a render that runs back to back and starves it sheds blocks until a
   // pass completes (audio/pipeline.h).
@@ -377,6 +417,9 @@ int main() {
     console::service();  // the `diag` console: what the host typed, a stream's next lines, the output; the USB set's changes; the firmware hand-over's clock
 #endif
     input::service();  // the scanners' events into the queue rt.poll() reads
+#if O3SDK_CONSOLE
+    watch_pad_bus();   // OS-BUG-PADS: what the pad bus answered, into `diag log` (there is no log in an image without the console)
+#endif
     switch (display::service()) {
       case display::Status::NeedsAssets:
         // The chip was re-initialised after a stalled swap: RAM_G is presumed lost, frames are refused until the bitmaps are back.
@@ -462,7 +505,19 @@ int main() {
       shown_code = mk66::blink::kUsbFailure;  // under every fault code; over the heartbeat and the over-budget pattern, for its two periods
     }
 #endif
-    mk66::boot::led_from_sram_l(mk66::blink::led_on(shown_code, ms));
+    // OS-BUG-PADS: the pad scanner is brought up after the audio start (a second after the board's rail at the earliest), so its verdict comes from here, not from the boot. Once the pad
+    // scanner has refused its first configurations and never answered, code 13 is shown for ONE period, from its first flash, in place of the heartbeat only (a code already shown for
+    // a fault keeps the LED); nothing waits for it, and the retries behind it go on for ever. A pad scanner that answers later brings the pads online with no restart.
+    if (!pads_code_done && input::scanner().pads_gave_no_answer()) {
+      pads_code_done = true;
+      pads_code_from = ms;
+      boot_log("input: pad scanner did not answer, blink code 13 once, retrying every second");
+    }
+    if (pads_code_done && shown_code == 0 && ms - pads_code_from < mk66::blink::period_ms(mk66::blink::kInputDegraded)) {
+      mk66::boot::led_from_sram_l(mk66::blink::led_on(mk66::blink::kInputDegraded, ms - pads_code_from));
+    } else {
+      mk66::boot::led_from_sram_l(mk66::blink::led_on(shown_code, ms));
+    }
     if (ms / 1000u != last_second) {
       last_second = ms / 1000u;
       g_heartbeat = g_heartbeat + 1u;

@@ -220,6 +220,23 @@ TEST_CASE("mk66 diag text: log, input, version") {
   s.dropped = 1;
   console::format_input_stats(s, buf, sizeof buf);
   CHECK(std::strcmp(buf, "input: pads yes, buttons yes online; dropped 1, bus errors 0, filtered 0, resyncs 0\n") == 0);
+  // OS-BUG-PADS: the pad bus record is a second line, once there is one.
+  s.pad_bus.scanner = {2, 2, 12};
+  s.pad_bus.leds = {};
+  s.pad_bus.clear = o3sdk::hal::PadBusStats::kClearReleased;
+  s.pad_bus.clears = 1;
+  s.pad_bus.lines_first = 0x07;
+  s.pad_bus.lines_now = 0x05;
+  console::format_input_stats(s, buf, sizeof buf);
+  CHECK(std::strcmp(buf,
+                    "input: pads yes, buttons yes online; dropped 1, bus errors 0, filtered 0, resyncs 0\n"
+                    "pads 34 NAK/NAK x12 74 --/-- x0; pads clr 1 rel, lines 111>101\n") == 0);
+  s.pad_bus.clear = o3sdk::hal::PadBusStats::kClearHeld;
+  s.pad_bus.lines_first = o3sdk::hal::BusProbe::kNone;
+  console::format_pad_bus_lines(s.pad_bus, buf, sizeof buf);
+  CHECK(std::strcmp(buf, "pads clr 1 HELD, lines --->101") == 0);
+  console::format_pad_bus_chips(s.pad_bus, buf, sizeof buf);
+  CHECK(std::strcmp(buf, "pads 34 NAK/NAK x12 74 --/-- x0") == 0);
   console::format_version("abc123-dirty", 0x16D0, 0x0E9F, 0x0001, "9CC819A7AD93F175", buf, sizeof buf);
   CHECK(std::strcmp(buf, "Track3r o3sdk, build abc123-dirty\nusb 16D0:0E9F rev 0001 serial 9CC819A7AD93F175\n") == 0);
 }

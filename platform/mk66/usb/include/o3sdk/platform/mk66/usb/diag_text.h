@@ -95,7 +95,12 @@ std::size_t format_crash(const crash::CrashRecord* record, char* out, std::size_
 std::size_t format_log_entry(const o3sdk::usb::diag::LogEntry& e, char* out, std::size_t cap) noexcept;
 // One input event, as the INPUT TEST screen would show it: "pad 12 down 127", "button 3 up", "encoder 0 +2" and its tick.
 std::size_t format_input_event(const core::InputEvent& e, char* out, std::size_t cap) noexcept;
+// `input stats`: the health line, and (OS-BUG-PADS) a second line for the pad bus once it has any record. No change to the first line.
 std::size_t format_input_stats(const hal::InputStats& s, char* out, std::size_t cap) noexcept;
+// OS-BUG-PADS: the pad bus record in the two short pieces a log line (55 characters) holds, no newline: "pads 34 NAK/NAK x12 74 --/-- x0" (the chip at that address: first/last result and the
+// transactions tried) and "pads clr 1 rel, lines 111>111" (bus clears and the last one's result, then SCL SDA INT before the first transaction and now: 1 = high, - = not read).
+std::size_t format_pad_bus_chips(const hal::PadBusStats& s, char* out, std::size_t cap) noexcept;
+std::size_t format_pad_bus_lines(const hal::PadBusStats& s, char* out, std::size_t cap) noexcept;
 // `version`: the product name, the build identity, the USB identity.
 std::size_t format_version(const char* build, std::uint16_t vid, std::uint16_t pid, std::uint16_t bcd_device, const char* serial,
                            char* out, std::size_t cap) noexcept;

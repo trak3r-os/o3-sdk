@@ -9,7 +9,9 @@
 // 0.6 ms at the most, 13 bytes) and nothing ever waits: the setup is about two dozen calls, then flush sends the
 // rows that changed, then every kHealthUs it checks that the chip still says "normal operation" (a chip that has reset itself
 // is detected) and starts the setup again if not. A failed transfer takes the driver back
-// to the setup after a backoff, with a bus recovery from the second failure in a row.
+// to the setup after a backoff, with a bus recovery from the second failure in a row (the pad bus decides whether its module needs one: a NAK
+// does not). OS-BUG-PADS: flush() does nothing while the bus is not ready() (the pad bus's gate, pad_bus.h), and a chip that has never
+// acknowledged a transfer is asked again every scan::kPadRetryUs, for ever, in place of the growing backoff.
 //
 // The setup order keeps the pads dark. The chip's registers outlive a reset of the MCU (only its own power resets them), so at power-up
 // of the MCU it may still show the last frame of the previous run. The sequence therefore asserts software shutdown FIRST (the LEDs are
@@ -129,7 +131,8 @@ class PadLeds final : public hal::Leds {
   unsigned clear_row_ = 0;
   unsigned next_row_ = 0;
   bool online_ = false;
-  bool parking_ = false;       // OS-POWER P1: park() was called: the pads go dark and the chip into shutdown, for good
+  bool answered_ = false;      // OS-BUG-PADS: the chip acknowledged a transfer at least once (until then a failure waits scan::kPadRetryUs, not the growing backoff)
+  bool parking_ = false;      // OS-POWER P1: park() was called: the pads go dark and the chip into shutdown, for good
   bool waiting_ = false;       // a deadline is pending (the shutdown pause, or the backoff after a failure)
   core::Tick resume_at_ = 0;
   core::Tick health_at_ = 0;

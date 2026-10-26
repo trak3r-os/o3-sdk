@@ -35,7 +35,8 @@ I2cResult PadLeds::write(std::uint8_t reg, const std::uint8_t* data, std::uint8_
   return bus_.transfer(pins::kLedDriverAddress, frame, static_cast<std::uint8_t>(1 + length), nullptr, 0);
 }
 
-// A transfer failed: back to the setup after a backoff; the bus is recovered from the second failure in a row.
+// A transfer failed: back to the setup after a backoff; the bus is asked to recover from the second failure in a row (the pad bus decides
+// whether its module needs it: pad_bus.h). A chip that has never acknowledged anything is asked again every scan::kPadRetryUs, for ever.
 void PadLeds::fail(I2cResult) noexcept {
   ++errors_;
   ++failures_;
@@ -43,8 +44,9 @@ void PadLeds::fail(I2cResult) noexcept {
   if (failures_ >= scan::kRecoverAfterFailures) {
     (void)bus_.recover();
   }
-  backoff_us_ = backoff_us_ == 0u ? scan::kBackoffMinUs
-                                  : (backoff_us_ * 2u < scan::kBackoffMaxUs ? backoff_us_ * 2u : scan::kBackoffMaxUs);
+  backoff_us_ = !answered_ ? scan::kPadRetryUs
+                           : (backoff_us_ == 0u ? scan::kBackoffMinUs
+                                                : (backoff_us_ * 2u < scan::kBackoffMaxUs ? backoff_us_ * 2u : scan::kBackoffMaxUs));
   waiting_ = true;
   resume_at_ = clock_.now() + backoff_us_;
   step_ = Step::SelectFunction;
@@ -102,6 +104,9 @@ I2cResult PadLeds::select_bank(std::uint8_t bank) noexcept { return write(chip::
 I2cResult PadLeds::write_function(std::uint8_t reg, std::uint8_t value) noexcept { return write(reg, &value, 1); }
 
 bool PadLeds::flush() noexcept {
+  if (!bus_.ready()) {
+    return true;  // OS-BUG-PADS: the pad bus has not opened (pad_bus.h): the chip is not touched, the staged levels wait
+  }
   const core::Tick now = clock_.now();
   if (waiting_) {
     if (!core::tick_reached(now, resume_at_)) {
@@ -239,6 +244,7 @@ bool PadLeds::flush() noexcept {
   }
   failures_ = 0;
   backoff_us_ = 0;
+  answered_ = true;
   if (step_ == Step::EnterShutdown) {
     waiting_ = true;  // the 10 ms after shutdown, before anything else is written
     resume_at_ = now + kShutdownPauseUs;

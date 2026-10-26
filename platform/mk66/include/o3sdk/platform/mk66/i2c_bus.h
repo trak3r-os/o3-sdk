@@ -37,6 +37,10 @@ class I2cBus {
   // Releases a bus a slave is holding (a reset in the middle of a transfer): up to nine SCL pulses and a STOP, then the peripheral
   // is enabled again. Bounded. Ok when SDA reads high afterwards.
   virtual I2cResult recover() noexcept = 0;
+  // OS-BUG-PADS: may the chips on this bus be spoken to yet? A bus with a gate (the pad bus: pad_bus.h) says false until its gate opens and then
+  // true for good, and refuses every call before that without touching the hardware; a clients' loop that sees false leaves its chip alone and
+  // asks again on its next pass. The codec's and the control buttons' bus has no gate.
+  virtual bool ready() noexcept { return true; }
 
  protected:
   I2cBus() = default;

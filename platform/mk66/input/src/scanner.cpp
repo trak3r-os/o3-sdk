@@ -9,29 +9,37 @@ namespace o3sdk::platform::mk66::input {
 Scanner::Scanner(I2cBus& pad_bus, I2cBus& control_bus, ScanHardware& hardware, const hal::Clock& clock) noexcept
     : hw_(hardware),
       clock_(clock),
-      pads_buttons_{Source(pad_bus, pins::kKeyScannerAddress, core::InputKind::Pad, pad_of_key, hal::InputStats::kPadsOnline),
+      pads_buttons_{Source(pad_bus, pins::kKeyScannerAddress, core::InputKind::Pad, pad_of_key, hal::InputStats::kPadsOnline,
+                           scan::kPadRetryUs),
                     Source(control_bus, pins::kKeyScannerAddress, core::InputKind::Button, button_of_key,
-                           hal::InputStats::kButtonsOnline)},
+                           hal::InputStats::kButtonsOnline, 0u)},
       detents_(0) {}
 
 void Scanner::begin() noexcept {
   const core::Tick now = clock_.now();
   for (Source& s : pads_buttons_) {
+    s.next_poll = now;
+    s.health_at = now + scan::kHealthUs;
+    s.retry_at = now;
+    if (!s.bus.ready()) {
+      continue;  // a bus with a gate that has not opened (the pad bus): not asked, not failed; service() configures the chip on the first pass after the gate
+    }
     for (unsigned attempt = 0; attempt < scan::kConfigureAttempts && !s.configured; ++attempt) {
       s.configured = s.chip.configure() == I2cResult::Ok;
-      if (!s.configured) {
+      if (s.configured) {
+        s.answered = true;
+      } else {
         ++errors_;
+        count_refusal(s);
         (void)s.bus.recover();
       }
     }
-    s.next_poll = now;
-    s.health_at = now + scan::kHealthUs;
     if (s.configured) {
       s.more = true;  // a key held at power-up is already in the FIFO
     } else {
       s.lost = true;
       s.failures = scan::kConfigureAttempts;
-      s.backoff_us = scan::kBackoffMinUs;
+      s.backoff_us = next_backoff(s);
       s.retry_at = now + s.backoff_us;
     }
   }
@@ -49,6 +57,9 @@ void Scanner::service() noexcept {
 }
 
 void Scanner::service_source(Source& s, bool int_asserted, core::Tick now) noexcept {
+  if (!s.bus.ready()) {
+    return;  // OS-BUG-PADS: the pad bus has not opened (pad_bus.h); the chip is left alone and asked again next pass
+  }
   if (!s.configured) {
     if (core::tick_reached(now, s.retry_at)) {
       configure(s, now);
@@ -69,9 +80,11 @@ void Scanner::service_source(Source& s, bool int_asserted, core::Tick now) noexc
 void Scanner::configure(Source& s, core::Tick now) noexcept {
   const I2cResult r = s.chip.configure();
   if (r != I2cResult::Ok) {
+    count_refusal(s);
     fail(s, now);
     return;
   }
+  s.answered = true;
   if (s.lost && s.failures >= scan::kRecoverAfterFailures) {
     resync_all(s);  // the chip was away for a while: whatever it held or released meanwhile is unknown
   }
@@ -134,8 +147,9 @@ void Scanner::check_config(Source& s, core::Tick now) noexcept {
   s.retry_at = now;
 }
 
-// A transfer failed: the chip may have been reset, so it is configured again before it is trusted; the bus is recovered from the
-// second failure in a row; the next attempt waits for the backoff.
+// A transfer failed: the chip may have been reset, so it is configured again before it is trusted; the bus is asked to recover from the
+// second failure in a row (the pad bus re-initialises its module only when a line or a result says it must, never after a NAK: pad_bus.h);
+// the next attempt waits for the backoff.
 void Scanner::fail(Source& s, core::Tick now) noexcept {
   ++errors_;
   ++s.failures;
@@ -145,9 +159,24 @@ void Scanner::fail(Source& s, core::Tick now) noexcept {
   if (s.failures >= scan::kRecoverAfterFailures) {
     (void)s.bus.recover();
   }
-  s.backoff_us = s.backoff_us == 0u ? scan::kBackoffMinUs
-                                    : (s.backoff_us * 2u < scan::kBackoffMaxUs ? s.backoff_us * 2u : scan::kBackoffMaxUs);
+  s.backoff_us = next_backoff(s);
   s.retry_at = now + s.backoff_us;
+}
+
+void Scanner::count_refusal(Source& s) noexcept {
+  if (!s.answered && s.attempts != 0xFFu) {
+    ++s.attempts;
+  }
+}
+
+// A chip that has never answered and has its own period (the pad scanner: scan::kPadRetryUs) is asked at that period for ever; any other
+// waits the backoff, doubled after each further failure up to the maximum.
+std::uint32_t Scanner::next_backoff(const Source& s) noexcept {
+  if (!s.answered && s.unanswered_retry_us != 0u) {
+    return s.unanswered_retry_us;
+  }
+  return s.backoff_us == 0u ? scan::kBackoffMinUs
+                            : (s.backoff_us * 2u < scan::kBackoffMaxUs ? s.backoff_us * 2u : scan::kBackoffMaxUs);
 }
 
 // The chip's FIFO overflowed, or an event read failed: events were lost. With the overflow mode that is set (tca8418.h kCfgOvrFlowM) a
@@ -255,6 +284,14 @@ bool Scanner::inject(core::InputKind kind, std::uint8_t id, std::int16_t value) 
 }
 
 hal::InputStats Scanner::stats() const noexcept {
+  hal::InputStats s = stats_without_levels();
+  if (pad_bus_ != nullptr) {
+    s.pad_bus = pad_bus_->stats();
+  }
+  return s;
+}
+
+hal::InputStats Scanner::stats_without_levels() const noexcept {
   hal::InputStats s;
   s.dropped = dropped_;
   s.errors = errors_;
@@ -264,6 +301,9 @@ hal::InputStats Scanner::stats() const noexcept {
     if (source.configured) {
       s.online = static_cast<std::uint8_t>(s.online | source.online_bit);
     }
+  }
+  if (pad_bus_ != nullptr) {
+    s.pad_bus = pad_bus_->record();
   }
   return s;
 }

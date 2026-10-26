@@ -17,7 +17,8 @@ enum class Instance : std::uint8_t { I2c0 = 0, I2c2 = 1 };
 inline constexpr unsigned kInstanceCount = 2;
 
 // Where an instance is: its register block, its clock gate (a register of the SIM and a bit of it), its two pins (open drain,
-// external pull-ups) and the pin mux that routes the peripheral to them.
+// external pull-ups), the pin mux that routes the peripheral to them and the glitch filter (I2Cx_FLT[FLT], in bus clocks: spikes up to
+// that width are ignored on SCL and SDA; 0: the register is not written and keeps its reset value, which is how I2C0 has always run).
 struct InstanceFacts {
   std::uintptr_t base;
   std::uintptr_t scgc_register;
@@ -25,10 +26,17 @@ struct InstanceFacts {
   Pin scl;
   Pin sda;
   std::uint8_t mux;
+  std::uint8_t filter;
 };
 
 // I2C0's register block (K66 RM "I2C", base 0x4006_6000; bus clock 90 MHz).
 inline constexpr std::uintptr_t kI2c0Base = 0x40066000u;
+
+// Byte registers of an I2C module beyond F, C1, S and D (RM "I2C memory map": A1 +0, F +1, C1 +2, S +3, D +4, C2 +5, FLT +6). A module
+// with a non-zero `filter` gets C2 = 0 (7-bit addressing, no high drive, no general call: the reset value, written so that nothing
+// earlier leaves it otherwise) and FLT = the filter, both while it is disabled.
+inline constexpr std::uintptr_t kRegC2 = 0x5;
+inline constexpr std::uintptr_t kRegFlt = 0x6;
 
 // The control bus, I2C0: PTD8 / PTD9, ALT2 (board.h kCodecScl, kCodecSda: the SGTL5000, the control-button scanner, the radio). Clock
 // gate SIM_SCGC4[I2C0] (0x40048034 bit 6).
@@ -37,9 +45,12 @@ inline constexpr std::uintptr_t kI2c0Base = 0x40066000u;
 inline constexpr Pin kGridScl = {Port::A, 12};
 inline constexpr Pin kGridSda = {Port::A, 13};
 inline constexpr std::uint8_t kGridMux = 5;
+// OS-BUG-PADS: the grid bus runs with a glitch filter of 4 bus clocks (about 44 ns at 90 MHz); the control bus keeps the reset value 0
+// (no filter), as it has always run.
+inline constexpr std::uint8_t kGridFilter = 4;
 inline constexpr InstanceFacts kInstances[kInstanceCount] = {
-    {kI2c0Base, 0x40048034u, 1u << 6, board::kCodecScl, board::kCodecSda, board::kCodecI2cMux},
-    {0x400E6000u, 0x40048028u, 1u << 6, kGridScl, kGridSda, kGridMux},
+    {kI2c0Base, 0x40048034u, 1u << 6, board::kCodecScl, board::kCodecSda, board::kCodecI2cMux, 0},
+    {0x400E6000u, 0x40048028u, 1u << 6, kGridScl, kGridSda, kGridMux, kGridFilter},
 };
 
 constexpr const InstanceFacts& facts(Instance which) noexcept { return kInstances[static_cast<unsigned>(which)]; }

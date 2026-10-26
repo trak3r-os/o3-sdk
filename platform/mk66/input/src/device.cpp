@@ -55,6 +55,50 @@ void start_encoder() noexcept {
 
 bool line_low(Pin pin) noexcept { return (regs::gpio_pdir(pin) & regs::mask_of(pin)) == 0u; }
 
+// OS-BUG-PADS: the level of a pin, read only, no register written. GPIO_PDIR shows the pin whenever PORTx_PCRn[MUX] is a digital function (K66 Sub-Family Reference Manual, GPIOx_PDIR: "0 pin logic
+// level is logic 0, or is not configured for use by digital function"), the I2C master's ALT5 among them: `diag radio` reads the control bus's PTD8 / PTD9 (ALT2) the same way (capture.cpp).
+bool pin_high(Pin pin) noexcept { return (regs::gpio_pdir(pin) & regs::mask_of(pin)) != 0u; }
+
+// The level of a pin whose mux may still be 0 (disabled: PTA12 / PTA13 before the master takes them), which reads 0 whatever the line does. Only the read right before the master's first
+// initialisation uses it (LineReader::read_before_init): the mux is set to GPIO for the read (an input: the direction bit is not touched, no pull is added) and put back, and the master's
+// initialisation, which follows at once, rewrites both PCRs. A pin on a digital function is read as it is, untouched.
+bool pin_high_unclaimed(Pin pin) noexcept {
+  volatile std::uint32_t& pcr = regs::port_pcr(pin);
+  const std::uint32_t saved = pcr;
+  if (((saved >> regs::kPcrMuxShift) & 7u) != 0u) {
+    return pin_high(pin);
+  }
+  pcr = saved | regs::kPcrMuxGpio;
+  const bool high = pin_high(pin);
+  pcr = saved;
+  return high;
+}
+
+class BoardLines final : public LineReader {
+ public:
+  std::uint8_t read() noexcept override {
+    return static_cast<std::uint8_t>((pin_high(pins::kPadBusScl) ? hal::PadBusStats::kLineScl : 0u) |
+                                     (pin_high(pins::kPadBusSda) ? hal::PadBusStats::kLineSda : 0u) |
+                                     (pin_high(pins::kPadsInt) ? hal::PadBusStats::kLineInt : 0u));
+  }
+  std::uint8_t read_before_init() noexcept override {
+    return static_cast<std::uint8_t>((pin_high_unclaimed(pins::kPadBusScl) ? hal::PadBusStats::kLineScl : 0u) |
+                                     (pin_high_unclaimed(pins::kPadBusSda) ? hal::PadBusStats::kLineSda : 0u) |
+                                     (pin_high(pins::kPadsInt) ? hal::PadBusStats::kLineInt : 0u));  // (INT is a GPIO input since configure_pins)
+  }
+};
+
+BoardLines& lines() noexcept {
+  static BoardLines l;
+  return l;
+}
+
+// The pad bus: the I2C2 master behind its gate, its retry policy and the record of what the two chips on it answered.
+PadBus& pad_bus() noexcept {
+  static PadBus b(i2c::bus(pins::kPadBus), lines(), system_clock());
+  return b;
+}
+
 class BoardHardware final : public ScanHardware {
  public:
   bool pads_int_asserted() noexcept override { return line_low(pins::kPadsInt); }
@@ -72,12 +116,12 @@ InitResult g_last_init;
 }  // namespace
 
 Scanner& scanner() noexcept {
-  static Scanner s(i2c::bus(pins::kPadBus), i2c::bus(pins::kControlBus), hardware(), system_clock());
+  static Scanner s(pad_bus(), i2c::bus(pins::kControlBus), hardware(), system_clock());
   return s;
 }
 
 PadLeds& pad_leds() noexcept {
-  static PadLeds l(i2c::bus(pins::kPadBus), system_clock());
+  static PadLeds l(pad_bus(), system_clock());
   return l;
 }
 
@@ -89,16 +133,17 @@ void service() noexcept { scanner().service(); }
 bool init() noexcept {
   configure_pins();
   start_encoder();
-  (void)i2c::init(pins::kPadBus);      // a bus a slave holds is released here; a chip that still does not answer is the scan's to retry
+  pad_bus().arm(boot::rail_up_ms());   // the pad bus (I2C2) is not touched here: the gate opens a second after the rail and after the audio start, and the scan brings the chips up then (pad_bus.h)
   (void)i2c::init(pins::kControlBus);  // also the codec's bus: re-initialising it is harmless (i2c.cpp)
   Scanner& s = scanner();
-  s.begin();
-  const hal::InputStats stats = s.stats();
-  g_last_init.pads_online = (stats.online & hal::InputStats::kPadsOnline) != 0u;
-  g_last_init.buttons_online = (stats.online & hal::InputStats::kButtonsOnline) != 0u;
-  return g_last_init.pads_online && g_last_init.buttons_online;
+  s.attach_pad_bus(pad_bus());
+  s.begin();                           // the control buttons now (three attempts); the pad scanner is deferred until the gate
+  g_last_init.buttons_online = (s.stats().online & hal::InputStats::kButtonsOnline) != 0u;
+  return g_last_init.buttons_online;
 }
 
 InitResult last_init() noexcept { return g_last_init; }
+
+void audio_started() noexcept { pad_bus().audio_started(); }
 
 }  // namespace o3sdk::platform::mk66::input::device

@@ -30,7 +30,7 @@ mk66_suite(mk66_base_tests platform_mk66_base
 mk66_suite(mk66_display_tests platform_mk66_display mk66_display_*_test.cpp)
 # (mk66_input_hold_test.cpp tests usb/input_hold.h and is in mk66_usb_tests below, so the glob names the others.)
 mk66_suite(mk66_input_tests platform_mk66_input
-  mk66_input_filter_test.cpp mk66_input_leds_test.cpp mk66_input_map_test.cpp mk66_input_pins_test.cpp mk66_input_scanner_test.cpp)
+  mk66_input_filter_test.cpp mk66_input_leds_test.cpp mk66_input_map_test.cpp mk66_input_padbus_test.cpp mk66_input_pins_test.cpp mk66_input_scanner_test.cpp)
 # (mk66_storage_swap_test.cpp drives the firmware upload through the update path's FwService: the storage suite links the update library, which brings storage.)
 mk66_suite(mk66_storage_tests platform_mk66_update mk66_storage_*_test.cpp)
 mk66_suite(mk66_update_tests platform_mk66_update mk66_update_*_test.cpp)

@@ -615,7 +615,7 @@ TEST_CASE("scanner: the encoder reports whole detents with their sign, and keeps
 
 // ---- chips that stop answering ------------------------------------------------------------------------------------------------
 
-TEST_CASE("scanner: a chip that does not answer at boot is retried with a backoff and the other one is not held up") {
+TEST_CASE("scanner: a pad chip that does not answer at boot is retried once a second and the other one is not held up") {
   Rig r;
   r.pad_bus.dead = true;
   r.scanner.begin();
@@ -630,16 +630,71 @@ TEST_CASE("scanner: a chip that does not answer at boot is retried with a backof
   core::InputEvent e;
   MUST(r.scanner.poll(e));
   CHECK(e.id == 3);
-  // the dead bus is tried at most every backoff, not every pass: one second of passes is a handful of transfers
+  // OS-BUG-PADS: a pad chip that has never answered is asked once a second (scan::kPadRetryUs), not at the growing backoff: one second of
+  // passes is the one retry (the configuration stops at its first refused write), four more seconds are four more
   const unsigned before = r.pad_bus.transfers;
   r.passes(1000);
-  CHECK(r.pad_bus.transfers - before <= 12u);
-  CHECK(r.pad_bus.transfers - before >= 3u);
-  // it comes back: configured within the longest backoff
+  CHECK(r.pad_bus.transfers - before == 1u);
+  r.passes(4000);
+  CHECK(r.pad_bus.transfers - before == 5u);
+  CHECK(r.scanner.pads_gave_no_answer());  // three refused tries and never an answer: what blink code 13 shows
+  // it comes back: configured within one retry period
   r.pad_bus.dead = false;
-  r.passes(400);
+  r.passes(1100);
   CHECK(r.pad_chip.configured());
+  CHECK_FALSE(r.scanner.pads_gave_no_answer());
   CHECK(r.scanner.stats().online == (o3sdk::hal::InputStats::kPadsOnline | o3sdk::hal::InputStats::kButtonsOnline));
+}
+
+TEST_CASE("scanner: a control-button chip that never answers keeps the doubling backoff, not the pad chips' once-a-second retry") {
+  // OS-BUG-PADS gave only the pad sources scan::kPadRetryUs while they have never answered; the control buttons (unanswered_retry_us == 0)
+  // still wait 10 ms, doubled after each further failure up to 320 ms, and so are found again quickly when the chip comes back.
+  CHECK(input::scan::kBackoffMinUs == 10'000u);
+  CHECK(input::scan::kBackoffMaxUs == 320'000u);
+  CHECK(input::scan::kPadRetryUs == 1'000'000u);
+  Rig r;
+  r.control_bus.dead = true;
+  const core::Tick t0 = r.clock.now();
+  r.scanner.begin();
+  const o3sdk::hal::InputStats s0 = r.scanner.stats();
+  CHECK(s0.online == o3sdk::hal::InputStats::kPadsOnline);  // only the pads; the buttons never answered
+  CHECK(s0.errors == 3u);                                  // three configuration attempts
+  CHECK(r.control_bus.recovers >= 3u);                     // the bus recovered between them
+  // the pad chip works meanwhile
+  r.pass();
+  r.pad_chip.press(input::key_of_pad(3));
+  r.pass();
+  core::InputEvent e;
+  MUST(r.scanner.poll(e));
+  CHECK(e.kind == core::InputKind::Pad);
+  CHECK(e.id == 3);
+  // the gaps between the asks of the dead chip, from the end of begin(): 10, 20, 40, 80, 160 ms, then 320 ms at the cap. One refused write each
+  const std::uint32_t expect_ms[] = {10, 20, 40, 80, 160, 320, 320, 320};
+  constexpr unsigned kAsks = sizeof(expect_ms) / sizeof(expect_ms[0]);
+  core::Tick last_ask = t0;
+  unsigned seen = r.control_bus.transfers;
+  unsigned asks = 0;
+  for (unsigned pass = 0; pass < 1400 && asks < kAsks; ++pass) {
+    r.pass();
+    if (r.control_bus.transfers != seen) {
+      CHECK(r.control_bus.transfers == seen + 1u);
+      CHECK(core::tick_elapsed(r.clock.now(), last_ask) == expect_ms[asks] * 1000u);
+      seen = r.control_bus.transfers;
+      last_ask = r.clock.now();
+      ++asks;
+    }
+  }
+  CHECK(asks == kAsks);
+  // it comes back: configured within the longest backoff, and a press on it is an event again
+  r.control_bus.dead = false;
+  r.passes(330);
+  CHECK(r.button_chip.configured());
+  CHECK(r.scanner.stats().online == (o3sdk::hal::InputStats::kPadsOnline | o3sdk::hal::InputStats::kButtonsOnline));
+  r.button_chip.press(input::key_of_button(3));
+  r.passes(30);
+  MUST(r.scanner.poll(e));
+  CHECK(e.kind == core::InputKind::Button);
+  CHECK(e.id == 3);
 }
 
 TEST_CASE("scanner: a chip lost for a while comes back with the keys that were held released") {

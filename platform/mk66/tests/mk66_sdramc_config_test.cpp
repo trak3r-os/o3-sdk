@@ -180,7 +180,43 @@ TEST_CASE("mk66 board: the pins that are not part of the SDRAM interface") {
   CHECK(mk66::board::kStatusLedActiveLow);
 }
 
-TEST_CASE("mk66 board: the quiet state the reset sequence drives first") {
+TEST_CASE("mk66 board: the power key is driven first, high, with high drive and a limited slew (OS-BUG-PADS step 3)") {
+  // boot::early_pins() = rail_on() (this pin, this PCR), then kQuietPins in order: the mute key is the first of them. The order itself is code
+  // (boot.cpp), reviewed there; this pins the data it uses. Untested on both units.
+  const std::uint32_t pcr = mk66::board::kSdramPowerPcr;
+  // The K66 port control register's fields, written out again here: PS 0, PE 1, SRE 2, PFE 4, ODE 5, DSE 6, MUX 10:8, LK 15, IRQC 19:16.
+  CHECK(((pcr >> 8) & 7u) == 1u);   // GPIO
+  CHECK(((pcr >> 6) & 1u) == 1u);   // DSE: high drive
+  CHECK(((pcr >> 2) & 1u) == 1u);   // SRE: slew-rate limited
+  CHECK((pcr & ~((7u << 8) | (1u << 6) | (1u << 2))) == 0u);  // no pull, no filter, no open drain, not locked, no interrupt
+  CHECK(pcr == 0x144u);
+  // The key is not one of the quiet pins (those are re-driven by the power-off and the audio tests as a table; the key has its own owners),
+  // and the quiet table still starts with the mute key, LOW: the second pin action of the reset.
+  for (unsigned i = 0; i < mk66::board::kQuietPinCount; ++i) {
+    CHECK_FALSE(mk66::board::kQuietPins[i].pin == mk66::board::kSdramPower);
+  }
+  CHECK(mk66::board::kQuietPins[0].pin == mk66::board::kAudioMute);
+  CHECK_FALSE(mk66::board::kQuietPins[0].high);
+}
+
+TEST_CASE("mk66 board: only the LOW mute key goes before the rail's settle wait, every HIGH quiet pin after it (OS-BUG-PADS)") {
+  // boot::early_pins(): rail_on(), the first kQuietPinsAtOnce entries, the wait, then the rest in table order (the loops are code, boot.cpp;
+  // this pins the data they split on). A HIGH pin driven before the wait would go into a rail that may still be ramping.
+  using mk66::board::kQuietPins;
+  CHECK(mk66::board::kQuietPinsAtOnce == 1u);
+  CHECK(mk66::board::kQuietPinsAtOnce < mk66::board::kQuietPinCount);
+  for (unsigned i = 0; i < mk66::board::kQuietPinsAtOnce && i < mk66::board::kQuietPinCount; ++i) {
+    CHECK_FALSE(kQuietPins[i].high);
+  }
+  // The wait: 2 ms (the review's figure; the rail's real ramp is not measured), counted on the reset clock (20.97 MHz) as boot.cpp
+  // computes it: 41943 cycles, a constant that fits the 32-bit cycle counter's wrap-safe compare.
+  CHECK(mk66::board::kRailSettleUs == 2000u);
+  const std::uint64_t cycles = (std::uint64_t{clock_cfg::kFeiHz} * mk66::board::kRailSettleUs) / 1'000'000u;
+  CHECK(cycles == 41943u);
+  CHECK(cycles < 0x80000000ull);
+}
+
+TEST_CASE("mk66 board: the quiet state the reset sequence drives after the power key") {
   // Teensy pin numbers as port and bit: 54 = PTD15, 55 = PTD11, 24 = PTE26, 67 = PTE27,
   // 33 = PTE24. Written out again here as the independent copy.
   const mk66::Pin cs{mk66::Port::D, 15};
@@ -199,7 +235,7 @@ TEST_CASE("mk66 board: the quiet state the reset sequence drives first") {
   if (mk66::board::kQuietPinCount != 7u) {
     return;
   }
-  // The amplifier mute is first, and is LOW (muted).
+  // The amplifier mute is first of the quiet pins (right after the power key), and is LOW (muted).
   CHECK(kQuietPins[0].pin == mk66::board::kAudioMute);
   CHECK_FALSE(kQuietPins[0].high);
   // Level of each, as driven first.

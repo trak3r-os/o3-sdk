@@ -98,6 +98,13 @@ TEST_CASE("input soc: the I2C instances, FTM2 and the port bits are the values t
       {"I2C0 pin mux", cfg::facts(cfg::Instance::I2c0).mux, 2u, "Teensy 3.6 pin map: pins 47 and 48 at mux 2"},
       {"I2C2 pin mux", cfg::facts(cfg::Instance::I2c2).mux, 5u, "Teensy 3.6 pin map: pins 3 and 4 at mux 5"},
       {"I2C divider (240: 375 kHz)", cfg::kFrequencyDivider, 0x1Fu, "kinetis.h I2C_F_DIV240 = 0x1F"},
+      // OS-BUG-PADS: the grid bus's glitch filter, written at its initialisation (the control bus is left as it has always run).
+      {"I2C C2 offset", static_cast<std::uint32_t>(cfg::kRegC2), 0x5u, "RM I2C memory map: C2 at +5; kinetis.h I2C0_C2 = 0x40066005"},
+      {"I2C FLT offset", static_cast<std::uint32_t>(cfg::kRegFlt), 0x6u, "RM I2C memory map: FLT at +6; kinetis.h I2C0_FLT = 0x40066006"},
+      {"I2C2 C2 address", static_cast<std::uint32_t>(cfg::facts(cfg::Instance::I2c2).base + cfg::kRegC2), 0x400E6005u, "kinetis.h KINETIS_I2C2 + 5"},
+      {"I2C2 FLT address", static_cast<std::uint32_t>(cfg::facts(cfg::Instance::I2c2).base + cfg::kRegFlt), 0x400E6006u, "kinetis.h KINETIS_I2C2 + 6"},
+      {"I2C2 glitch filter (bus clocks)", cfg::facts(cfg::Instance::I2c2).filter, 4u, "OS-BUG-PADS: FLT[3:0] = 4, about 44 ns at the 90 MHz bus clock"},
+      {"I2C0 glitch filter (none)", cfg::facts(cfg::Instance::I2c0).filter, 0u, "the control bus keeps the reset value; init_instance does not write FLT or C2 for it"},
       {"SIM_SCGC3", soc::kScgc3Register, 0x40048030u, "kinetis.h; display/dev_regs.h sim_scgc3"},
       {"SIM_SCGC3 FTM2", soc::kScgc3Ftm2, 0x01000000u, "kinetis.h SIM_SCGC3_FTM2"},
       {"FTM2 base", static_cast<std::uint32_t>(soc::kFtm2Base), 0x400B8000u, "RM FTM2 base; kinetis.h"},
@@ -124,6 +131,15 @@ TEST_CASE("input soc: the I2C instances, FTM2 and the port bits are the values t
   for (const Fact& f : facts) {
     CHECK_MESSAGE(f.ours == f.expected, f.name << ": " << f.cited);
   }
+}
+
+TEST_CASE("input i2c: a glitch filter is the FLT[3:0] field alone, and the grid bus is the only filtered one") {
+  for (unsigned i = 0; i < cfg::kInstanceCount; ++i) {
+    // FLT[7:4] hold the stop-hold enable, the start/stop detect flags (write 1 to clear) and their interrupt enable: the value written must leave them zero.
+    CHECK_MESSAGE(cfg::kInstances[i].filter <= 0x0Fu, "instance " << i);
+  }
+  CHECK(cfg::facts(cfg::Instance::I2c2).filter != 0u);
+  CHECK(cfg::facts(cfg::Instance::I2c0).filter == 0u);
 }
 
 TEST_CASE("input soc: the encoder pull is DOWN, the INT lines pull UP, and no pin config selects an output") {

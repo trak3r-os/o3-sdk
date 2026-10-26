@@ -361,8 +361,9 @@ TEST_CASE("pad leds: a failing bus is retried with a backoff and recovered, then
   CHECK(r.chip.pwm(4) == 255);
 }
 
-TEST_CASE("pad leds: one NAK in the setup starts it again, and the driver is not online until it has run through") {
+TEST_CASE("pad leds: one NAK in the setup of a chip that has answered starts it again after the backoff, and the driver is not online until it has run through") {
   Rig r;
+  r.bus.fail_skip = 1;  // the chip acknowledged the first transfer (and so has answered), the second is the NAK
   r.bus.fail_next = 1;
   r.settle(5);
   CHECK(r.leds.errors() == 1u);
@@ -371,6 +372,39 @@ TEST_CASE("pad leds: one NAK in the setup starts it again, and the driver is not
   r.settle(400);
   CHECK(r.leds.online());
   CHECK(r.chip.normal_operation());
+}
+
+// OS-BUG-PADS: a chip that has never acknowledged anything is asked once a second, not at the backoff of a chip that answered before.
+TEST_CASE("pad leds: a first NAK, before the chip ever answered, waits scan::kPadRetryUs for the next try") {
+  Rig r;
+  r.bus.fail_next = 1;
+  r.settle(5);
+  CHECK(r.leds.errors() == 1u);
+  CHECK_FALSE(r.leds.online());
+  const unsigned transfers = r.bus.transfers;
+  r.clock.advance_ms(30);
+  r.settle(900);  // nearly a second in all: still waiting
+  CHECK(r.bus.transfers == transfers);
+  CHECK_FALSE(r.leds.online());
+  r.clock.advance_ms(200);  // the second is over
+  r.settle(400);
+  CHECK(r.leds.online());
+  CHECK(r.chip.normal_operation());
+  CHECK(r.leds.errors() == 1u);  // one refusal, then it ran through
+}
+
+TEST_CASE("pad leds: a chip that never answers is asked once a second for ever") {
+  Rig r;
+  r.bus.dead = true;
+  r.settle(5);
+  CHECK(r.leds.errors() == 1u);
+  const unsigned transfers = r.bus.transfers;
+  for (unsigned i = 0; i < 5000; ++i) {
+    r.clock.advance_ms(1);
+    r.leds.flush();
+  }
+  CHECK(r.bus.transfers - transfers == 5u);  // one try a second
+  CHECK_FALSE(r.leds.online());
 }
 
 TEST_CASE("pad leds: the staged frame is word aligned") {

@@ -117,7 +117,9 @@ extern "C" void Reset_Handler() {
   regs::scb_cpacr() = regs::scb_cpacr() | regs::kCpacrFullFpu;
   asm volatile("dsb\n\tisb" ::: "memory");
 
-  // 3. Pins that must be safe from the first instruction on. Then the crash context: stage Reset, no module, so that a crash
+  // 3. Pins that must be safe from the first instruction on: the power key PTA24 first, the mute key at once, a bounded wait of
+  //    board::kRailSettleUs on the cycle counter (the rail's ramp is not measured), then the other quiet pins (boot.cpp early_pins,
+  //    OS-BUG-PADS step 3). Then the crash context: stage Reset, no module, so that a crash
   //    this early does not carry the previous run's stage and module (it touches `.noinit` only, no C runtime needed).
   mk66::boot::early_pins();
   mk66::boot::reset_context();

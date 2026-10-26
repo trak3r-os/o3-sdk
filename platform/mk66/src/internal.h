@@ -19,7 +19,7 @@ class Engine;
 namespace o3sdk::platform::mk66::boot {
 
 // ---- boot.cpp: the reset sequence's steps, in the order startup.cpp calls them -------------------------------------
-void early_pins() noexcept;        // port clocks on; audio output muted; status LED an output, off
+void early_pins() noexcept;        // port clocks on; power key (PTA24) high; audio muted at once; ~2 ms wait (board::kRailSettleUs); then the other quiet pins (LED off, FT812 released, MIDI TX idle); starts the cycle counter
 void enable_dwt() noexcept;        // cycle counter running (hal::cycles(), the delays below)
 void init_clocks() noexcept;       // crystal -> HSRUN -> PLL: 180 MHz core, 90 MHz bus and FlexBus. Fails visibly, never hangs.
 void init_interrupts() noexcept;   // NVIC priorities from hal/irq.h, fault handlers enabled, divide-by-zero traps
@@ -60,6 +60,7 @@ std::uint32_t load_context() noexcept;                     // crash::kUnknownCon
 void reset_context() noexcept;                             // stage Reset, no module: the first thing a run does, so a crash that early does not claim the last run's stage
 [[noreturn]] void reset_chip() noexcept;                   // SYSRESETREQ
 std::uint32_t uptime_ms_low() noexcept;                    // clock.cpp: SysTick milliseconds since boot, no lock (fault path)
+std::uint32_t rail_up_ms() noexcept;                       // boot.cpp, OS-BUG-PADS: the uptime (ms) at which the power key (PTA24) went on: 0, early_pins raises it before SysTick starts
 
 }  // namespace o3sdk::platform::mk66::boot
 

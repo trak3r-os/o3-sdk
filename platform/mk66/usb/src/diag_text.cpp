@@ -454,6 +454,48 @@ std::size_t format_input_stats(const hal::InputStats& s, char* out, std::size_t 
   yes_no(t, (s.online & hal::InputStats::kPadsOnline) != 0u).str(", buttons ");
   yes_no(t, (s.online & hal::InputStats::kButtonsOnline) != 0u);
   t.str(" online; dropped ").dec(s.dropped).str(", bus errors ").dec(s.errors).str(", filtered ").dec(s.filtered).str(", resyncs ").dec(s.resyncs).nl();
+  const hal::PadBusStats& bus = s.pad_bus;
+  if (bus.scanner.count != 0u || bus.leds.count != 0u || bus.clears != 0u) {
+    char chips[56];
+    char lines[48];
+    format_pad_bus_chips(bus, chips, sizeof chips);
+    format_pad_bus_lines(bus, lines, sizeof lines);
+    t.str(chips).str("; ").str(lines).nl();
+  }
+  return t.size();
+}
+
+namespace {
+
+Text& probe(Text& t, const char* address, const hal::BusProbe& p) noexcept {
+  return t.str(address).chr(' ').str(hal::bus_result_name(p.first)).chr('/').str(hal::bus_result_name(p.last)).str(" x").dec(p.count);
+}
+
+Text& levels(Text& t, std::uint8_t bits) noexcept {
+  if (bits == hal::BusProbe::kNone) {
+    return t.str("---");
+  }
+  return t.chr((bits & hal::PadBusStats::kLineScl) != 0u ? '1' : '0')
+      .chr((bits & hal::PadBusStats::kLineSda) != 0u ? '1' : '0')
+      .chr((bits & hal::PadBusStats::kLineInt) != 0u ? '1' : '0');
+}
+
+}  // namespace
+
+std::size_t format_pad_bus_chips(const hal::PadBusStats& s, char* out, std::size_t cap) noexcept {
+  Text t(out, cap);
+  probe(t, "pads 34", s.scanner).chr(' ');
+  probe(t, "74", s.leds);
+  return t.size();
+}
+
+std::size_t format_pad_bus_lines(const hal::PadBusStats& s, char* out, std::size_t cap) noexcept {
+  Text t(out, cap);
+  t.str("pads clr ").dec(s.clears).chr(' ');
+  t.str(s.clear == hal::PadBusStats::kClearReleased ? "rel" : (s.clear == hal::PadBusStats::kClearHeld ? "HELD" : "--"));
+  t.str(", lines ");
+  levels(t, s.lines_first).chr('>');
+  levels(t, s.lines_now);
   return t.size();
 }
 

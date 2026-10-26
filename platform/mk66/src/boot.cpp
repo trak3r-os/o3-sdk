@@ -60,8 +60,9 @@ bool wait_until(Predicate done) noexcept {
 }
 
 // Drives a pin as a GPIO output at `high`: level first, then the direction, so the pin never glitches the other way.
-void gpio_output(Pin pin, bool high) noexcept {
-  regs::port_pcr(pin) = regs::kPcrMuxGpio;
+// `pcr` is the whole port control word (the default is the plain GPIO function, mux 1).
+void gpio_output(Pin pin, bool high, std::uint32_t pcr = regs::kPcrMuxGpio) noexcept {
+  regs::port_pcr(pin) = pcr;
   if (high) {
     regs::gpio_psor(pin) = regs::mask_of(pin);
   } else {
@@ -69,6 +70,11 @@ void gpio_output(Pin pin, bool high) noexcept {
   }
   regs::gpio_pddr(pin) = regs::gpio_pddr(pin) | regs::mask_of(pin);
 }
+
+// The SDRAM power key (PTA24) HIGH with its PCR (board.h kSdramPowerPcr: high drive, slew-rate limited). Idempotent: the reset
+// sequence drives it first (early_pins) and the SDRAM bring-up drives it again, the same value on an already high pin, no glitch.
+static_assert((board::kSdramPowerPcr & (7u << regs::kPcrMuxShift)) == regs::kPcrMuxGpio, "the power key's PCR must select the GPIO function");
+void rail_on() noexcept { gpio_output(board::kSdramPower, true, board::kSdramPowerPcr); }
 
 std::uint32_t sdram_words() noexcept { return mem::kSdramSize / 4u; }
 
@@ -96,10 +102,32 @@ void led_set(bool on) noexcept {
 
 void early_pins() noexcept {
   regs::sim_scgc5() = regs::sim_scgc5() | regs::kScgc5Ports;
-  // The board's quiet state (board.h kQuietPins), amplifier mute first: each pin is driven to its quiet level
-  // first, so the amplifier never hears this image and nothing floats that matters.
-  for (const board::QuietPin& quiet : board::kQuietPins) {
-    gpio_output(quiet.pin, quiet.high);
+  // OS-BUG-PADS step 3. The power key (PTA24, board.h kSdramPower) is the first pin driven and the amplifier mute (the first
+  // kQuietPinsAtOnce entries of kQuietPins: LOW, which cannot back-power anything) follows at once. Then a bounded wait, so that the
+  // HIGH quiet pins below (FT812 chip select and PD#, the status LED, MIDI TX) are not driven into a rail that is still ramping.
+  // How long the rail takes is not measured (open question, board.h), so kRailSettleUs is a compromise, not a guarantee.
+  rail_on();
+  static_assert(board::kQuietPinsAtOnce == 1 && board::kQuietPinCount > board::kQuietPinsAtOnce && board::kQuietPins[0].pin == board::kAudioMute &&
+                    !board::kQuietPins[0].high,
+                "the pins driven before the rail wait are the amplifier mute, LOW");
+  for (unsigned i = 0; i < board::kQuietPinsAtOnce; ++i) {
+    gpio_output(board::kQuietPins[i].pin, board::kQuietPins[i].high);
+  }
+  // The wait, on the cycle counter at the reset clock. Not delay_us(): its core clock variable lives in .data, which the C runtime
+  // has not copied yet (startup.cpp step 4). The cycle count is a constant; the loop is bounded by it (each poll is at least a cycle)
+  // even if the counter does not run, and the counter is restarted by enable_dwt() in step 5 as before.
+  constexpr std::uint32_t kRailSettleCycles = static_cast<std::uint32_t>((std::uint64_t{clock::kFeiHz} * board::kRailSettleUs) / 1'000'000u);
+  enable_dwt();
+  const std::uint32_t start = regs::dwt_cyccnt();
+  for (std::uint32_t spin = 0; spin < kRailSettleCycles; ++spin) {
+    if (static_cast<std::uint32_t>(regs::dwt_cyccnt() - start) >= kRailSettleCycles) {
+      break;
+    }
+  }
+  // The rest of the board's quiet state (board.h kQuietPins), in table order: each pin is driven to its quiet level first, so the
+  // amplifier never hears this image and nothing that matters floats once the rail has had its time.
+  for (unsigned i = board::kQuietPinsAtOnce; i < board::kQuietPinCount; ++i) {
+    gpio_output(board::kQuietPins[i].pin, board::kQuietPins[i].high);
   }
 }
 
@@ -127,6 +155,12 @@ IdleHook g_idle;
 }  // namespace
 
 void set_idle_hook(IdleHook::Function hook) noexcept { g_idle.set(hook); }
+
+// OS-BUG-PADS: the SysTick uptime (ms) at which the board's power key (PTA24, the SDRAM's; whether it feeds the pad boards is open) was switched on, read by the
+// input bring-up (the pad bus waits a second after it). Step 3 raises the key in early_pins, the first pin action of the reset, before SysTick
+// starts (the uptime clock counts from start_systick), so the stamp is 0: the real time since the rail is a little longer than the uptime, which
+// only makes the wait at least a second. A constant, no variable.
+std::uint32_t rail_up_ms() noexcept { return 0; }
 
 void delay_ms(std::uint32_t ms) noexcept {
   for (std::uint32_t i = 0; i < ms; ++i) {
@@ -246,8 +280,9 @@ void start_systick() noexcept {
 // built on a memory that does not work.
 void init_sdram() noexcept {
   using namespace regs;
-  // Power key high (output high, then a 10 ms wait): the part gets its supply.
-  gpio_output(board::kSdramPower, true);
+  // Power key high (already so since early_pins, the same value again), then the 10 ms wait: the part has its supply.
+  // (rail_up_ms() is not set here any more: the rail came up in early_pins, see there.)
+  rail_on();
   delay_ms(sdram::kPowerUpDelayMs);
 
   // Clocks to the FlexBus and the SDRAM controller.

@@ -26,13 +26,26 @@ inline constexpr Pin kStatusLed = {Port::C, 19};
 inline constexpr bool kStatusLedActiveLow = true;
 
 // Audio output mute key: Teensy pin 21 = PTD6 (PORTD bit 6). LOW mutes the output, HIGH unmutes it. This image drives it LOW
-// as its very first action at boot. This image makes no sound and never unmutes.
+// as the second pin action of the reset sequence, right after the power key below and before the rail's settle wait (OS-BUG-PADS
+// step 3; before that change it was the first). A LOW level cannot back-power anything, so it does not wait for the rail.
+// This image makes no sound and never unmutes.
 inline constexpr Pin kAudioMute = {Port::D, 6};
 
 // SDRAM power key: Teensy pin 80 = PTA24 (RAM control, pin 75 of the chip). HIGH
 // powers the SDRAM, LOW removes its power: SDRAM contents do not survive a
 // power cycle, ADR 0013 D7.
+// OS-BUG-PADS step 3: it is the FIRST pin the reset sequence drives (boot::early_pins), HIGH, with the PCR below; the mute key goes
+// LOW at once, then the sequence waits kRailSettleUs, and only then drives the other quiet pins, so that the HIGH ones (FT812 chip
+// select and PD#, the status LED, MIDI TX) are not driven into a rail that is still ramping. Whether the key also feeds more than the
+// SDRAM (the pad chips of the later board revision, Control 4.0 / Grid 2.0) is an open research question, and so is how long its
+// rail takes to come up: the wait is a bounded compromise, not a measured ramp, and it protects nothing if the key does not
+// feed those parts. The order and the wait are harmless if it does not. Untested on both units.
 inline constexpr Pin kSdramPower = {Port::A, 24};
+// The wait between the mute key and the remaining quiet pins, in microseconds, timed on the cycle counter at the reset clock (clock::kFeiHz).
+inline constexpr std::uint32_t kRailSettleUs = 2000u;
+// Its PCR: pin mux 1 (GPIO, bits 10:8), DSE high drive (bit 6), SRE slew-rate limited (bit 2). The plain GPIO value 0x100 was used
+// before OS-BUG-PADS step 3. Pinned by mk66_sdramc_config_test.cpp (the fields are decoded there from the register layout).
+inline constexpr std::uint32_t kSdramPowerPcr = 0x144u;
 
 // FT812 display controller (chip select 54 = PTD15, power-down 55 = PTD11: bits
 // 15 and 11 of PORTD). Both are driven HIGH at boot: chip select released, power-down line released. (A reset of the chip is
@@ -87,13 +100,16 @@ inline constexpr Pin kCodecScl = {Port::D, 8};   // I2C0_SCL
 inline constexpr Pin kCodecSda = {Port::D, 9};   // I2C0_SDA
 inline constexpr std::uint8_t kCodecI2cAddress = 0x0A;  // SGTL5000 with CTRL_ADR0_CS low
 
-// What `boot::early_pins()` drives before anything else, in this order, and the level. Everything here is a quiet state
-// (each described above); the amplifier mute comes first. The SDRAM power key is not in the list: it is
-// raised by the SDRAM bring-up.
+// What `boot::early_pins()` drives after the SDRAM power key (kSdramPower, HIGH, kSdramPowerPcr: the first pin action of the reset),
+// in this order, and the level. Everything here is a quiet state (each described above); the amplifier mute comes first. The first
+// kQuietPinsAtOnce entries (the mute) are driven right after the power key; then the sequence waits kRailSettleUs, then drives
+// the rest in table order. The SDRAM power key is not in the list: it is driven before the list and held by the SDRAM bring-up
+// (which drives it again, the same value).
 struct QuietPin {
   Pin pin;
   bool high;
 };
+inline constexpr unsigned kQuietPinsAtOnce = 1;
 inline constexpr QuietPin kQuietPins[] = {
     {kAudioMute, false},          // amplifier muted
     {kStatusLed, kStatusLedActiveLow},  // LED off (idles HIGH for an active-low LED)

@@ -26,6 +26,7 @@
 #include <o3sdk/platform/mk66/input/i2c_bus.h>
 #include <o3sdk/platform/mk66/input/input_map.h>
 #include <o3sdk/platform/mk66/input/key_filter.h>
+#include <o3sdk/platform/mk66/input/pad_bus.h>
 #include <o3sdk/platform/mk66/input/scan_config.h>
 #include <o3sdk/platform/mk66/input/tca8418.h>
 
@@ -54,13 +55,27 @@ class Scanner final : public hal::Input {
   Scanner(I2cBus& pad_bus, I2cBus& control_bus, ScanHardware& hardware, const hal::Clock& clock) noexcept;
 
   // Configures both scanners (a few attempts each, with a bus recovery in between) and takes the encoder's first count. A chip that
-  // does not answer is retried by service() with a backoff; the other one is not held up. Call once, before the first service().
+  // does not answer is retried by service() with a backoff; the other one is not held up. A chip on a bus that is not ready() (the pad bus
+  // before its gate, pad_bus.h) is not asked at all: service() configures it on the first pass after the gate opens. Call once, before the
+  // first service().
   void begin() noexcept;
   // One pass: drain what is due, debounce, publish to the queue. Bounded (see above). Main loop only.
   void service() noexcept;
 
+  // OS-BUG-PADS: the pad bus whose record `stats()` carries (the same object the pad chips talk through). Optional; read only.
+  void attach_pad_bus(const PadBus& bus) noexcept { pad_bus_ = &bus; }
+
+  // OS-BUG-PADS: the pad key scanner has refused kPadBootAttempts configurations since the pad bus opened and has never answered. The main loop shows
+  // blink code 13 for it, once. Retries go on (every kPadRetryUs, for ever), and a later answer brings the pads online without a restart.
+  bool pads_gave_no_answer() const noexcept {
+    const Source& s = pads_buttons_[kPads];
+    return !s.answered && s.attempts >= scan::kPadBootAttempts;
+  }
+
   bool poll(core::InputEvent& out) noexcept override { return queue_.pop(out); }
   hal::InputStats stats() const noexcept override;
+  // OS-BUG-PADS: stats() without reading the pad bus's pin levels (pad_bus.lines_now is kNone). Cheap enough for every pass of the main loop; the watch asks for stats() when something changed.
+  hal::InputStats stats_without_levels() const noexcept;
 
   // OS-HIL (`key`, `pad`, `enc` of the diag console): one event from outside the matrices, into the SAME queue the scan fills and stamped by the same rule (never
   // earlier than the last event), so the app cannot tell it from a finger. Button / Pad: value 1.. = pressed (a pad's velocity), 0 = released; Encoder: the signed detent
@@ -78,13 +93,16 @@ class Scanner final : public hal::Input {
 
   // One key scanner chip: its protocol, its filter and its health.
   struct Source {
-    Source(I2cBus& b, std::uint8_t address, core::InputKind k, std::uint8_t (*m)(unsigned), std::uint8_t bit) noexcept
-        : bus(b), chip(b, address), kind(k), map(m), online_bit(bit) {}
+    Source(I2cBus& b, std::uint8_t address, core::InputKind k, std::uint8_t (*m)(unsigned), std::uint8_t bit, std::uint32_t unanswered_us) noexcept
+        : bus(b), chip(b, address), kind(k), map(m), online_bit(bit), unanswered_retry_us(unanswered_us) {}
     I2cBus& bus;
     Tca8418 chip;
     core::InputKind kind;
     std::uint8_t (*map)(unsigned key);  // matrix key -> pad index / button code, kNoKey if unwired
     std::uint8_t online_bit;
+    std::uint32_t unanswered_retry_us;  // OS-BUG-PADS: while the chip has never answered, the wait between two attempts (0: the growing backoff)
+    bool answered = false;              // the chip has acknowledged its configuration at least once
+    std::uint8_t attempts = 0;          // configurations refused while it had not answered (saturating)
     KeyFilter<64> filter{scan::kKeyLockoutUs};
     bool configured = false;
     bool more = false;            // the FIFO is known to hold more than the last drain took
@@ -103,6 +121,8 @@ class Scanner final : public hal::Input {
   void drain(Source& s, core::Tick now) noexcept;
   void check_config(Source& s, core::Tick now) noexcept;
   void fail(Source& s, core::Tick now) noexcept;
+  static void count_refusal(Source& s) noexcept;               // a configuration the chip refused before it ever answered
+  static std::uint32_t next_backoff(const Source& s) noexcept;  // the wait after the failure just counted in s.failures
   void resync_lost_events(Source& s) noexcept;
   void resync_all(Source& s) noexcept;
   void publish(Source& s) noexcept;
@@ -112,6 +132,7 @@ class Scanner final : public hal::Input {
 
   ScanHardware& hw_;
   const hal::Clock& clock_;
+  const PadBus* pad_bus_ = nullptr;
   Source pads_buttons_[2];  // [kPads], [kButtons]
   DetentAccumulator detents_;
   int pending_detents_ = 0;  // turns counted and not yet accepted by a full queue

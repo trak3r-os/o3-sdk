@@ -41,4 +41,11 @@ inline constexpr unsigned kMaxEventsPerDrain = 4;
 // Boot: the chip configuration is attempted this many times, with a bus recovery in between.
 inline constexpr unsigned kConfigureAttempts = 3;
 
+// OS-BUG-PADS: the pad chips (the key scanner and the LED driver on the pad bus) that have not answered once are asked again this often, for ever
+// and in the background: one bounded transaction a second, in place of the growing backoff above, which a chip that answered before keeps. A board
+// revision whose pad chips come up late (or not before something else has happened) is found by the retry, and a dead one costs almost nothing.
+inline constexpr std::uint32_t kPadRetryUs = 1'000'000;
+// The pad key scanner that has refused this many configurations since the pad bus opened, and never answered, is reported (blink code 13, once).
+inline constexpr unsigned kPadBootAttempts = 3;
+
 }  // namespace o3sdk::platform::mk66::input::scan
