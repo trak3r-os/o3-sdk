@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # -I drops the s
 import shell_edit_check  # noqa: E402
 
 EDIT_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
-CODE_DIRS = ("kit/", "units/", "apps/", "platform/", "sim/", "tests/", "tools/", "cmake/")
+CODE_DIRS = ("kit/", "units/", "apps/", "app/", "platform/", "sim/", "tests/", "tools/", "cmake/")  # app/: an app repository's own code
 CODE_FILES = ("CMakeLists.txt",)
 CODE_EXT = (".c", ".cc", ".cpp", ".h", ".hh", ".hpp", ".py", ".txt", ".cmake", ".ld", ".in", ".s", ".S", ".sh")
 LOG = os.path.join("Testing", "Temporary", "LastTest.log")

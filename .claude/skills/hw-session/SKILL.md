@@ -5,7 +5,7 @@ description: Prepare and later ingest one batched hardware session - gate-checke
 
 # Hardware session (the maintainer with the unit)
 
-Time on the unit is the scarcest resource: collect everything that needs the device and ask once. There is no console, no bench and no HIL harness yet (milestone M2b), so the unit's only outputs are the screen (the header shows the render's CPU %), the pad LEDs, the sound and the crash record / blink code. Plan the checks around those.
+Time on the unit is the scarcest resource: collect everything that needs the device and ask once. Since 2026-10-25 an image with the USB console (the default) can be installed and read from the computer: `o3console.py` (`version state cpu log usb leds`, `--shot`, `key pad enc` injection, `--put` and `--update`) and `o3audio.py` (`docs/hw/2026-10-25-usb.md`, `platform/mk66/tools/README.md`). What stays with a person at the unit: the screen by eye, real presses, the LEDs by eye, the analogue outputs by ear, long soaks, a provoked crash and the blink codes. Plan the console checks first and the hands-and-eyes ones around them.
 
 ## Prepare
 1. **Collect** the unit-only checks: the "Done when" item 3 of `docs/M2-PLAN.md` while M2 is open (kit boot screen, then HELLO; pads, buttons and encoder drive it; LEDs follow; sound on the outputs; CPU % in the header; a crash leaves a record and a blink code); the hardware-only lines in the engineers' and reviewers' reports ("needs the unit"); estimates that now need a measurement (a unit's CPU cost, DESIGN-303 open decisions marked "measure on the unit first"). Each check gets: id, steps on the device, expected result, what to capture.

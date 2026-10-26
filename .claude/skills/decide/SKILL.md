@@ -8,7 +8,7 @@ description: Settle an architecture or product decision for o3sdk (the unit API,
 Decisions are the bottleneck: make them explicit, cheap to review, and batch them for the maintainer.
 
 ## Where it is recorded
-- An **app's product decision** (the ACC/SLIDE side, pattern length, one voice or two) is an item of that app's "Open decisions" section (`docs/DESIGN-303.md`, section 8): the maintainer answers, you record the answer in place with the date and his words.
+- An **app's product decision** (the ACC/SLIDE side, pattern length, one voice or two) is an item of that app's "Open decisions" section (its design document's "Open decisions": o3-303's `docs/DESIGN-303.md`, section 8, in its own repository): the maintainer answers, you record the answer in place with the date and his words.
 - A **cross-cutting kit decision** (a change to `Unit`, a HAL contract, the engine topology, memory placement, what an image contains) is an ADR: `docs/adr/NNNN-<slug>.md` (next free number; create the directory on first use), status *Proposed*.
 
 ## Steps

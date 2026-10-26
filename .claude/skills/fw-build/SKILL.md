@@ -5,7 +5,7 @@ description: Build o3sdk for the host or the MK66 and check warnings, tests, sim
 
 # Build and test
 
-There is no CI script: these commands are the whole pipeline. Everything runs under `nice -n 10` and `-j4` at most. Nothing here flashes or copies an image anywhere.
+These commands are the pipeline; `tools/ci.sh <host|mk66>` runs the same checks from a fresh directory in one command (configure, build, warnings count, ctest, image sizes, software doubles; `tools/remote_ci.sh` on the build machine, `docs/ci.md`). Everything runs under `nice -n 10` and `-j4` at most. Nothing here flashes or copies an image anywhere. In an app repository the simulator is `build-host/app/<id>_sim` and the image `build-mk66/app/<id>.ptf`; the kit is `../o3-sdk`.
 
 ```sh
 # host: the kit, units, apps, the simulator and the host tests
@@ -30,7 +30,7 @@ nice -n 10 cmake --build build-mk66 -j4
 - Layering is link-time: a header of a layer you did not list in `DEPENDS` does not resolve. Every public header also compiles alone (`<layer>_hdrcheck` targets, part of the default build).
 
 ## Reading the result
-- Exit 0 means built, warning-free and every test passed. Quote the summary line ("100% tests passed, 0 tests failed out of N") and the simulator's summary line (frames drawn and refused, the largest display list, audio blocks, dropped events and commands; exit 1 = scenario failed or a frame did not fit).
+- Exit 0 means built, warning-free and every test passed. Quote the summary line ("100% tests passed out of N"; older CMake adds ", 0 tests failed") and the simulator's summary line (frames drawn and refused, the largest display list, audio blocks, dropped events and commands; exit 1 = scenario failed or a frame did not fit).
 - Sizes: the cross build prints `size -t` after each archive. For an image, `arm-none-eabi-size -A <app>.elf` and the link's region summary; the limits are strict (a "region overflowed" error is a budget failure). Quote bytes and the delta against the previous build or the figure in the plan.
 - Software doubles must not appear: `arm-none-eabi-nm -u <archive> | grep __aeabi_d` over the kit, unit and platform archives prints nothing; on a linked `.elf`, `arm-none-eabi-nm <elf> | grep ' __aeabi_d'` likewise (the toolchain's `bin/` is the directory in `-DARM_GNU_ROOT`).
 - A host test is not hardware verification: name the unit check that remains.
