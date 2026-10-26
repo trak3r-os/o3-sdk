@@ -26,6 +26,7 @@ add_subdirectory(audio)
 add_subdirectory(storage)
 add_subdirectory(update)
 add_subdirectory(usb)
+add_subdirectory(midi)
 add_subdirectory(console)
 
 if(NOT O3SDK_CROSS AND O3SDK_BUILD_TESTS)
