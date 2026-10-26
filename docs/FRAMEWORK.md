@@ -1,6 +1,9 @@
 # o3sdk: the framework guide
 
-Status: milestone M1 (2026-10-25). Everything here is host-tested; nothing has run on a Tracker yet.
+Status (2026-10-25): the kit, the simulator and the MK66 platform exist, and HELLO and o3-303 were installed and run on a unit over USB the
+same day (`docs/hw/2026-10-25-usb.md`). Section 10 says, per capability, what is verified on the unit, what is done on the host only and what is
+planned. This file is the reference; `docs/NEW-APP.md` is the path for a new instrument (zero to an image on the unit), `AGENTS.md` the guide
+for coding agents.
 
 ## 1. The idea
 
@@ -13,19 +16,20 @@ lives inside the limits it is given. o3sdk turns that around. **An app is the pr
 - Everything is linked statically. There is no ABI to freeze: the compiler optimises across the app and the kit, and hot code goes to
   SRAM with an attribute. Loadable units from the SD card can come later, when someone needs to ship a unit without a rebuild.
 - Switching apps means flashing another `.ptf` through the bootloader's update path (track3r-os `platform/mk66/README.md`, "What the
-  bootloader needs"). An app launcher in the kit is a later item.
+  bootloader needs"): today over the USB console (`o3console.py --put`, then `--update`; verified on the unit, `docs/NEW-APP.md` section 11)
+  or by card. The on-screen firmware switcher and an app launcher are planned (section 10).
 
 ## 2. Layers
 
 ```
 APP      apps/<name>      one image: which devices it has, its screens, its global keys          HELLO, o3-303
-DEVICE   (inside apps)    unit(s) + their sequencer + their screen + their keymap, reusable      (M3: Acid, M4: Hooks)
+DEVICE   (inside apps)    a convention, not a kit type: the unit(s), sequencer, screen and keymap that belong together
 UNIT     units/<name>     DSP only: a parameter table and process(); the API follows CLAP        SYNTH, DELAY
-KIT      kit/             core · hal · eve · ui · dsp · app; platform/ and sim/ implement the HAL
+KIT      kit/             core · hal · eve · ui · dsp · app · usb; platform/ and sim/ implement the HAL
 ```
 
-Link dependencies enforce the layering: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`; a unit depends on `dsp` only; an
-app on `app` and its units. `platform/<name>` and `sim` implement the HAL contracts (`kit/hal`) and run an app.
+Link dependencies enforce the layering: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- usb` (the USB device library, linked by
+the MK66 platform and never by an app); a unit depends on `dsp` only; an app on `app` and its units. `platform/<name>` and `sim` implement the HAL contracts (`kit/hal`) and run an app.
 
 | Library | What it holds |
 |---|---|
@@ -34,7 +38,8 @@ app on `app` and its units. `platform/<name>` and `sim` implement the HAL contra
 | `eve` | FT81x display-list encoders and the frame builder. |
 | `ui` | the immediate-mode renderer, colour tokens and themes, the four faces, the components (strip, badge, soft keys, bar, meter), plots. |
 | `dsp` | the unit contract, events, the transport, the engine. |
-| `app` | the panel, inputs, screens, pad LEDs, the F-key + encoder convention, shared widgets, the runtime. |
+| `app` | the panel, inputs, screens, pad LEDs, the F-key + encoder convention, shared widgets, the runtime, the console's hooks (`diag.h`). |
+| `usb` | the portable USB device library: descriptors, control pipe, CDC, the `diag` shell, the log ring, USB audio. The MK66 platform links it; an app reaches the console only through `App::describe_state` and `diag_commands`. |
 
 ## 3. Units
 
@@ -63,8 +68,11 @@ class Unit {
 - **Rules** in `process()`: no heap, no blocking, no file or SD I/O, no printf, bounded loops, no `double` (the build treats unsuffixed
   floating constants as float; the cross build is checked for the software double helpers).
 
-Writing one: copy `units/synth` (an instrument) or `units/delay` (an effect), give it a table and a `process()`, add
-`o3sdk_unit(<name> SOURCES …)`, and test it on the host against the engine (`tests/units_test.cpp`).
+Writing one: `docs/NEW-APP.md` section 3 is the step list, and `templates/app/units/voice/` the smallest worked unit (an instrument with
+three parameters, a click-free level, a test against the engine). `units/synth` (an instrument) and `units/delay` (an effect with SDRAM
+buffers) are the kit's; o3-303's `units/tb303` is a port with an oracle test. Add `o3sdk_unit(<name> SOURCES …)` and test the unit on the
+host against the engine (`tests/units_test.cpp`). **`core::kParamSmooth` is advisory**: no kit code reads it, so a value that clicks when it
+jumps is smoothed inside the unit (`dsp/smooth.h`).
 
 ### Porting a plugin
 
@@ -128,7 +136,7 @@ shows the first screen. Every app defines exactly one entry point:
 o3sdk::app::App& o3sdk_app() noexcept { static MyApp app; return app; }
 ```
 
-- `App::input()` sees every input first (global keys: Play, the screen buttons), except Config, which is the kit's (below); `true`
+- `App::input()` sees every input first (global keys: Play, the screen buttons; Config too today, and will not once the kit's system Config exists, below); `true`
   consumes it.
 - A **screen** (`screen.h`) is what the display, the pads, the soft keys and the encoder mean right now: `input()`, `update()`,
   `draw()` into the content area, `soft_keys()` (labels, the hot key, dimmed keys; a Shift row if it wants one), `leds()` (a whole frame
@@ -160,14 +168,16 @@ line, `void run(const DiagArgs&, DiagOut&) noexcept`); the console takes at most
 is a kit command's, or carries a word of the update path (`update flash boot ...`) is skipped and logged. Handlers run in the main loop
 and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the example.
 
-### The system Config (the kit's, in every app)
+### The system Config (the kit's, in every app) — planned, not built
 
-The maintainer's decision (2026-10-25): the kit brings the machine up (clocks, SDRAM, display, input, LEDs, audio, the crash record)
-and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is the app's. "Por defecto
-config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
+**Status: planned (M2b, after the remote-install round: the console is the way to change image for now); none of this exists yet.** Today the Config button reaches `App::input()` like any other
+button (HELLO and o3-303 use it for a theme toggle); a new app does not give it a meaning, so that nothing breaks when the system screen lands.
+What follows is the maintainer's decision (2026-10-25) for what it will be: the kit brings the machine up (clocks, SDRAM, display, input,
+LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
+the app's. "Por defecto config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
 
-- The runtime takes Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back.
-  The app never sees the Config button.
+- The runtime will take Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back.
+  The app will never see the Config button.
 - The kit's sections come first, the same in every app: FIRMWARE (the firmware switcher, section 10), AUDIO (USB audio out and the
   outputs), MIDI (channel, clock in and out, DIN and USB), DISPLAY (theme, brightness), INFO (the app's name and version, the build id,
   the render's load, the last crash record). A section whose driver does not exist yet is not shown.
@@ -178,9 +188,8 @@ config lleva el flasheo de otro firmware": any engine built on o3sdk can change 
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
   in every app, so any unit can always be switched to another engine and tell what it runs (confirmed by the maintainer, 2026-10-25).
-- The kit stores its settings and the app's Config values on the card (M2b); until then they last until power-off.
-
-Status: planned, the first slice of M2b. HELLO and o3-303 move their own use of Config (a theme toggle) into it.
+- The kit will store its settings and the app's Config values on the card (M2b); until then they last until power-off. HELLO and o3-303 move
+  their own use of Config (a theme toggle) into it when it lands.
 
 ### Pad LEDs (`pad_leds.h`)
 
@@ -206,7 +215,9 @@ soft-key row, as one display list (2048 words at most; HELLO peaks under 900).
 `sim/README.md`. Each app gets `<name>_sim`: the app on the host with a fake clock, scripted input, the FT81x interpreter for the
 screen, a drawing of the pads with their LED levels, and the audio as a WAV. Scenarios are text (`apps/hello/scenarios/tour.txt`). Use
 it for every screen change and every sound change before a unit sees it; it is not a model of a particular FT812, and its timing is
-not the unit's.
+not the unit's. Its PNGs are 800 x 697 (the screen above the pads); the unit's `o3console.py --shot` is the 800 x 480 screen alone. The
+`--out` directory must exist. The same app runs in tests through `sim::Harness` (`sim/include/o3sdk/sim/harness.h`: `start`, `run_ms`,
+`press`, `pad_down`, `turn`, `audio`, `leds`, `runtime().state_line()`), as `templates/app/tests/app_test.cpp` and `tests/sim_hello_test.cpp` do.
 
 ## 8. Rules
 
@@ -216,14 +227,16 @@ not the unit's.
 - Warning-free under `-Wall -Wextra -Wshadow -Wconversion -Wdouble-promotion`, with `-Werror`.
 - Pure logic (DSP maths, sequencer arithmetic, formats) gets host tests.
 
-## 9. What M2 needs (the MK66 platform)
+## 9. The MK66 platform
 
-From track3r-os `platform/mk66`, adapted: the reset sequence (clocks, SDRAM, caches, crash record), the FT812 driver, the two TCA8418
-key scanners and the encoder, the IS31FL3731 pad LEDs, the I2S + eDMA + SGTL5000 audio pipeline behind `hal::audio::Device`, the
-linker script (with `.sdram_bss` placed in the SDRAM, NOLOAD, cleared before the constructors), and a `main` that runs `Runtime`. Then
-the SD card (FatFs), USB (CDC console, MIDI) and the firmware update hand-over. The cut point is `platform/mk66/src/app_main.cpp`,
-which wires the tracker; the drivers below it are reusable, but the platform library links the tracker's audio engine today
-(`audio/diag.h`, `stem_map.h`, `pipeline.h`), and those ties are what M2 replaces with `hal::audio::BlockCallback` and the kit's engine.
+`platform/mk66`, ported from track3r-os `platform/mk66` (whose README is the long account of every hardware fact and its source): the reset
+sequence (clocks, SDRAM, caches, the crash record), the FT812 driver, the two TCA8418 key scanners and the encoder, the IS31FL3731 pad LEDs,
+the I2S + eDMA + SGTL5000 audio pipeline behind `hal::audio::Device`, the linker script (with `.sdram_bss` placed in the SDRAM, NOLOAD, cleared
+before the constructors), the USB console, USB audio, the SD card read path and the firmware update path (M2b-R), and `src/main.cpp`, the
+composition root that wires them to `Runtime`. `o3sdk_app()` links an app into an image (`<name>.elf`, `.hex`, `.bin`, `.ptf` behind the
+static checks; ctests `<name>_image`, `_flashconfig`, `_ramfunc`, `_usb`). Its boot path, memory map, blink codes, options and what is verified:
+`platform/mk66/README.md`; the host tools and static checks: `platform/mk66/tools/README.md`; the plans and who owned what: `docs/M2-PLAN.md`,
+`docs/M2B-PLAN.md`. The drivers are the ones the unit proved in track3r-os and stay as they are there (`AGENTS.md`, "Rules").
 
 ## 10. Capabilities: the whole hardware, for every app
 
@@ -231,23 +244,34 @@ The kit's promise is that an app can use everything the unit has, through a cont
 machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driver in `platform/mk66`, a contract in `kit/hal`
 (or the kit layer that owns it), an API an app reaches through its `Context`, and a fake on the host so the simulator runs it.
 
-| Capability | Hardware | Contract | What an app gets | Milestone |
+**State, as of 2026-10-25.** Three values, and nothing in between:
+
+- **Verified on the unit**: run on a Tracker and read back or recorded over USB by the test session (`docs/hw/2026-10-25-usb.md`: HELLO and
+  o3-303, installed over the console). Where a person is still needed (eyes, hands, ears) the row says so: that part is not verified.
+- **Host only**: code and host tests exist (against fakes); it has not run on a unit, or the unit has not exercised it.
+- **Planned**: not built, or a contract header with no driver.
+
+| Capability | Hardware | Contract | What an app gets | State |
 |---|---|---|---|---|
-| Display | FT812, 800×480, SPI + eDMA | `hal::Display` | screens, widgets, themes (`kit/ui`, `kit/app`) | M1 kit, M2 driver (implemented in M2, unit test pending) |
-| Buttons, pads, encoder | 2× TCA8418, FTM2 quadrature | `hal::Input` | `Input` events, `Panel` state, F-key + encoder (`ParamKeys`) | M1 kit, M2 driver (implemented in M2, unit test pending) |
-| Pad LEDs | IS31FL3731, 48 monochrome | `hal::Leds` | `PadLeds` per screen | M1 kit, M2 driver (implemented in M2, unit test pending) |
-| Audio out | SGTL5000, I2S0 + eDMA, 44.1 kHz | `hal::audio::Device` | the engine: units, slots, sends, master, transport | M1 engine, M2 driver (implemented in M2, unit test pending) |
-| CPU and memory | M4F 180 MHz, 256 KiB SRAM, 16 MiB SDRAM | `hal::cycles`, `O3SDK_BIG` | the render's load in the header; SDRAM buffers; later an SDRAM arena | M2 |
-| Crash record, status LED | noinit SRAM, PTC19 | platform | a blink code and the record of the last crash | M2 (implemented in M2, unit test pending) |
-| USB console and update | USB0 device, CDC | `hal::firmware` | `diag` over USB: version, crash, CPU, screenshot; a `.ptf` sent from the computer (no card swapping) | M2b |
-| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module (verified on the unit 2026-10-12) | kit system screen, every app | Config, FIRMWARE: every app built on o3-sdk lists the `.ptf` images in a card folder (name, version and build id from each image), checks the chosen one (the static image checks), confirms with a hold, stages it in `Firmware/` and asks the bootloader to flash it, so the unit changes engine by changing image; the official image too, if it is on the card. The maintainer's requirement, 2026-10-25 | M2b |
-| USB audio | USB0 device, audio class 1 (isochronous, 44.1 kHz, 16-bit stereo), composite with the console and USB MIDI | kit, every app | the master output streamed to the computer as a class-compliant audio interface (no driver); input from the computer later. The same chip as the Teensy 3.6, whose USB audio works on USB0; not yet tried on the Tracker. The maintainer's requirement for o3-303, 2026-10-25 | M2b |
-| SD card | SDHC, FAT (FatFs) | `hal::storage` | files: patterns, kits, samples, settings; atomic saves | M2b |
-| MIDI | DIN in/out (UART), USB MIDI | kit `midi` (new) | notes and CCs into the engine as events, clock in/out on the transport, MIDI learn | M2b |
-| Power switch | PTC3 | `core::PowerHold` | a clean shutdown: silent, dark, card released | M2b |
-| Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (already), input select and gain, recording into SDRAM | M2c (the RX ring runs in M2, reaches the callback with line in selected; unit test pending; recording and input select are M2c) |
-| FM radio | Si4703 into the codec input | `hal::capture` | tune, seek, RDS; a source to sample | M2c |
-| USB audio | USB0 isochronous (UAC2) | platform | the unit as a sound card: stems to the computer, return to the engine | later |
+| Display | FT812, 800×480, SPI + eDMA | `hal::Display` | screens, widgets, themes (`kit/ui`, `kit/app`) | **Verified on the unit** (M2): boots, draws every frame, `--shot` returns a clean 800×480 picture. Not looked at by eye; the shot's colours differ from the simulator's (the theme or the shot's colour order: open); the FT812's per-line fill rate is untested (`apps/fillrate`) |
+| Buttons, pads, encoder | 2× TCA8418, FTM2 quadrature | `hal::Input` | `Input` events, `Panel` state, F-key + encoder (`ParamKeys`) | **Verified on the unit** as far as the console reaches (M2): no blink code at boot (13 would be a scanner that did not answer), no ghost input in 10 s, injected `key`/`pad`/`enc` drive the app. Real presses by hand: not verified |
+| Pad LEDs | IS31FL3731, 48 monochrome | `hal::Leds` | `PadLeds` per screen | **Verified on the unit** by readback (M2): online, 0 errors, in sync, a pad's level follows its press. By eye: not verified |
+| Audio out | SGTL5000, I2S0 + eDMA, 44.1 kHz | `hal::audio::Device` | the engine: units, slots, sends, master, transport | **Verified on the unit** (M2): the pipeline runs with 0 underruns and 0 faults over a 10-minute soak; the engine's master was recorded over USB (HELLO a pad at 523 Hz; o3-303 playing). The analogue outputs by ear: not verified |
+| CPU and memory | M4F 180 MHz, 256 KiB SRAM, 16 MiB SDRAM | `hal::cycles`, `O3SDK_BIG` | the render's load in the header and `o3console.py cpu`; SDRAM buffers; later an SDRAM arena | **Verified on the unit** (M2): HELLO renders 19.6 % of a block at idle; o3-303 at most 39.8 % playing; SDRAM test and `.sdram_bss` buffers run |
+| Crash record, status LED | noinit SRAM, PTC19 | platform | a blink code and the record of the last crash | **Host only** (M2): the images boot without a blink code, but a crash or a code was never provoked on the unit, so the record's survival of a reset is not verified |
+| USB console and update | USB0 device, CDC | `hal::firmware` | `diag` over USB: version, state, cpu, log, leds, screenshot, input injection, `fw put/arm/update`; an app adds its own state and commands (`App::describe_state`, `diag_commands`) | **Verified on the unit** (M2b-R): images put, installed and read back; the way back to track3r-os v1.0.0 in about 45 s |
+| USB audio out | USB0 device, isochronous, 44.1 kHz, 16-bit, composite with the console | platform, every app | the master streamed to the computer as a class-compliant interface (channels 7-8 of 8; 1-6 are silent, kept for an app's stems) | **Verified on the unit** (M2b-R): AUDIO set, profile 8, 8 out / 2 in, configured, recorded. Stems beyond the master and the computer's return stream into the engine: planned |
+| SD card | SDHC, FAT (FatFs) | `hal::storage` (read-only) | the card is mounted and read; `fw put` writes `Firmware/` | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **An app has no file API**: `hal::storage` is read-only by contract, `hal::storage_write` is declared with no implementation, and the update path is the card's only writer (`check_writers.py`). Saving patterns, kits and settings: **planned** |
+| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, confirms with a hold, stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Planned**. What exists is the same path driven from the computer (USB console row), which is verified on the unit |
+| System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Planned** |
+| MIDI | DIN in/out (UART), USB MIDI | kit `midi` (new) | notes and CCs into the engine as events, clock in/out on the transport, MIDI learn | **Planned** (M2b): the USB descriptors keep the MIDI interfaces and the port is silent; DIN is not ported |
+| Power switch | PTC3 | `core::PowerHold` | a clean shutdown: silent, dark, card released | **Planned** (M2b): the pure logic is host-tested; no driver |
+| Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (`in_l`, `in_r` of a unit; `BlockContext::input_l()` of a hook), input select and gain, recording into SDRAM | **Host only** for the input planes (the RX ring runs in the pipeline; line in on the unit is not verified). Input select, gain, microphone and recording: **planned** (M2c): `hal::capture` is a contract with no driver |
+| FM radio | Si4703 into the codec input | `hal::capture` | tune, seek, RDS; a source to sample | **Planned** (M2c): contract only |
+| Computer return stream | USB0 isochronous (UAC2) | platform | the computer's audio as an engine source | **Planned** (later) |
+
+Not a hardware capability but part of the promise: the **engine** (units, slots, sends, the transport, clocked hooks) is verified on the unit
+through HELLO's riff and o3-303's 303 voice and sequencer; the **simulator** and the **gate** (`fw-gate-check`) are host tools.
 
 Rules for adding one: the contract is designed from what an app needs (not from the register map), it has a host fake and a
 simulator command, and an app that does not use a capability pays nothing in the render and as little flash as possible.
@@ -255,7 +279,9 @@ simulator command, and an app that does not use a capability pays nothing in the
 ## 11. Using o3sdk from another project
 
 An app can live in its own repository (o3-303 is the first) and use o3sdk as a sibling checkout: no copy, and no edit of o3sdk from
-there. The project's top-level `CMakeLists.txt`:
+there. **Start from the template**: `python3 -I tools/new_app.py <dir> <app-id>` writes a repository laid out like o3-303's (`templates/app`:
+CMake, one app and screen, one unit, tests, a scenario, `CLAUDE.md`, `AGENTS.md`, the CI scripts and the agent harness); `docs/NEW-APP.md` is the
+tutorial. What the template's top-level `CMakeLists.txt` does, in its essentials:
 
 ```cmake
 cmake_minimum_required(VERSION 3.24)
@@ -279,7 +305,10 @@ add_subdirectory(tests)                             # o3sdk_test_suite(...), hos
 - **The helpers** (`cmake/O3sdkTargets.cmake`) run in the caller's directory, so sources and `include/` are the project's own:
   `o3sdk_unit`, `o3sdk_library`, `o3sdk_app` (the library `app_<name>`; on the host the simulator `<name>_sim` in the app's binary
   directory; on mk66 `<name>.elf`, `.hex`, `.bin`, `.ptf` there too, and the ctests `<name>_image`, `<name>_flashconfig`,
-  `<name>_ramfunc`) and `o3sdk_test_suite` (doctest: one executable, one ctest per `*_test.cpp`).
+  `<name>_ramfunc` and, for an image with the console, `<name>_usb`) and `o3sdk_test_suite` (doctest: one executable, one ctest per
+  `*_test.cpp`; a test that names `o3sdk_app()` links the app library whole, `DEPENDS "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<name>>"`).
+- **Where o3sdk is**: `-DO3SDK_DIR=<path>` or the environment variable `O3SDK_DIR` (the template reads it; `tools/ci.sh` too), default the
+  sibling `../o3-sdk`. A cache entry keeps the value of the first configure.
 - **A path inside o3sdk** is `O3SDK_ROOT` (set by the platform file), never `PROJECT_SOURCE_DIR`, which belongs to the project that
   calls the function. A variable a helper reads must be a cache entry (`O3SDK_PYTHON`, `O3SDK_SINGLE_PRECISION_LAYERS`).
 - **The build identity** in the image (`gen_build_info.cmake`) is two git states: the kit's (o3sdk's own directory, wherever the project

@@ -2,7 +2,7 @@
 
 Status: in progress, 2026-10-25. The first round of M2b. The maintainer: "quiero que flashee en remoto, como haciamos en track3r-os"
 ... "traete eso al sdk". The plan was drafted by a read-only exploration of both trees (the m2b-plan agent) and accepted by the
-integrator; the decisions are at the end. M2 itself has not run on the unit yet (`docs/hw/2026-10-25.md`, prepared, not run).
+integrator; the decisions are at the end. Since then M2b-R has run on the unit: HELLO and o3-303 were installed and read back over USB (`docs/hw/2026-10-25-usb.md`); the card session (`docs/hw/2026-10-25.md`) is still prepared, not run.
 
 ## Goal
 

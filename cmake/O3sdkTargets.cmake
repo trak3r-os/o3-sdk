@@ -65,8 +65,9 @@ endfunction()
 
 # o3sdk_unit(<name> [SOURCES <src>...] [DEPENDS <lib>...])
 #
-# A unit: DSP only, against kit/dsp (docs/FRAMEWORK.md, "Units"). The library is `unit_<name>`; its headers are included as
-# <o3sdk/units/<name>/x.h>. Units follow the single-precision rule and are built without errno for the maths functions.
+# A unit: DSP only, against kit/dsp (docs/FRAMEWORK.md, "Units"). The library is `unit_<name>`; the header prefix is the caller's own
+# `include/` layout: the kit's units use <o3sdk/units/<name>/x.h>, a project's own units its own prefix (<myapp/units/<name>/x.h>,
+# templates/app). Units follow the single-precision rule and are built without errno for the maths functions.
 function(o3sdk_unit name)
   cmake_parse_arguments(ARG "" "" "SOURCES;DEPENDS" ${ARGN})
   set(target unit_${name})

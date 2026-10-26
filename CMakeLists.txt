@@ -74,3 +74,7 @@ endif()
 if(NOT O3SDK_CROSS AND O3SDK_BUILD_TESTS)
   add_subdirectory(tests)
 endif()
+# The app template (templates/app, docs/NEW-APP.md) is instantiated and built like a user would, host and mk66 (label `template`).
+if(O3SDK_BUILD_TESTS)
+  add_subdirectory(templates)
+endif()

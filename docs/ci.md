@@ -51,3 +51,15 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
 - ccache is this CI's own, `<root>/ccache` (5 GB): the other CI's cache is full, evicts constantly and is not ours to write.
 - A new machine: `git init --bare` the two repositories, copy `tools/o3sdkci.sh` to `<root>/`, unpack the toolchain into
   `<root>/toolchains/` (or name it in `o3sdkci.conf`), and set `O3SDK_REMOTE_CI` in each checkout's `.claude/settings.local.json`.
+
+## The release gate: `tools/gate.py <app>`
+
+CI checks the tree; the gate checks one **image** before the maintainer sees it (skill `fw-gate-check`, `docs/NEW-APP.md` section 10). The same file
+is in o3-sdk and in an app repository. `python3 -I tools/gate.py <app> --host-build <host build dir>` builds the image twice from scratch into
+`build-gate-a` and `build-gate-b`, checks that neither build warns, overflows a region or leaves an undefined reference, that the two HEX files are
+byte-identical, that the app's image ctests (`ctest -L mk66`: `_image`, `_flashconfig`, `_ramfunc`, `_usb`) pass, that no software double is in the
+image or the archives, and that the host ctest of the same code passes; it writes `build-gate-a/CANDIDATE.md` (identity of both trees, every check,
+the link's region usage, sizes and SHA-256 of `.hex`, `.ptf`, `.bin`, `.elf`, the label `version` will print on the unit, what the host cannot prove).
+Verdicts: `CANDIDATE`, `BENCH BUILD` (a tree has changed tracked files or no commit, so the image says `-dirty` or `unknown` and cannot be traced:
+the maintainer commits first) or `FAIL` (exit 1). `--skip-host` leaves the host ctest out and says so in the manifest. It takes about 40 s for a
+small app; it never flashes, writes to a card or touches a unit, and writes only in its two build directories.

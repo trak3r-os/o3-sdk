@@ -11,6 +11,10 @@ build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole r
 The executable is built in the binary directory of the CMake directory that calls `o3sdk_app()` (`build-host/apps/hello/` here;
 `build-host/app/o3_303_sim` in the sibling o3-303, which builds o3sdk from outside).
 
+The `--out` directory must exist (`mkdir -p`). In a test the same app runs through `sim::Harness` (`include/o3sdk/sim/harness.h`: `start`, `run_ms`, `press`,
+`pad_down`, `turn`, `audio`, `leds`, `runtime().state_line()`; `templates/app/tests/app_test.cpp` is the smallest example). `o3sdk_app()` returns
+one object, so every Harness of a test run drives the same app: reset your members in `setup()`.
+
 It prints each file it writes and a summary line (frames drawn and refused, the largest display list, audio blocks, dropped events
 and commands). Exit 1 when the scenario fails or a frame did not fit, so a script can gate on it.
 

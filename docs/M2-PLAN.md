@@ -1,6 +1,6 @@
 # M2: the MK66 platform (plan, interfaces and ownership)
 
-Status: built and statically gated, 2026-10-25; criterion 3 (the maintainer's unit test) has not happened, so M2 is not done.
+Status: built and statically gated, 2026-10-25; HELLO and o3-303 then ran on a unit over USB (`docs/hw/2026-10-25-usb.md`), but criterion 3's eyes-and-hands items (the card session, `docs/hw/2026-10-25.md`) have not happened, so M2 is not done.
 The working brief for the parallel slices of milestone M2; it becomes `platform/mk66/README.md` when M2 ends.
 
 ## Goal

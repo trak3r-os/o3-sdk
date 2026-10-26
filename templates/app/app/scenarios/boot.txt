@@ -1,0 +1,24 @@
+# The first screen, a chord on the pads, the encoder on the decay, an octave down: screens as PNG, the audio as a WAV.
+# Commands: sim/README.md in o3-sdk. Run: <build dir>/app/@APP_ID@_sim --scenario app/scenarios/boot.txt --out <dir>   (the dir must exist)
+wait 300
+snap 01_boot
+record on
+paddown 36
+paddown 40
+paddown 43
+wait 300
+snap 02_chord
+padup 36
+padup 40
+padup 43
+wait 200
+tap f2
+turn 20
+snap 03_decay
+tap f3
+turn -10
+tap left
+pad 37 200
+wait 300
+snap 04_octave_down
+wav boot

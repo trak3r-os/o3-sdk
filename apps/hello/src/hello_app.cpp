@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
-// HELLO: the smallest whole app on the kit (docs/FRAMEWORK.md, "Apps"), and the template for a new one.
+// HELLO: an example whole app on the kit (docs/FRAMEWORK.md, "Apps"). A new app starts from templates/app (tools/new_app.py, docs/NEW-APP.md).
 //
 //   pads          a chromatic keyboard, one octave a row (bottom row C3..B3); LEFT / RIGHT move it an octave
 //   F1..F8        point the encoder at a value (tap: latched; hold + turn: for a moment; two held: both move)

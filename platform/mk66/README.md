@@ -113,16 +113,31 @@ The status LED is `PTC19`, active low (`blink.h`):
 
 ## Verified here, and what only the unit can show
 
-Verified by the build and the host: warning-free compile with the kit's strict flags; the pure parts' tests (`mk66_base_tests`); the
-linker script generated from and checked against `mem_map.h`; the image checks above; no `__aeabi_d*` in the image or any archive;
-the reset sequence's loops stay loops (disassembly). Not verified by anything here: that the image boots at all, the clock tree, the
-SDRAM bring-up and test time, the crash record surviving a reset, the code cache, `.sdram_bss` being zero when the constructors run,
-and the drivers' behaviour on the hardware (the host tests run their logic against fakes). Those are the maintainer's unit test.
+Verified by the build and the host: warning-free compile with the kit's strict flags; the pure parts' tests (`mk66_base_tests` and the
+other suites); the linker script generated from and checked against `mem_map.h`; the image checks above; no `__aeabi_d*` in the image or any
+archive; the reset sequence's loops stay loops (disassembly).
+
+**Verified on a unit** (2026-10-25, the test session over USB: `docs/hw/2026-10-25-usb.md`; HELLO and o3-303): the image boots and runs with no
+blink code, so the clock tree, the SDRAM bring-up and test, `.sdram_bss` being zero when the constructors run and the drivers' start-up work
+there; the display draws (`--shot`), the pad LEDs follow, no key scanner fault is reported at boot and injected input drives the app, audio runs with no underrun
+or fault over a 10-minute soak and the master reaches the computer over USB audio, the render's load reads 19.6 % (HELLO at idle) to 39.8 %
+(o3-303 playing), and an image is put, installed and replaced over the USB console, the way back to track3r-os included.
+
+**Not verified by anything yet**: whatever needs eyes, hands or ears (the screen itself, real presses, the LEDs by eye, sound on the analogue
+outputs), the crash record surviving a reset and the blink codes (never provoked), the CPU cost of the USB interrupt with and without a host
+streaming, and the FT812's per-line fill rate (`apps/fillrate`). Those are the
+card session with the maintainer (`docs/hw/2026-10-25.md`).
 
 ## Getting an image onto the unit
 
-Never by us, and never by a debug probe or an uploader: only the maintainer installs an image, by the card. The `.ptf` goes alone in
-`Firmware/` on the card and the hidden reset button flashes it (track3r-os `docs/manual/install.md`: the bootloader flashes the first
-`.ptf` in `Firmware/`, and the official update menu lists only names starting with `PolyendTracker`). USB, the SD card driver and the
-firmware update over USB are milestone M2b: an image built with the console (the default) takes a `.ptf` over USB (`o3console.py --put`, then `--update`; `tools/`), after
-`fw-gate-check` and with the maintainer's go (`docs/M2B-PLAN.md` section 6, the unit procedure).
+Only through a documented update path, after `fw-gate-check` and with the maintainer's go (`CLAUDE.md`, "Hard rules"); never by a debug probe or an
+uploader.
+
+- **By the USB console** (the default image has one: `O3SDK_MK66_CONSOLE=ON`): `o3console.py --put <app>.ptf --name <name>.ptf`, then `--update <name>.ptf
+  --crc <crc> --yes-update`; about 15 s, and the way back is the same command on the image already on the card (`tools/README.md`, "Putting and
+  starting a firmware image"; the step by step is `docs/NEW-APP.md` section 11). It needs a unit that already runs an image with the console
+  (track3r-os v1.0.0 or an o3sdk image). An image built without the console (`O3SDK_MK66_CONSOLE=OFF`, the skeleton) cannot be installed or read
+  this way: the `<app>_usb` ctest checks that the USB vector and the console are in the image.
+- **By the card**: the `.ptf` alone in `Firmware/` on the card and the hidden reset button flashes it (track3r-os `docs/manual/install.md`: the
+  bootloader flashes the first `.ptf` in `Firmware/`, and the official update menu lists only names starting with `PolyendTracker`). This is the
+  only way into a unit that runs neither, and the way out of one that does not boot: keep a known-good image as the first `.ptf` of `Firmware/`.

@@ -1,0 +1,14 @@
+build*/
+.cache/
+compile_commands.json
+__pycache__/
+*.pyc
+# images and recordings are build products, never in git
+*.ptf
+*.hex
+*.elf
+*.bin
+*.wav
+.claude/settings.local.json
+.claude/worktrees/
+.claude/scheduled_tasks.lock
