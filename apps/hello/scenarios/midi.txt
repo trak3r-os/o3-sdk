@@ -1,0 +1,71 @@
+# MIDI on HELLO: notes into its synth through the app's route (frame-accurate), the MIDI section of the system Config, and the riff (a clocked hook
+# of the engine) following a MIDI master's clock with no change of its own.
+#
+#   build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out <dir>
+#
+# The simulator gives the app a fake MIDI device because the scenario has midi and clock lines (platform/host/fake_midi.h): the notes come in on DIN
+# and USB, the master is an ideal generator. Run without --firmware-dir: the Config then opens on its first section, MIDI.
+wait 100
+snap 00_app
+record on
+
+# Notes. HELLO routes its synth to the user's channel, omni until the user picks one: channel 1 on DIN, channel 3 on USB.
+midi din 90 30 64
+wait 300
+midi din 80 30 00
+wait 300
+midi usb 92 40 5a
+wait 300
+midi usb 82 40 00
+wait 300
+# A chord with running status, released together.
+midi din 90 30 64 34 64 37 64
+wait 400
+midi din 80 30 00 34 00 37 00
+wait 300
+wav 01_notes
+
+# The MIDI section of the system Config: IN CHANNEL 3, a note on channel 1 is now nobody's and a note on channel 3 plays.
+tap config
+wait 50
+snap 02_midi_section
+turn 3
+snap 03_in_channel_3
+tap config
+midi din 90 30 64
+wait 300
+midi din 80 30 00
+wait 200
+midi din 92 30 64
+wait 300
+midi din 82 30 00
+wait 300
+wav 02_channel_filter
+
+# FOLLOW on (the sixth row), then a master at 140 BPM: HELLO's tempo and its riff follow it, Stop stops them, Continue at beat 8 resumes.
+tap config
+wait 50
+tap down
+tap down
+tap down
+tap down
+tap down
+tap f1
+snap 04_follow_on
+tap config
+clock 140 start
+wait 1500
+snap 05_master_playing
+clock 140 stop
+wait 300
+snap 06_master_stopped
+clock 128 continue 8
+wait 1500
+snap 07_continued_at_128
+# The master is switched off: the clock is flywheeled for 48 clocks, then the transport stops and HELLO's own clock is back.
+clock off
+wait 700
+snap 08_master_quiet
+wait 1200
+snap 09_master_gone
+wav 03_follow

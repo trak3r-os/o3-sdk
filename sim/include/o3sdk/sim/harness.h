@@ -16,6 +16,7 @@
 #include <o3sdk/hal/firmware.h>
 #include <o3sdk/hal/leds.h>
 #include <o3sdk/platform/host/fake_firmware.h>
+#include <o3sdk/platform/host/fake_midi.h>
 #include <o3sdk/platform/host/fakes.h>
 #include <o3sdk/sim/eve_raster.h>
 #include <o3sdk/sim/raster_display.h>
@@ -51,9 +52,10 @@ class FakeLeds final : public hal::Leds {
 
 class Harness {
  public:
-  // `firmware`: the update path the system Config screen lists (a platform::host::FakeFirmwareSink; null: no FIRMWARE section). It must
+  // `firmware`: the update path the system Config screen lists (a platform::host::FakeFirmwareSink; null: no FIRMWARE section). `midi`: the
+  // MIDI device of the platform (a platform::host::FakeMidi; null: none, no MIDI section, the runtime as it was before MIDI). Both must
   // outlive the harness.
-  explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr);
+  explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr, platform::host::FakeMidi* midi = nullptr);
   ~Harness();
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
@@ -87,6 +89,11 @@ class Harness {
   const std::vector<std::int16_t>& audio() const { return audio_; }
   bool write_wav(const std::string& path) const;
 
+  // The fake MIDI device the harness was given (null without one), and the timeline sample "now" is (the samples due at the engine's rate by
+  // the simulated time): what a scripted `midi` line is stamped with, so it lands in the block that renders next.
+  platform::host::FakeMidi* midi() { return midi_; }
+  std::uint64_t due_samples() const;
+
   app::Runtime& runtime() { return *runtime_; }
   dsp::Engine& engine() { return *engine_; }
   const EveRaster& raster() const { return *raster_; }
@@ -100,6 +107,7 @@ class Harness {
   void render_due();
 
   app::App& app_;
+  platform::host::FakeMidi* midi_;
   std::unique_ptr<EveRaster> raster_;
   std::unique_ptr<RasterDisplay> display_;
   platform::host::FakeInput input_;

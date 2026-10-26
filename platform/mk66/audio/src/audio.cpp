@@ -158,6 +158,7 @@ class Mk66Audio final : public haudio::Device {
   Result start(const haudio::BlockCallback& render) noexcept override;
   bool unmute() noexcept override;
   void mute() noexcept override;
+  void stop() noexcept;  // OS-POWER P1: the audio path is stopped for good (the unit powers off or restarts): see below
   bool outputs_enabled() const noexcept override { return enabled_; }
 
  private:
@@ -338,11 +339,36 @@ void Mk66Audio::mute() noexcept {
   }
 }
 
+// OS-POWER P1 (docs/specs/OS-POWER.md 4.1 A2, 4.6): the one stop of the audio path. There was none: stop_hardware() ran only when start() failed, and mute() leaves the I2S and the eDMA running.
+// The codec first, click-free by construction (sgtl5000.h run_stop: the DAC through its own soft ramp, the 50 ms of it, then the amplifier key LOW, then the outputs and the DAC muted and the
+// analogue stage powered down), then the hardware: the I2S transmitter and receiver, the two eDMA channels, the two interrupt lines (a render block in flight has finished: this is the main
+// thread, and a render that has not started is not pended again). Main thread only; it blocks for about 70 ms (the I2C writes and the ramp), the caller keeps the display serviced.
+// Idempotent, and plain when the path never started (the boot disk mode, a failed bring-up: the key is already LOW and nothing runs). It never touches the block callback, the DSP or the voices.
+// The caller has set the power-off latch (appimg::power_off_latched) BEFORE this: with the I2S stopped the block counter stands still, which the audio poll of main.cpp would call a stall, and
+// nothing may reopen the outputs (open_wanted).
+void Mk66Audio::stop() noexcept {
+  enabled_ = false;
+  if (!started_) {
+    amplifier_muted();  // the path never started: nothing plays, the key is only made sure LOW
+    return;
+  }
+  // Started: the key is NOT lowered here. run_stop soft-mutes the DAC and waits the ramp out first, the key falls on silence (spec 4.1 A2: key-first can click).
+  (void)sgtl5000::run_stop([this](const sgtl5000::Step& step) { return codec_write(step.reg, step.value); }, [] { amplifier_muted(); },
+                           [](std::uint32_t ms) {
+                             if (ms != 0u) {
+                               boot::delay_ms(ms);
+                             }
+                           });
+  stop_hardware();
+  started_ = false;
+}
+
 Mk66Audio g_device;
 
 }  // namespace
 
 hal::audio::Device& audio_device() noexcept { return g_device; }
+void audio_stop() noexcept { g_device.stop(); }
 const audio::AudioStatus& audio_status() noexcept { return o3sdk_audio_pipeline.status(); }
 void audio_cpu_reset() noexcept { o3sdk_audio_pipeline.reset_peaks(); }
 void audio_arm_starve_guard() noexcept { o3sdk_audio_pipeline.arm_guard(); }

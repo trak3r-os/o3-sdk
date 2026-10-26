@@ -11,7 +11,8 @@
 // across a sixteenth.
 //
 // A sequencer (a clocked hook, engine.h) asks where a tick falls inside the current block with frame_at(), or walks its grid
-// with for_each_step(). Both are pure functions of the Transport.
+// with for_each_step(). Both are pure functions of the Transport. They do not care whose transport it is: with a MIDI master followed
+// (Engine::follow, `following`) the position and the increment are the master's, and a hook's steps land on the master's grid.
 
 #include <cstdint>
 
@@ -32,6 +33,7 @@ struct Transport {
   std::uint64_t pos = 0;          // Q32.32 ticks at frame 0 of this block (0 while stopped)
   std::uint64_t inc = 0;          // Q32.32 ticks per sample at this tempo
   std::uint32_t frames = 0;       // frames in this block
+  bool following = false;         // the transport is a MIDI master's (Engine::follow): tempo, inc and pos are its; a hook changes nothing
 
   float tempo_bpm() const noexcept { return static_cast<float>(tempo_mbpm) * 0.001f; }
   // Q32.32 position at the block's last frame. A frame reaches the positions after the previous frame's, up to its own: the block

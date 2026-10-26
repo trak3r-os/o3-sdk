@@ -90,6 +90,8 @@ bool BlockContext::set_mix(unsigned slot, MixField field, float value) noexcept 
   return true;
 }
 
+bool BlockContext::send_midi(const core::MidiMessage& m) noexcept { return engine_ != nullptr && engine_->queue_midi(m); }
+
 float BlockContext::mix(unsigned slot, MixField field) const noexcept {
   if (engine_ == nullptr || slot >= kMaxSlots || static_cast<unsigned>(field) >= kMixFieldCount) {
     return 0.0f;
@@ -118,6 +120,10 @@ Engine::Engine() noexcept {
   }
   transport_.tempo_mbpm = tempo_main_;
   transport_.inc = ticks_per_sample_q32(tempo_main_);
+  own_tempo_ = tempo_main_;
+  own_inc_ = transport_.inc;
+  inc_min_ = ticks_per_sample_q32(kMinTempoMilliBpm);
+  inc_max_ = ticks_per_sample_q32(kMaxTempoMilliBpm);
   ctx_.engine_ = this;
   ctx_.transport_ = &transport_;
 }
@@ -392,6 +398,11 @@ bool Engine::set_master_level(float level) noexcept {
 }
 
 bool Engine::play() noexcept {
+  if (following()) {  // the master's transport is not ours to start: the device starts the run on its next clock
+    request_ = core::TransportRequest::Play;
+    return true;
+  }
+  released_seen_ = released_.load(std::memory_order_relaxed);
   playing_main_ = true;
   Command c{};
   c.op = Op::Play;
@@ -399,6 +410,11 @@ bool Engine::play() noexcept {
 }
 
 bool Engine::stop() noexcept {
+  if (following()) {
+    request_ = core::TransportRequest::Stop;
+    return true;
+  }
+  released_seen_ = released_.load(std::memory_order_relaxed);
   playing_main_ = false;
   Command c{};
   c.op = Op::Stop;
@@ -411,6 +427,14 @@ bool Engine::set_tempo(std::uint32_t tempo_mbpm) noexcept {
   c.op = Op::Tempo;
   c.arg = tempo_main_;
   return push(c);
+}
+
+bool Engine::playing() const noexcept {
+  if (following()) {
+    return followed_playing_.load(std::memory_order_relaxed);
+  }
+  // (a master that was let go stopped the transport: what the main loop asked for before it is void until its next play() or stop())
+  return playing_main_ && released_.load(std::memory_order_relaxed) == released_seen_;
 }
 
 EngineStats Engine::stats() const noexcept {
@@ -429,6 +453,30 @@ EngineStats Engine::stats() const noexcept {
 }
 
 // ---- Render -----------------------------------------------------------------------------------------------------------------
+
+bool Engine::queue_midi(const core::MidiMessage& m) noexcept {
+  if (midi_out_n_ >= kMaxMidiOut) {
+    ++dropped_midi_;
+    return false;
+  }
+  midi_out_[midi_out_n_++] = m;
+  return true;
+}
+
+bool Engine::inject(UnitId unit, const Event& e) noexcept {
+  if (unit >= unit_count_) {
+    return false;
+  }
+  if (injected_[unit] >= kMaxInjectPerUnit) {
+    ++dropped_events_;
+    return false;
+  }
+  if (!queue_event(unit, e)) {
+    return false;
+  }
+  ++injected_[unit];
+  return true;
+}
 
 bool Engine::queue_event(UnitId unit, const Event& e) noexcept {
   if (unit >= unit_count_) {
@@ -479,23 +527,78 @@ void Engine::drain() noexcept {
         master_level_ = c.value;
         break;
       case Op::Play:
-        transport_.playing = true;
-        transport_.started = true;
-        transport_.pos = 0;
-        transport_.stopped = false;
+        if (!followed_) {  // (a master's transport is the device's: a command queued before it was followed is void)
+          transport_.playing = true;
+          transport_.started = true;
+          transport_.pos = 0;
+          transport_.stopped = false;
+        }
         break;
       case Op::Stop:
-        transport_.playing = false;
-        transport_.started = false;
-        transport_.pos = 0;
-        transport_.stopped = true;
+        if (!followed_) {
+          transport_.playing = false;
+          transport_.started = false;
+          transport_.pos = 0;
+          transport_.stopped = true;
+        }
         break;
       case Op::Tempo:
-        transport_.tempo_mbpm = c.arg;
-        transport_.inc = ticks_per_sample_q32(c.arg);
+        own_tempo_ = c.arg;
+        own_inc_ = ticks_per_sample_q32(c.arg);
+        if (!followed_) {
+          transport_.tempo_mbpm = own_tempo_;
+          transport_.inc = own_inc_;
+        }
         break;
     }
   }
+}
+
+// ---- MIDI: a master's transport ----------------------------------------------------------------------------------------------
+
+void Engine::follow(const core::ClockFrame& f) noexcept {
+  follow_in_ = f;
+  follow_pending_ = f.follow;
+}
+
+void Engine::apply_follow() noexcept {
+  const core::ClockFrame& f = follow_in_;
+  const bool was_playing = transport_.playing;
+  const bool joining = !followed_;
+  followed_ = true;
+  transport_.following = true;
+  if (f.tempo_mbpm != 0u) {
+    transport_.tempo_mbpm = f.tempo_mbpm < kMinTempoMilliBpm ? kMinTempoMilliBpm : (f.tempo_mbpm > kMaxTempoMilliBpm ? kMaxTempoMilliBpm : f.tempo_mbpm);
+  }
+  // The increment is the master's, held between the slowest and the fastest legal tempo (a hook's loop over a block is bounded by it).
+  if (f.inc != 0u) {
+    transport_.inc = f.inc < inc_min_ ? inc_min_ : (f.inc > inc_max_ ? inc_max_ : f.inc);
+  } else {
+    transport_.inc = ticks_per_sample_q32(transport_.tempo_mbpm);
+  }
+  transport_.playing = f.playing;
+  transport_.started = f.playing && f.started;
+  // A run of the engine's own ends when the master takes over (or stops): the hooks see a stop once, and a master that plays starts them again.
+  transport_.stopped = f.stopped || (was_playing && (!f.playing || joining));
+  transport_.pos = f.playing ? f.pos : 0u;
+  following_.store(true, std::memory_order_relaxed);
+  followed_tempo_.store(transport_.tempo_mbpm, std::memory_order_relaxed);
+  followed_playing_.store(f.playing, std::memory_order_relaxed);
+}
+
+void Engine::release_follow() noexcept {
+  followed_ = false;
+  transport_.following = false;
+  transport_.tempo_mbpm = own_tempo_;
+  transport_.inc = own_inc_;
+  if (transport_.playing) {  // the master's run ends with the master; the engine's own starts when the main loop asks
+    transport_.playing = false;
+    transport_.started = false;
+    transport_.pos = 0;
+    transport_.stopped = true;
+  }
+  following_.store(false, std::memory_order_relaxed);
+  released_.store(released_.load(std::memory_order_relaxed) + 1u, std::memory_order_relaxed);
 }
 
 void Engine::run_unit(UnitId unit, const float* in_l, const float* in_r, float* out_l, float* out_r,
@@ -520,13 +623,25 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   const float* ir = in_r != nullptr ? in_r : zero;
 
   drain();
+  if (follow_pending_) {
+    apply_follow();
+  } else if (followed_) {
+    release_follow();
+  }
+  follow_pending_ = false;
   transport_.frames = frames;
 
   // The clocked hooks place their events; a stop is seen once (Transport::stopped, the block after the command) by every hook.
+  midi_out_n_ = 0;
   ctx_.in_l_ = il;
   ctx_.in_r_ = ir;
   for (unsigned h = 0; h < hook_count_; ++h) {
     hooks_[h]->block(ctx_);
+  }
+  for (unsigned i = 0; i < midi_out_n_; ++i) {
+    if (midi_out_[i].frame >= frames) {
+      midi_out_[i].frame = static_cast<std::uint16_t>(frames - 1u);
+    }
   }
   for (unsigned u = 0; u < unit_count_; ++u) {
     sort_by_frame(events_[u], event_count_[u]);
@@ -617,6 +732,7 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   // Events for a unit that is attached but not routed are dropped at the end of the block.
   for (unsigned u = 0; u < unit_count_; ++u) {
     event_count_[u] = 0;
+    injected_[u] = 0;
   }
 
   const float dm = (master_level_ - master_gain_) * inv_frames;
@@ -635,6 +751,8 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   master_gain_ = master_level_;
   const bool clipped = peak_l > 0.8f || peak_r > 0.8f;
 
+  block_ = core::ClockFrame{followed_, transport_.playing, transport_.started, transport_.stopped, transport_.pos, transport_.inc,
+                            transport_.tempo_mbpm};
   transport_.started = false;
   transport_.stopped = false;
   if (transport_.playing) {
@@ -668,6 +786,7 @@ void Engine::publish(float peak_l, float peak_r, const float* slot_peaks, std::u
   stats_.playing = transport_.playing;
   stats_.tempo_mbpm = transport_.tempo_mbpm;
   stats_.pos = transport_.pos;
+  stats_.dropped_midi = dropped_midi_;
   stats_seq_.store(seq + 2u, std::memory_order_release);
 }
 

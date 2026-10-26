@@ -20,12 +20,13 @@ using ui::Rect;
 using Section = SystemConfig::Section;
 using Phase = FirmwareView::Phase;
 
-// The order of the tabs (the plan puts MIDI between the first two when the kit has it).
-constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Display, Section::Info};
+// The order of the tabs.
+constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Midi, Section::Display, Section::Info};
 
 const char* tab_label(Section s) noexcept {
   switch (s) {
     case Section::Firmware: return "FIRMWARE";
+    case Section::Midi: return "MIDI";
     case Section::Display: return "DISPLAY";
     case Section::Info: return "INFO";
   }
@@ -49,14 +50,26 @@ void format_uptime(std::uint64_t seconds, char* out, std::size_t cap) noexcept {
 
 }  // namespace
 
-SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build) noexcept
-    : sink_(firmware), build_(build), section_(firmware != nullptr && firmware->available() ? Section::Firmware : Section::Display) {}
+SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi) noexcept
+    : sink_(firmware),
+      build_(build),
+      midi_(midi),
+      section_(firmware != nullptr && firmware->available() ? Section::Firmware : (midi ? Section::Midi : Section::Display)) {}
 
-bool SystemConfig::has(Section s) const noexcept { return s != Section::Firmware || (sink_ != nullptr && sink_->available()); }
+bool SystemConfig::has(Section s) const noexcept {
+  switch (s) {
+    case Section::Firmware: return sink_ != nullptr && sink_->available();
+    case Section::Midi: return midi_;
+    case Section::Display:
+    case Section::Info: break;
+  }
+  return true;
+}
 
 const char* SystemConfig::section_name() const noexcept {
   switch (section_) {
     case Section::Firmware: return "firmware";
+    case Section::Midi: return "midi";
     case Section::Display: return "display";
     case Section::Info: return "info";
   }
@@ -155,6 +168,8 @@ void SystemConfig::input(Context& ctx, const Input& in) noexcept {
   bool taken = false;
   if (section_ == Section::Firmware) {
     taken = firmware_input(ctx, in);
+  } else if (section_ == Section::Midi) {
+    taken = midi_input(ctx, in);
   } else if (section_ == Section::Display) {
     taken = display_input(ctx, in);
   }
@@ -206,6 +221,30 @@ bool SystemConfig::firmware_input(Context& ctx, const Input& in) noexcept {
       return true;  // (the check has F8 only; the hand-over is not reached here)
   }
   return false;
+}
+
+// UP / DOWN move the cursor over the rows; the encoder steps the row's value (a channel by the detents, clamped), F1 steps it by one and wraps.
+bool SystemConfig::midi_input(Context& ctx, const Input& in) noexcept {
+  const int last = static_cast<int>(kMidiRowCount) - 1;
+  int row = midi_row_;
+  if (in.press(Button::Up) || in.press(Button::Down)) {
+    row += in.press(Button::Down) ? 1 : -1;
+    midi_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row > last ? last : row));
+    return true;
+  }
+  int steps = 0;
+  bool wrap = false;
+  if (in.turn()) {
+    steps = in.delta();
+  } else if (in.press(Button::F1) && !in.shift) {
+    steps = 1;
+    wrap = true;
+  }
+  if (steps == 0) {
+    return false;
+  }
+  ctx.midi().set_config(midi_step(ctx.midi().config(), midi_row_, steps, wrap));
+  return true;
 }
 
 bool SystemConfig::display_input(Context& ctx, const Input& in) noexcept {
@@ -310,6 +349,9 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
     case Section::Firmware:
       draw_firmware_page(r, grid, view_);
       break;
+    case Section::Midi:
+      draw_midi_page(r, grid, ctx.midi().config(), ctx.midi().status(), midi_row_);
+      break;
     case Section::Display: {
       r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0, grid.pitch), "THEME", Color::TextDim, Face::Label);
       int cx = grid.x;
@@ -384,6 +426,7 @@ void SystemConfig::soft_keys(const Context&, SoftKeys& keys) const noexcept {
           break;
       }
       break;
+    case Section::Midi:
     case Section::Display:
       keys.label[0] = "NEXT";
       keys.label[7] = "CLOSE";

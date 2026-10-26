@@ -1,0 +1,38 @@
+{
+ "name": "hello_power",
+ "title": "HELLO on the unit: the Power switch (OS-POWER): the pin in the three pulls (M4), an injected hold and tap (the bar, the hint), then `power off dry` (the stages up to USB off, ending in a restart). No button held",
+ "steps": [
+  {"say": "OS-POWER P1, from track3r-os's qa_power.json (docs/M2B2-PLAN.md, slice P). The unit runs HELLO and is idle, NO BUTTON is held for the console steps. The scenario injects the switch (`power press|release`: the debounced hold, the bar, the hint) and ends with `power off dry`, which restarts the unit. The real hold of Power, the VLPR off and its wake are the maintainer's, by hand (the last SAY). A switch left injected as held by a failed run would commit the shutdown 2 s later: the `finally` lets go of it"},
+  {"state": {"app": "HELLO", "screen": "PLAY", "sys": "0", "playing": "0"}, "within": 10, "poll": 0.5},
+  {"cmd": "power", "expect": ["power: PTC3 (high|low) \\(pull (none|up|down)\\), the switch reads (released|pressed)", "power: read now: no pull (high|low), pull-up (high|low), pull-down (high|low)", "power: board: pressed is (low|high), internal pull (none|up|down)", "power: hold (Booting|Armed)", "power: shutdown idle"], "show": true,
+   "note": "M4 / QA-GLB-113: the raw level of PTC3 in the three pulls with Power UP (released). Then hold Power and run `power` again by hand (the next SAY): the level that flips is the polarity, the pull that keeps it steady is the pull"},
+  {"cmd": "power", "expect": ["power: hold Armed"], "within": 10, "poll": 1.0, "fail_on": "power: hold (Holding|Committed)",
+   "note": "the hold is armed: the app has drawn a frame and the switch was released for 100 ms. A `Booting` that stays means the pin reads pressed (a wrong pull or polarity: the log says `power: held or stuck since boot`)"},
+  {"say": "M4, by hand: HOLD Power with a finger for 3 s, then run `o3console.py power` in a terminal (not this runner) and note the three readings; let go. Do it before the next steps: holding Power for 2 s on a real pin starts the real shutdown. The scenario goes on without a finger"},
+  {"cmd": "power release", "expect": ["power: the console holds the switch up"]},
+  {"wait": 0.5},
+  {"cmd": "power press", "expect": ["power: the console holds the switch down"],
+   "note": "an injected hold, as the debounced pin would feed it. The unit commits at 2 s: nothing slow (a `shot`) is run while it is held"},
+  {"wait": 1.0},
+  {"cmd": "power", "expect": ["power: hold Holding, debounced down, line [3-7]\\d\\d/1000", "power: shutdown idle"], "show": true, "note": "the hold fills (about half after 1 s) and has not committed"},
+  {"say": "LOOK AT THE SCREEN NOW: the strip over the key-caps says HOLD TO SWITCH OFF with a bar about half full"},
+  {"cmd": "power release", "expect": ["power: the console holds the switch up"]},
+  {"wait": 0.3},
+  {"cmd": "power", "expect": ["power: hold Armed", "power: presses [1-9]\\d* holds [1-9]\\d* taps [1-9]\\d* commits 0 refusals 0"], "show": true,
+   "note": "released after about 1.2 s: back to Armed, one tap counted, no commit"},
+  {"cmd": "power press", "expect": ["power: the console holds the switch down"]},
+  {"wait": 0.4},
+  {"cmd": "power release", "expect": ["power: the console holds the switch up"]},
+  {"wait": 0.2},
+  {"shot": "hint", "non_blank": true, "soft": true,
+   "note": "a tap of 0.4 s: the strip says HOLD POWER 2 S TO SWITCH OFF for 1.5 s (the picture is taken at the start of the command; look at it if the runner keeps it)"},
+  {"say": "The unit is about to run `power off dry`: the stages (the engine stopped, the sound faded in about 50 ms, the card released), USB off (this console ends, about 250 ms after the command), the screen fades, the pads go out, and the unit restarts about 100 ms after Power is released (it is not held). With HELLO silent there is nothing to hear; for QA-GLB-116 play a note first (a pad held) with a recorder on the line out and the status LED in view: the LED keeps its heartbeat and never shows the 11-pulse audio-fault code. A key or a pad pressed meanwhile does nothing; a console command other than the reads is answered ERR powering off"},
+  {"cmd": "power off dry", "expect": ["power: off dry"], "timeout": 10, "show": true, "note": "the unit restarts after Power is released (the first run of slice 1 is this, with NO button held)"},
+  {"cmd": "log 30", "expect": ["power: A quiet \\+0 ms", "power: A2 mute \\+\\d+ ms", "power: B card \\+\\d+ ms", "power: C unmount \\+\\d+ ms", "power: D usb \\+\\d+ ms"], "timeout": 3, "soft": true, "show": true,
+   "note": "the stage stamps in order (ms from stage A) up to USB off, read at once: the console ends at D, so this is a race that a slow host loses, and the lines are gone after the restart (the log is cleared at boot). Soft: a lost race is not a failure of the shutdown"},
+  {"say": "AFTER THE RESTART (a run of its own: the unit is still restarting here): `o3console.py power` reads the record the shutdown left in the noinit SRAM: `power: last shutdown dry, reached done` and `power: ms from A: A quiet 0, A2 mute .., B card .., C unmount .., D usb .., E lights .., F off .., done ..`. Then, BY HAND AT THE UNIT, the real off (never from this runner): `o3console.py power off` says `then the VLPR off after Power is released`; the unit goes dark and silent and stays so, with USB gone; read an inline USB meter (M3). A press of 1 s on Power boots it at the release (QA-GLB-103); `power` then says `power: last off ended by a press (the wake)`. `power: last off RESTARTED at step: ...` names the clock or mode step that failed (a restart came instead of an off): send that line. A build with -DO3SDK_POWER_VLPR_OFF=OFF restarts instead"}
+ ],
+ "finally": [
+  {"cmd": "power release", "soft": true, "note": "(a switch left injected as held by a failed run would commit the shutdown at 2 s; after the dry run the unit is restarting and this step has no one to talk to: soft)"}
+ ]
+}

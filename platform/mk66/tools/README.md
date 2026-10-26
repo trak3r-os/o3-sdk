@@ -77,6 +77,8 @@ may use the step kinds `cmd keys pad enc wait state leds shot audio`; `mix voice
   `apps/hello/scenarios/tour.txt` (crop as above; a PNG is a binary and does not go into git). Run with `--golden-dir <dir>`; the
   header's CPU readout (right of x = 700) is ignored because the simulator shows none.
 - `hello_audio.json` (needs `--audio-device`): `pad 12` held, channel 7 not silent and unclipped, channels 1-6 silent (soft).
+- `hello_power.json`: the Power switch with no finger: `power` (the pin in the three pulls), an injected hold (`power press`: the line fills) and tap (the hint), then `power off dry`, which ends the run
+  in a restart (read the record with `o3console.py power` after the boot). The real hold, the VLPR off and its wake are by hand (the scenario's last SAY).
 
 ## The static checks
 

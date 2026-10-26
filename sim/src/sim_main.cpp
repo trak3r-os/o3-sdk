@@ -2,13 +2,15 @@
 //
 // <app>_sim: runs the app this executable is linked with (o3sdk_app(), cmake/O3sdkTargets.cmake) headless on the host.
 //
-//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR]
+//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
 // refused (an attach, a route or a hook that was not taken: Engine::setup_errors(); the refusals are listed on stderr), so a script can
 // gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
-// read or written, no flash exists); without it the screen has no FIRMWARE section.
+// read or written, no flash exists); without it the screen has no FIRMWARE section. --midi gives the app a fake MIDI device
+// (platform/host/fake_midi.h: the MIDI section of the system Config, the routes, the clock); a scenario that has a `midi` or `clock` line gets
+// one without the option, and an app run without one sees the platform it had before MIDI existed.
 #include <o3sdk/app/app.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
@@ -23,7 +25,21 @@
 namespace {
 
 void usage(const char* argv0) {
-  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR]\n", argv0);
+  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi]\n", argv0);
+}
+
+// Does the scenario text have a `midi` or `clock` command (the first word of a line)?
+bool uses_midi(const std::string& text) {
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream words(line.substr(0, line.find('#')));
+    std::string first;
+    if ((words >> first) && (first == "midi" || first == "clock")) {
+      return true;
+    }
+  }
+  return false;
 }
 
 std::string lower_name(const char* s) {
@@ -42,6 +58,7 @@ int main(int argc, char** argv) {
   std::string out = ".";
   std::string wav;
   std::string firmware_dir;
+  bool midi = false;
   long ms = 500;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -54,6 +71,8 @@ int main(int argc, char** argv) {
       wav = argv[++i];
     } else if (std::strcmp(a, "--firmware-dir") == 0 && has_value) {
       firmware_dir = argv[++i];
+    } else if (std::strcmp(a, "--midi") == 0) {
+      midi = true;
     } else if (std::strcmp(a, "--ms") == 0 && has_value) {
       ms = std::strtol(argv[++i], nullptr, 10);
     } else {
@@ -71,7 +90,19 @@ int main(int argc, char** argv) {
       return 2;
     }
   }
-  o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware);
+  std::string scenario_text;
+  if (!scenario.empty()) {
+    std::ifstream f(scenario);
+    if (!f) {
+      std::fprintf(stderr, "cannot read %s\n", scenario.c_str());
+      return 2;
+    }
+    std::stringstream text;
+    text << f.rdbuf();
+    scenario_text = text.str();
+  }
+  o3sdk::platform::host::FakeMidi fake_midi;
+  o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware, (midi || uses_midi(scenario_text)) ? &fake_midi : nullptr);
   if (!h.start()) {
     // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
     if (h.engine().setup_errors() != 0u) {
@@ -88,14 +119,7 @@ int main(int argc, char** argv) {
 
   int status = 0;
   if (!scenario.empty()) {
-    std::ifstream f(scenario);
-    if (!f) {
-      std::fprintf(stderr, "cannot read %s\n", scenario.c_str());
-      return 2;
-    }
-    std::stringstream text;
-    text << f.rdbuf();
-    const o3sdk::sim::ScenarioResult r = o3sdk::sim::run_scenario(h, text.str(), out);
+    const o3sdk::sim::ScenarioResult r = o3sdk::sim::run_scenario(h, scenario_text, out);
     if (!r.ok) {
       std::fprintf(stderr, "%s:%d: %s\n", scenario.c_str(), r.line, r.error.c_str());
       status = 1;

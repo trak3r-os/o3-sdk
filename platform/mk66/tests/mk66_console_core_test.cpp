@@ -51,8 +51,8 @@ constexpr app::DiagCommand row(const char* name, const char* help = "does someth
   return app::DiagCommand{name, help, run};
 }
 
-const char* const kKitNames[] = {"help", "version", "stage", "cpu", "mem",  "crash", "usb",  "log",  "input", "peek",  "poke",  "rot",
-                                 "sd",   "ls",      "reset", "fw",  "key",  "pad",   "enc",  "state", "shot",  "leds", "cache", "guard"};
+const char* const kKitNames[] = {"help", "version", "stage", "cpu", "mem",  "crash", "usb",  "log",  "input", "peek",  "poke",  "rot",   "sd",
+                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard"};
 
 std::string help_of(const CommandTable& t) {
   Capture c;
@@ -114,7 +114,7 @@ class BareApp final : public app::App {
 }  // namespace
 
 TEST_CASE("kit commands: the names are the ones in scope, in table order, and each row obeys the app rules") {
-  static_assert(console::kKitCommandCount == 24, "the kit's commands");
+  static_assert(console::kKitCommandCount == 25, "the kit's commands");
   REQUIRE(console::kKitCommandCount == sizeof kKitNames / sizeof kKitNames[0]);
   for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
     const console::CommandInfo& c = console::kCommandInfo[i];
@@ -138,6 +138,68 @@ TEST_CASE("kit commands: the names are the ones in scope, in table order, and ea
   CHECK(std::string(console::info(console::Cmd::State).name) == "state");
   CHECK(std::string(console::info(console::Cmd::Fw).name) == "fw");
   CHECK(std::string(console::info(console::Cmd::Guard).name) == "guard");
+  CHECK(std::string(console::info(console::Cmd::Power).name) == "power");
+  CHECK(std::string(console::info(console::Cmd::Power).help) == "power [press|release|pin|off [dry]]: the Power switch and the shutdown");
+  CHECK(static_cast<unsigned>(console::Cmd::Power) == static_cast<unsigned>(console::Cmd::Cache) + 1u);  // track3r-os's relative order: Cache, Power, then Guard
+}
+
+// OS-POWER P1 (D2): after the one-way commit the shell runs only the reads that diagnose the shutdown (commands.h kPowerReads); the pure part of the gate is core.h's power_gate_text.
+TEST_CASE("power: the reads that stay open during the shutdown are these nine, and nothing that could start anything is among them") {
+  const console::Cmd reads[] = {console::Cmd::Help, console::Cmd::Version, console::Cmd::Stage, console::Cmd::Log,  console::Cmd::Crash,
+                                console::Cmd::Power, console::Cmd::State,   console::Cmd::Cpu,   console::Cmd::Mem};
+  std::uint64_t expected = 0;
+  for (const console::Cmd c : reads) {
+    expected |= std::uint64_t{1} << static_cast<unsigned>(c);
+  }
+  CHECK(console::kPowerReads == expected);
+  CHECK(__builtin_popcountll(console::kPowerReads) == 9);
+  unsigned open = 0;
+  for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
+    const auto c = static_cast<console::Cmd>(i);
+    CAPTURE(console::info(c).name);
+    bool listed = false;
+    for (const console::Cmd r : reads) {
+      listed = listed || r == c;
+    }
+    CHECK(console::power_read(c) == listed);
+    open += console::power_read(c) ? 1u : 0u;
+  }
+  CHECK(open == 9u);
+  // The ones that write something, move the keys, restart or reach the card or the bootloader are refused.
+  for (const console::Cmd c : {console::Cmd::Fw, console::Cmd::Reset, console::Cmd::Key, console::Cmd::Pad, console::Cmd::Enc, console::Cmd::Poke, console::Cmd::Rot, console::Cmd::Sd,
+                               console::Cmd::Ls, console::Cmd::Usb, console::Cmd::Cache, console::Cmd::Guard, console::Cmd::Shot, console::Cmd::Input, console::Cmd::Peek, console::Cmd::Leds}) {
+    CAPTURE(console::info(c).name);
+    CHECK_FALSE(console::power_read(c));
+  }
+}
+
+TEST_CASE("power: the gate lets everything run until the shutdown begins, then only the reads, and refuses an app row") {
+  // Not shutting down: no name is refused, whatever it is.
+  for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
+    CHECK(console::power_gate_text(false, console::kCommandInfo[i].name) == nullptr);
+  }
+  CHECK(console::power_gate_text(false, "ping") == nullptr);
+  CHECK(console::power_gate_text(false, nullptr) == nullptr);
+  // Shutting down: the nine reads run, every other kit command gets the line.
+  for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
+    const auto c = static_cast<console::Cmd>(i);
+    CAPTURE(console::info(c).name);
+    const char* answer = console::power_gate_text(true, console::info(c).name);
+    if (console::power_read(c)) {
+      CHECK(answer == nullptr);
+    } else {
+      REQUIRE(answer != nullptr);
+      CHECK(std::string(answer) == "ERR powering off\n");
+    }
+  }
+  // An app row (a name no kit command carries: the table refuses those), an empty name, a null one and a different case are refused: the shell matches names exactly.
+  for (const char* name : {"ping", "", "HELP", "helpx", "hel"}) {
+    CAPTURE(name);
+    const char* answer = console::power_gate_text(true, name);
+    REQUIRE(answer != nullptr);
+    CHECK(std::string(answer) == "ERR powering off\n");
+  }
+  CHECK(console::power_gate_text(true, nullptr) == console::kPoweringOff);
 }
 
 TEST_CASE("kit commands: find_kit") {

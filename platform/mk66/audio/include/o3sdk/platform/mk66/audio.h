@@ -57,6 +57,11 @@ namespace o3sdk::platform::mk66 {
 
 // The one audio device (an object in .bss, valid after the static constructors).
 hal::audio::Device& audio_device() noexcept;
+// OS-POWER P1 (docs/specs/OS-POWER.md 4.1 A2, 4.6): the one stop of the audio path. The codec is muted click-free (the DAC through its own soft ramp, the amplifier key LOW, the outputs muted and the analogue
+// stage powered down: sgtl5000.h run_stop), then the I2S transmitter and receiver, the two eDMA channels and the two interrupt lines are stopped; the path is "not started" afterwards. Main thread only;
+// it blocks for about 70 ms (the caller keeps the display serviced). Plain when the path never started (the boot disk mode). The caller sets the power-off latch FIRST (appimg::power_off_latched):
+// the block counter stands still from here, which the audio poll would call a stall, and nothing may reopen the outputs. Called by the shutdown only.
+void audio_stop() noexcept;
 
 // What the audio path publishes about itself (counters, render cycles, jitter): audio_status().snapshot() from the main loop.
 // Zero until start() initialises the pipeline; start() resets it.

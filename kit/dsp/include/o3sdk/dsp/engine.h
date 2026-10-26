@@ -26,7 +26,14 @@
 //
 // Statistics (stats()) are written by the render and read by the main loop through a sequence counter: a read that overlapped a
 // write is retried, so the snapshot is always one block's.
+//
+// MIDI (docs/M2B2-PLAN.md section 3). The engine knows no device: the runtime (Runtime::render_block) hands it what a device reported,
+// in the render context, before render(): follow() the transport of the block (a master's clock) and inject() the notes, and takes back
+// midi_out() and block_frame() after it. With a master followed, the block's Transport is the master's and the engine's own advance
+// is parked; a clocked hook, which walks ctx.transport(), follows with no change. While following, play() and stop() are requests for the
+// device (take_transport_request()), and playing() and tempo() report the master's.
 
+#include <o3sdk/core/midi_types.h>
 #include <o3sdk/core/param.h>
 #include <o3sdk/core/ring.h>
 #include <o3sdk/dsp/event.h>
@@ -48,6 +55,8 @@ inline constexpr unsigned kMaxParamsPerUnit = 64;
 inline constexpr unsigned kMaxEventsPerUnit = 32;  // a unit's events in one block; the rest are dropped and counted
 inline constexpr std::uint32_t kCommandRingSize = 512;
 inline constexpr unsigned kMaxCommandsPerBlock = 256;  // a bound on the drain, so a flooded ring cannot stretch a block
+inline constexpr unsigned kMaxInjectPerUnit = kMaxEventsPerUnit / 2;  // a unit's events a block that inject() takes (routed notes): the rest of its list is the hooks'
+inline constexpr unsigned kMaxMidiOut = 32;  // messages the hooks may send in one block (BlockContext::send_midi); the rest are dropped and counted
 
 using UnitId = std::uint8_t;
 inline constexpr UnitId kNoUnit = 0xFF;
@@ -95,6 +104,10 @@ class BlockContext {
   // The target of that field as the render side stands now (what the last write left, the main loop's or a hook's); 0 for a slot or
   // field out of range, as Engine::mix(). A slew reads it to start from where the field is.
   float mix(unsigned slot, MixField field) const noexcept;
+  // Queues a MIDI message for the device to send after this block (hal::midi::Device::end_block): at its `frame` (clamped into the
+  // block), on its `ports` (0: the user's Config::out_ports). At most kMaxMidiOut a block, shared by every hook; false past it (counted in
+  // EngineStats::dropped_midi). With no MIDI device the messages go nowhere. A copy into a short array: no queue beyond the block.
+  bool send_midi(const core::MidiMessage& m) noexcept;
   // The codec's input of this block (frames samples each), for a hook that listens (a recorder's threshold).
   const float* input_l() const noexcept { return in_l_; }
   const float* input_r() const noexcept { return in_r_; }
@@ -131,6 +144,7 @@ struct EngineStats {
   bool playing = false;
   std::uint32_t tempo_mbpm = 0;
   std::uint64_t pos = 0;               // Q32.32 transport position at the end of the last block
+  std::uint32_t dropped_midi = 0;      // send_midi() messages refused past kMaxMidiOut a block, since start()
 };
 
 class Engine {
@@ -190,8 +204,23 @@ class Engine {
   bool play() noexcept;   // from the top: position 0 at the next block
   bool stop() noexcept;   // position back to 0; the next block has Transport::stopped set (hooks end their notes)
   bool set_tempo(std::uint32_t tempo_mbpm) noexcept;
-  std::uint32_t tempo() const noexcept { return tempo_main_; }
-  bool playing() const noexcept { return playing_main_; }  // what the main loop asked for last
+  // While a MIDI master is followed (following()), play() and stop() are not commands but requests for the device (Play starts the run on
+  // the master's next clock; take_transport_request()), set_tempo() is kept for when the master is let go, and tempo() and playing() report
+  // the master's, as of the last block. Otherwise tempo() is what the main loop set and playing() what it asked for last (false after a
+  // master was let go, until the next play()).
+  std::uint32_t tempo() const noexcept { return following() ? followed_tempo_.load(std::memory_order_relaxed) : tempo_main_; }
+  // The engine's own tempo, what set_tempo() last stored, whether or not a master is followed: the base for a step of "tempo + 1 BPM" (tempo() + 1
+  // BPM would store the master's tempo as the own one).
+  std::uint32_t own_tempo() const noexcept { return tempo_main_; }
+  bool playing() const noexcept;
+  // The engine's transport is a master's (the last block's Engine::follow had `follow` set). Any context; a flag the render publishes.
+  bool following() const noexcept { return following_.load(std::memory_order_relaxed); }
+  // The play() or stop() the main loop made while following, once (None otherwise): the runtime hands it to the device. Main loop only.
+  core::TransportRequest take_transport_request() noexcept {
+    const core::TransportRequest r = request_;
+    request_ = core::TransportRequest::None;
+    return r;
+  }
 
   EngineStats stats() const noexcept;
   std::uint32_t dropped_commands() const noexcept { return dropped_commands_; }
@@ -199,6 +228,26 @@ class Engine {
   // ---- Render ------------------------------------------------------------------------------------------------------------
   // One block of `frames` (1..kMaxBlockFrames) samples. `in_l` / `in_r` may be null (silence).
   void render(const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames) noexcept;
+
+  // ---- MIDI (render side: the render context, between two render() calls) --------------------------------------------------------------
+  // The transport of the next render(): with `f.follow` set it is the frame's (a master's position, increment and tempo, its Start, Continue
+  // and Stop) instead of the engine's own advance, for that block only. The first block of it ends the engine's own run (a hook sees
+  // Transport::stopped, and `playing` again when the master plays), and the first block without it, after one that had it, ends the master's:
+  // the transport stops, once, and the engine's own tempo is back. A frame is sanitised: the increment into what a legal tempo can be, a
+  // stop that the frame forgot to flag is flagged. See hal/midi.h for what a device promises.
+  void follow(const core::ClockFrame& f) noexcept;
+  // Queues `e` for `unit` at its own frame, for the next render() (a routed note). At most kMaxInjectPerUnit a unit and block, so a flood of
+  // notes cannot fill the unit's list and push out a hook's note-off (which would hang the note): false for the rest, and for an unknown unit,
+  // counted in dropped_events. An event that falls past the block is applied at its end.
+  bool inject(UnitId unit, const Event& e) noexcept;
+  // After render(): the messages the hooks sent in that block (BlockContext::send_midi), valid until the next render().
+  const core::MidiMessage* midi_out(unsigned& n) const noexcept {
+    n = midi_out_n_;
+    return midi_out_;
+  }
+  // After render(): the transport as that block ran it (its first frame's position, flags and increment, `follow` set when it was a master's):
+  // what the device sends the clock and the transport from.
+  const core::ClockFrame& block_frame() const noexcept { return block_; }
 
  private:
   friend class BlockContext;
@@ -231,8 +280,11 @@ class Engine {
   bool refuse(SetupCall call, SetupReason reason, unsigned slot, unsigned index, unsigned unit) noexcept;  // records, returns false
   bool push(const Command& c) noexcept;
   bool queue_event(UnitId unit, const Event& e) noexcept;  // render side
+  bool queue_midi(const core::MidiMessage& m) noexcept;    // render side
   void apply_mix(unsigned slot, MixField field, float value) noexcept;  // render side: `value` already clamped, `slot` and `field` valid
   void drain() noexcept;
+  void apply_follow() noexcept;    // render side: the frame follow() was given becomes the block's transport
+  void release_follow() noexcept;  // render side: the master is let go
   void run_unit(UnitId unit, const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames) noexcept;
   void publish(float peak_l, float peak_r, const float* slot_peaks, std::uint32_t cycles, bool clipped) noexcept;
 
@@ -249,6 +301,8 @@ class Engine {
   float master_level_main_ = 1.0f;
   std::uint32_t tempo_main_ = 120'000;
   bool playing_main_ = false;
+  std::uint32_t released_seen_ = 0;  // main loop: `released_` when playing_main_ was last set
+  core::TransportRequest request_ = core::TransportRequest::None;  // main loop: a play() or stop() made while following
   std::uint32_t dropped_commands_ = 0;
   unsigned setup_error_count_ = 0;
   SetupError setup_error_log_[kMaxSetupErrors] = {};
@@ -262,11 +316,30 @@ class Engine {
   float master_gain_ = 1.0f;  // reached at the end of the last block
   Event events_[kMaxUnits][kMaxEventsPerUnit];
   std::uint8_t event_count_[kMaxUnits] = {};
+  std::uint8_t injected_[kMaxUnits] = {};  // inject()'s events in the lists of the next block
   std::uint32_t dropped_events_ = 0;
   std::uint32_t blocks_ = 0;
   std::uint32_t cycles_max_ = 0;
   std::uint32_t clipped_ = 0;
   BlockContext ctx_;
+
+  // MIDI, render side. The engine's own tempo is kept apart from the transport's, which a master's overwrites while it is followed.
+  core::ClockFrame follow_in_;      // follow()'s frame for the next render()
+  bool follow_pending_ = false;     // follow() was given a frame with `follow` set since the last render()
+  bool followed_ = false;           // the last block ran on a master's transport
+  std::uint32_t own_tempo_ = 120'000;
+  std::uint64_t own_inc_ = 0;
+  std::uint64_t inc_min_ = 0;       // the increments of the slowest and the fastest legal tempo: a master's is held between them
+  std::uint64_t inc_max_ = 0;
+  core::ClockFrame block_;          // block_frame()
+  core::MidiMessage midi_out_[kMaxMidiOut] = {};
+  unsigned midi_out_n_ = 0;
+  std::uint32_t dropped_midi_ = 0;
+  // Published by the render, read by the main loop (single writer, relaxed: flags and numbers a block old at worst).
+  std::atomic<bool> following_{false};
+  std::atomic<std::uint32_t> followed_tempo_{0};
+  std::atomic<bool> followed_playing_{false};
+  std::atomic<std::uint32_t> released_{0};  // masters let go so far; the main loop's playing_main_ is void once it has moved
 
   // Statistics: written by the render, read by stats() (sequence counter: odd while a write is in progress).
   std::atomic<std::uint32_t> stats_seq_{0};

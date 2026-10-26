@@ -14,8 +14,14 @@
 //   boot <name>               the boot screen (the logo of this image, ui/boot_logo.h) as the first frame, to <out>/<name>.png
 //   record on|off             keep the rendered audio
 //   wav <name>                <out>/<name>.wav: what has been recorded so far
+//   midi <port> <hex...>      MIDI bytes arriving on din or usb now, e.g. `midi din 90 3c 64` (a note on, channel 1, middle C): channel
+//                             messages with running status; they land in the block that renders next
+//   clock <bpm> start|stop    a MIDI master at <bpm> (decimals allowed: 140.5) sends Start, or Stop; `continue <beats>` is a song position
+//                             (in sixteenths) and Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in
+//                             the system Config's MIDI section (or the app set it)
 //
-// Each command that touches the panel is followed by one millisecond, so that the runtime sees events in order.
+// `midi` and `clock` need a MIDI device (Harness(app, firmware, &fake_midi); the simulator makes one when the scenario uses them or with
+// --midi). Each command that touches the panel is followed by one millisecond, so that the runtime sees events in order.
 
 #include <o3sdk/sim/harness.h>
 

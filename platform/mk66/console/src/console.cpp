@@ -34,6 +34,10 @@
 //   shot       the screen as framed base64 lines (usb/shot_stream.h): CMD_SNAPSHOT2 into the spare RAM_G, read back over the SPI a few lines a pass of the main loop
 //   leds       the pad LED levels the driver holds, one line. A read.
 //   cache      the LMEM code cache: `cache` shows the state, `cache on|off` switches it (PCCCR only), `cache inv` invalidates it.
+//   power      OS-POWER P1 (docs/M2B2-PLAN.md, slice P): the Power switch (PTC3): `power` the pin in the three pulls, the hold's state and counters, the shutdown's stages; `power press|release|pin` feed the hold
+//              in place of the pin (a scripted hold needs no finger); `power off [dry]` runs the shutdown (stages 0 to F: USB off, the lights out, then, after the release of Power, the VLPR off of OS-POWER P2:
+//              dark, PTC3 polled, a press boots the unit; `dry` ends in a restart instead, for the first run on the unit). Once the shutdown has begun the shell refuses every command but the reads (help,
+//              version, stage, log, crash, power, state, cpu, mem): `ERR powering off`. (track3r-os's header lines, verbatim.)
 #include <o3sdk/platform/mk66/usb/console.h>
 
 #include "../../src/internal.h"
@@ -55,6 +59,7 @@
 #include <o3sdk/platform/mk66/input/device.h>
 #include <o3sdk/platform/mk66/mem_map.h>
 #include <o3sdk/platform/mk66/platform.h>
+#include <o3sdk/platform/mk66/power/power_device.h>
 #include <o3sdk/platform/mk66/storage/device.h>
 #include <o3sdk/platform/mk66/storage/ls_command.h>
 #include <o3sdk/platform/mk66/storage/sd_text.h>
@@ -665,6 +670,62 @@ void cmd_cache(shell::Shell& sh, const shell::Args& a) {
   send(sh, t.size(), buf);
 }
 
+// `power ...` (OS-POWER P1, power/src/power_host_mk66.cpp): the Power switch and the shutdown. The stages are in the diag log as `power: <stage> +N ms` (`log` right after `power off`: the CDC ends at USB off).
+// (track3r-os's handler, line for line.)
+const char* power_refusal_text(power::Refusal why) {
+  switch (why) {
+    case power::Refusal::Firmware: return "a firmware update is running";
+    case power::Refusal::Export: return "an export is running (stop it first)";
+    case power::Refusal::Disk: return "the USB disk may be written by the computer (eject it first)";
+    case power::Refusal::Running: return "already powering off";
+    case power::Refusal::Held: return "Power is down (or reads pressed: check the polarity with power)";
+    case power::Refusal::None: break;
+  }
+  return "";
+}
+
+void cmd_power(shell::Shell& sh, const shell::Args& a) {
+  if (a.argc == 1) {
+    char buf[kTextBuffer];
+    send(sh, power::format_power_report(power::device::report(), buf, sizeof buf), buf);
+    return;
+  }
+  if (a.argc == 2 && same(a.argv[1], "press")) {
+    power::device::inject(power::Inject::Pressed);
+    log("power: switch held by the console");
+    sh.out().text("power: the console holds the switch down (`power release` lets go, `power pin` reads the pin again)\n");
+    return;
+  }
+  if (a.argc == 2 && same(a.argv[1], "release")) {
+    power::device::inject(power::Inject::Released);
+    log("power: switch released by the console");
+    sh.out().text("power: the console holds the switch up (`power pin` reads the pin again)\n");
+    return;
+  }
+  if (a.argc == 2 && same(a.argv[1], "pin")) {
+    power::device::inject(power::Inject::Real);
+    sh.out().text("power: the hold reads the pin\n");
+    return;
+  }
+  if ((a.argc == 2 || a.argc == 3) && same(a.argv[1], "off") && (a.argc == 2 || same(a.argv[2], "dry"))) {
+    const bool dry = a.argc == 3;
+    const power::Refusal why = power::device::request_off(uptime_ms32(), dry);
+    if (why != power::Refusal::None) {
+      sh.out().text("ERR power: ").text(power_refusal_text(why)).nl();
+      return;
+    }
+    sh.out().text(dry ? "power: off dry: the stages 0 to E, USB off, the lights out, then a restart after Power is released\n"
+                      : (power::device::vlpr_off() ? "power: off: the stages 0 to F, USB off, the lights out, then the VLPR off after Power is released (a press boots the unit)\n"
+                                                   : "power: off: the stages 0 to F, USB off, the lights out, then a restart after Power is released (built without the VLPR off)\n"));
+    return;
+  }
+  sh.out().text("usage: power [press|release|pin|off [dry]]\n");
+}
+
+// Once the one-way commit has happened (D2) the shell answers every command that could start anything with `ERR powering off`; the reads that diagnose the shutdown stay (commands.h kPowerReads,
+// pinned by mk66_console_core_test). The decision is console/core.h's power_gate_text, over the command's name (an app row cannot carry a kit name, so it is refused).
+const char* power_gate(const shell::Command& cmd) { return power_gate_text(power::device::locked(), cmd.name); }
+
 // ---- The shell ---------------------------------------------------------------------------------------------------------------------
 // Built by attach(): the table has the app's rows, and the shell takes its table at construction. Placement-new into static storage, once.
 CommandTable g_commands;
@@ -770,10 +831,12 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Shot)] = &cmd_shot;
   kit[static_cast<unsigned>(Cmd::Leds)] = &cmd_leds;
   kit[static_cast<unsigned>(Cmd::Cache)] = &cmd_cache;
+  kit[static_cast<unsigned>(Cmd::Power)] = &cmd_power;
   kit[static_cast<unsigned>(Cmd::Guard)] = &cmd_guard;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));
+  g_shell->set_gate(&power_gate);  // OS-POWER P1 (D2): after the one-way commit the shell refuses what could start anything
   g_pump = new (g_pump_storage) shell::ConsolePump(*g_shell, usb0::cdc_rx());
 }
 

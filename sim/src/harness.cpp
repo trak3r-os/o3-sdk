@@ -62,12 +62,13 @@ void put_u16(std::FILE* f, std::uint16_t v) {
 
 }  // namespace
 
-Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware)
+Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi)
     : app_(app),
+      midi_(midi),
       raster_(std::make_unique<EveRaster>()),
       display_(std::make_unique<RasterDisplay>(*raster_)),
       engine_(std::make_unique<dsp::Engine>()) {
-  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware, "sim"});
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware, "sim", midi});
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
   clock_.set(1000);  // not zero: a tick of 0 is a legal time, but starting elsewhere catches code that treats it as "never"
 }
@@ -133,10 +134,14 @@ void Harness::pad_down(unsigned pad) { push(core::InputKind::Pad, static_cast<st
 void Harness::pad_up(unsigned pad) { push(core::InputKind::Pad, static_cast<std::uint8_t>(pad), 0); }
 void Harness::turn(int detents) { push(core::InputKind::Encoder, app::kEncoder, static_cast<std::int16_t>(detents)); }
 
-void Harness::render_due() {
-  // Samples due by now at the engine's rate: uptime x rate, from the one rate constant (exact integers).
+// Samples due by now at the engine's rate: uptime x rate, from the one rate constant (exact integers).
+std::uint64_t Harness::due_samples() const {
   const std::uint64_t us = clock_.uptime_us();
-  const std::uint64_t due = us * core::kCpuHz / 1000000u * core::kRefCyclesPerSample.den / core::kRefCyclesPerSample.num;
+  return us * core::kCpuHz / 1000000u * core::kRefCyclesPerSample.den / core::kRefCyclesPerSample.num;
+}
+
+void Harness::render_due() {
+  const std::uint64_t due = due_samples();
   const hal::audio::BlockCallback cb = runtime_->block_callback();
   std::int16_t in[hal::audio::kBlockSamples] = {};
   std::int16_t out[hal::audio::kBlockSamples];

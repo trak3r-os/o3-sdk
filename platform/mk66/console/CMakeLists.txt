@@ -12,7 +12,7 @@ if(O3SDK_PLATFORM STREQUAL "mk66" AND O3SDK_MK66_CONSOLE)
   # src/internal.h (boot::, appimg::, cache::) and src/regs.h are private to the platform's sources: the files name them relative to themselves. The generated
   # o3sdk_build_info.h (the banner and `version` print O3SDK_IMAGE_LABEL) is the image's: platform/mk66/CMakeLists.txt adds its directory to this target.
   add_library(platform_mk66_console_hw OBJECT src/console.cpp src/appimg.cpp)
-  target_link_libraries(platform_mk66_console_hw PUBLIC platform_mk66_console platform_mk66_display platform_mk66_input platform_mk66_storage platform_mk66_update platform_mk66_usb)
+  target_link_libraries(platform_mk66_console_hw PUBLIC platform_mk66_console platform_mk66_display platform_mk66_input platform_mk66_power platform_mk66_storage platform_mk66_update platform_mk66_usb)
   target_compile_options(platform_mk66_console_hw PRIVATE -fsingle-precision-constant)
   o3sdk_strict_warnings(platform_mk66_console_hw)
 endif()

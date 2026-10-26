@@ -8,16 +8,17 @@
 //
 //   FIRMWARE  switch the unit to another image from the card: the list of Firmware/*.ptf, a sliced check, two questions (F1 each), then
 //             the install through hal::firmware::FirmwareSink. Nothing is written before INSTALL. Hidden when Platform::firmware is null.
+//   MIDI      the user's hal::midi::Config (the channel notes come in on, the channel and ports out, clock and transport out, FOLLOW and its
+//             port, transport in) and the device's status. Hidden when Platform::midi is null.
 //   DISPLAY   the theme.
 //   INFO      the app's name and version, the build, the uptime.
 //
-// (The MIDI section of the plan goes between FIRMWARE and DISPLAY when the kit has MIDI; App::config_pages, the pages an app adds, is
-// declared and not drawn yet.)
+// (App::config_pages, the pages an app adds, is declared and not drawn yet.)
 //
 // Keys. CONFIG opens and closes it; LEFT / RIGHT change section (not while a question or a check is up); F8 is BACK (one level up, and
 // the last level closes the screen); in FIRMWARE: UP / DOWN and the encoder choose a file, F1 asks (UPDATE, YES, INSTALL), any other
-// control takes a question back; in DISPLAY: the encoder, UP / DOWN and F1 change the theme. Past INSTALL no key acts and CONFIG does not
-// close it.
+// control takes a question back; in MIDI: UP / DOWN choose a row, the encoder and F1 change its value; in DISPLAY: the encoder, UP / DOWN
+// and F1 change the theme. Past INSTALL no key acts and CONFIG does not close it.
 //
 // The strip is one line over the bottom of the screen, in the app's screens too: a message and, optionally, a bar. A caller that keeps
 // calling strip() (the platform's power-off hold) keeps it up; it goes kStripMs after the last call.
@@ -40,15 +41,16 @@ class Context;
 
 class SystemConfig {
  public:
-  enum class Section : std::uint8_t { Firmware, Display, Info };
-  static constexpr unsigned kSectionCount = 3;
+  enum class Section : std::uint8_t { Firmware, Midi, Display, Info };
+  static constexpr unsigned kSectionCount = 4;
 
   static constexpr std::uint32_t kStripMs = 400;          // a strip that is not fed goes this long after its last call
   static constexpr std::uint32_t kNoticeMs = 3000;        // a refusal the screen says on the strip
   static constexpr unsigned kStripChars = 72;
 
-  // `firmware`: the update path (null, or one that is not available(): no FIRMWARE section); `build`: the build id INFO shows (null: none).
-  SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build) noexcept;
+  // `firmware`: the update path (null, or one that is not available(): no FIRMWARE section); `build`: the build id INFO shows (null: none);
+  // `midi`: the platform has a MIDI device (Context::midi() is live: the MIDI section is shown).
+  SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi = false) noexcept;
 
   bool open() const noexcept { return open_; }
   // Past INSTALL: the hand-over has started, the screen cannot be closed and no key acts.
@@ -56,7 +58,7 @@ class SystemConfig {
   Section section() const noexcept { return section_; }
   const FirmwareView& firmware() const noexcept { return view_; }
 
-  // Opens the screen on the section it was left on (FIRMWARE the first time, DISPLAY without a firmware path), and closes it. close()
+  // Opens the screen on the section it was left on (the first one there is the first time: FIRMWARE, else MIDI, else DISPLAY), and closes it. close()
   // cancels what the FIRMWARE section had started; it does nothing past INSTALL.
   void show(Context& ctx) noexcept;
   void close(Context& ctx) noexcept;
@@ -76,7 +78,7 @@ class SystemConfig {
   bool strip_active() const noexcept { return strip_on_; }
   void draw_strip(ui::Renderer& r, const ui::Rect& area) const noexcept;
 
-  // The names of the console's `state`: "firmware", "display", "info".
+  // The names of the console's `state`: "firmware", "midi", "display", "info".
   const char* section_name() const noexcept;
 
  private:
@@ -88,12 +90,15 @@ class SystemConfig {
   void back(Context& ctx) noexcept;
   bool firmware_input(Context& ctx, const Input& in) noexcept;
   bool display_input(Context& ctx, const Input& in) noexcept;
+  bool midi_input(Context& ctx, const Input& in) noexcept;
   void step_theme(Context& ctx, int dir) noexcept;
 
   hal::firmware::FirmwareSink* sink_;
   const char* build_;
+  bool midi_;
   FirmwareView view_;
   Section section_;
+  std::uint8_t midi_row_ = 0;  // the MIDI section's cursor
   bool open_ = false;
   core::FixedString<kStripChars> strip_text_;
   int strip_progress_ = -1;

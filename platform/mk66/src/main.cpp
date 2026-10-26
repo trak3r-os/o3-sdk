@@ -18,7 +18,10 @@
 //   -> loop { wfi; console::service(); input; display; rt.poll(); audio beat; the card slot; the outputs opened once after a clean run
 //   and never during a firmware update; LED }
 //
-// Without it (-DO3SDK_MK66_CONSOLE=OFF) this is M2's image. The tracker's power-off is not part of either. The only output before the display is the
+// Without it (-DO3SDK_MK66_CONSOLE=OFF) this is M2's image. The console image also has the Power switch (docs/M2B2-PLAN.md, slice P): power::device::init() after the input, and the loop's power pass
+// (power_pass below, track3r-os's power_pass of app_main.cpp) between the key scan and the display: the hold of Power feeds the runtime's strip, and a completed hold (or `power off`) runs the shutdown
+// of platform/mk66/power (the engine stopped, the codec muted and the audio path stopped, the card released, USB off, the lights dark, then the VLPR off or a restart); from the latch of its first stage
+// the loop opens no output, takes no audio verdict and mounts no card, and from the end of its lights stage it touches neither the display nor the runtime. The only output before the display is the
 // status LED (blink.h; the codes are in README.md). A dark LED after power-on means the image did not get as far as `early_pins`, not that it is idle.
 #include "internal.h"
 #include "o3sdk_build_info.h"  // generated: tools/gen_build_info.cmake
@@ -42,6 +45,7 @@
 #include <o3sdk/platform/mk66/audio/diag.h>
 #include <o3sdk/platform/mk66/console/attach.h>
 #include <o3sdk/platform/mk66/console/modules.h>
+#include <o3sdk/platform/mk66/power/power_device.h>
 #include <o3sdk/platform/mk66/storage/device.h>
 #include <o3sdk/platform/mk66/update/fw_device.h>
 #include <o3sdk/platform/mk66/usb/boot_layout.h>
@@ -69,6 +73,7 @@ namespace display = o3sdk::platform::mk66::display::device;
 namespace input = o3sdk::platform::mk66::input::device;
 #if O3SDK_CONSOLE
 namespace console = o3sdk::platform::mk66::console;
+namespace power = o3sdk::platform::mk66::power::device;
 namespace storage = o3sdk::platform::mk66::storage;
 namespace update = o3sdk::platform::mk66::update::device;
 namespace usb0 = o3sdk::platform::mk66::usb0;
@@ -118,11 +123,31 @@ const char* volatile const g_build_label = O3SDK_IMAGE_LABEL;
 // The app's engine: 23 KB, in SRAM_U's .bss (the render reads it every block). Built by the static constructors.
 o3sdk::dsp::Engine g_engine;
 
+// OS-POWER P1: the power-off latch (stage A of the shutdown, never cleared) and the end of its stage E (the display dark and held, the chip in power-down), from appimg (console/src/appimg.cpp).
+// An image without the console has no Power switch: neither is ever true.
+bool powering_off() noexcept {
+#if O3SDK_CONSOLE
+  return mk66::appimg::power_off_latched();
+#else
+  return false;
+#endif
+}
+bool display_dark() noexcept {
+#if O3SDK_CONSOLE
+  return mk66::appimg::power_display_is_off();
+#else
+  return false;
+#endif
+}
+
 // boot::delay_ms()'s idle hook, once a millisecond of a blocking wait (the codec's start and unmute, the blink codes below): the
 // display keeps its swap and backlight ramp going (idle() keeps out of the driver's own waits and of a display that is down), and the
-// audio guard gets its beat, so a wait never counts as a starved loop (track3r-os bench.cpp does the same).
+// audio guard gets its beat, so a wait never counts as a starved loop (track3r-os bench.cpp does the same). Not the display once the
+// shutdown has put the chip in power-down (stage E): a wait after that (none is made today) must not reach it.
 void idle_hook() noexcept {
-  display::idle();
+  if (!display_dark()) {
+    display::idle();
+  }
   mk66::audio_main_pass();
 }
 
@@ -140,6 +165,10 @@ bool card_mount_pending() noexcept { return g_card_mount_pending; }
 
 // Returns true on the pass that saw the card taken out or put in: the system Config screen closes a firmware list that is open (Runtime::card_changed).
 bool poll_card(std::uint32_t now) noexcept {
+  if (powering_off()) {
+    g_card_mount_pending = false;  // OS-POWER P1: the shutdown has the card (stage C released it): a mount that was waiting is dropped, as it is a claim that stage C would wait for, and a slot that changes meanwhile mounts nothing
+    return false;
+  }
   bool changed = false;
   switch (storage::device::poll(now)) {
     case storage::CardSwap::Event::Removed:
@@ -213,6 +242,42 @@ void watch_pad_bus() noexcept {
     }
   }
 }
+
+// ---- The Power switch (OS-POWER P1; track3r-os app_main.cpp power_pass and overlays.cpp power_text) ------------------------------------------------------------------------------------------
+// The words of the strip, track3r-os's (core::PowerText says which; the kit's strip has one severity, and an o3-sdk app has no unsaved work to warn about: the plain HOLD text).
+const char* power_text(o3sdk::core::PowerText text) noexcept {
+  switch (text) {
+    case o3sdk::core::PowerText::None: break;
+    case o3sdk::core::PowerText::Hold: return "HOLD TO SWITCH OFF";
+    case o3sdk::core::PowerText::Hint: return "HOLD POWER 2 S TO SWITCH OFF";
+    case o3sdk::core::PowerText::Firmware: return "FIRMWARE UPDATE RUNNING";
+    case o3sdk::core::PowerText::Export: return "EXPORT RUNNING - HOLD POWER AGAIN TO STOP IT";
+    case o3sdk::core::PowerText::Saving: return "SAVING... THEN POWER OFF";
+    case o3sdk::core::PowerText::SaveCancelled: return "SAVE CANCELLED - POWERING OFF";
+    case o3sdk::core::PowerText::PoweringOff: return "POWERING OFF";
+    case o3sdk::core::PowerText::DiskWriting: return "COMPUTER MAY BE WRITING - HOLD AGAIN";
+  }
+  return "";
+}
+
+// The Power switch, once a pass: the pin into the hold, the shutdown stepped, and the line and the text it says on the runtime's strip (fed every pass while there is something to say: the strip goes on
+// its own a moment after the last call, and is taken down at once when the hold ends). Called after the key scan (Shift is read from it) and before the display and the runtime. `ready`: the app has the
+// screen (it started, and has drawn a frame, or there is no display to wait for). Once the shutdown has begun the runtime's input is locked too (the console's tap already drops it at the source).
+bool g_power_strip = false;  // main loop only: the strip is up because of the power pass
+void power_pass(o3sdk::app::Runtime& rt, std::uint32_t now_ms, bool ready) noexcept {
+  const bool shift = input::scanner().button_held(static_cast<unsigned>(o3sdk::app::Button::Shift));
+  const o3sdk::core::PowerShow show = power::pass(now_ms, shift, ready);
+  if (power::locked()) {
+    rt.lock_input(true);
+  }
+  if (show.shown()) {
+    rt.system_strip(power_text(show.text), show.fill != 0u ? static_cast<int>(show.fill) : -1);
+    g_power_strip = true;
+  } else if (g_power_strip) {
+    rt.system_strip(nullptr);
+    g_power_strip = false;
+  }
+}
 #endif
 
 // Which blink pattern the audio counters call for: the heartbeat (0) while everything is clean, else a sticky code.
@@ -270,6 +335,9 @@ int main() {
   // ---- Input: the two key scanners and the pad LED driver, on I2C0 with the codec (main thread only, for both).
   mk66::set_module(kInputModule);
   const bool input_ok = input::init();  // the control buttons' verdict; the pad bus is not touched here (OS-BUG-PADS: input::audio_started() below, the pads' verdict from the loop)
+#if O3SDK_CONSOLE
+  power::init();  // OS-POWER P1: PTC3 as an input with the board's pull; read once a pass from the loop on (power_pass)
+#endif
 
   // ---- The app: the Runtime uploads the UI's bitmaps, runs App::setup and starts the engine.
   mk66::set_module(kAppModule);
@@ -283,7 +351,8 @@ int main() {
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
-  if (rt.start()) {
+  const bool app_started = rt.start();
+  if (app_started) {
     // The first frame: the kit's boot screen (the logo the upload just put in RAM_G, the app's name and the build), on screen through
     // the blink codes and the audio start below, until the loop's first rt.poll() draws the app. Its swap starts the backlight ramp.
     (void)o3sdk::ui::show_boot_screen(display::display(), o3sdk_app().info().name, O3SDK_IMAGE_LABEL);
@@ -428,29 +497,34 @@ int main() {
     input::service();  // the scanners' events into the queue rt.poll() reads
 #if O3SDK_CONSOLE
     watch_pad_bus();   // OS-BUG-PADS: what the pad bus answered, into `diag log` (there is no log in an image without the console)
+    // OS-POWER P1: the Power switch, after the key scan (Shift is read from it) and before the display and the runtime, which it tells the strip. The app has the screen once it started and drew a frame
+    // (the boot screen is up until then), or when there is no display to wait for; an app that did not start never arms the hold (track3r-os: !g_start_failed).
+    power_pass(rt, static_cast<std::uint32_t>(clock.uptime_ms()), app_started && (rt.frames() != 0u || !shown.up));
 #endif
-    switch (display::service()) {
-      case display::Status::NeedsAssets:
-        // The chip was re-initialised after a stalled swap: RAM_G is presumed lost, frames are refused until the bitmaps are back.
-        // One attempt: a failed upload (each chunk may wait up to 70 ms) is not repeated on every pass, the display stays dark.
-        if (!assets_failed) {
-          if (o3sdk::ui::upload_assets(display::display()) == o3sdk::hal::UploadResult::Ok) {
-            display::display().assets_loaded();
-          } else {
-            assets_failed = true;
-            display::hold_dark();
-            fault_code = mk66::blink::kAppFailure;
+    if (!display_dark()) {  // OS-POWER P1, the end of stage E: the display is dark and held and the chip is in power-down: nothing below touches it, nor the runtime (it draws, and flushes the pad LEDs, which are parked)
+      switch (display::service()) {
+        case display::Status::NeedsAssets:
+          // The chip was re-initialised after a stalled swap: RAM_G is presumed lost, frames are refused until the bitmaps are back.
+          // One attempt: a failed upload (each chunk may wait up to 70 ms) is not repeated on every pass, the display stays dark.
+          if (!assets_failed) {
+            if (o3sdk::ui::upload_assets(display::display()) == o3sdk::hal::UploadResult::Ok) {
+              display::display().assets_loaded();
+            } else {
+              assets_failed = true;
+              display::hold_dark();
+              fault_code = mk66::blink::kAppFailure;
+            }
           }
-        }
-        break;
-      case display::Status::Failed:
-        fault_code = mk66::blink::kDisplayStalled;  // held dark by the driver, for good
-        break;
-      case display::Status::Ok:
-      case display::Status::Down:
-        break;
+          break;
+        case display::Status::Failed:
+          fault_code = mk66::blink::kDisplayStalled;  // held dark by the driver, for good
+          break;
+        case display::Status::Ok:
+        case display::Status::Down:
+          break;
+      }
+      rt.poll();                // input -> app -> screen, the pad LEDs
     }
-    rt.poll();                // input -> app -> screen, the pad LEDs
     mk66::audio_main_pass();  // the beat: a whole pass has run
 
     const auto ms = static_cast<std::uint32_t>(clock.uptime_ms());
@@ -469,9 +543,11 @@ int main() {
       }
       // The block clock stopping (the DMA halted on an error, the clocks died) raises no interrupt and counts nothing: the boundary
       // count standing still is how it shows.
-      const bool stalled = ms - last_progress_ms >= kAudioStallMs;
+      // OS-POWER P1: not once the shutdown has stopped the audio path on purpose (the power-off latch): the counter stands still by design, the verdict and the pattern are not taken, and the LED keeps its
+      // heartbeat (a fault "is final", so one wrongly latched here would show the 11-pulse code until the restart).
+      const bool stalled = !powering_off() && ms - last_progress_ms >= kAudioStallMs;
       const std::uint8_t verdict = stalled ? mk66::blink::kAudioFault : audio_pattern(snap);
-      if (verdict != 0 && pattern != mk66::blink::kAudioFault) {
+      if (!powering_off() && verdict != 0 && pattern != mk66::blink::kAudioFault) {
         pattern = verdict;  // a fault is final; "over budget" stays until a fault replaces it
       }
       // The outputs open once, after 400 clean blocks: the amplifier key's click is at power-on, never under a note. Never while the firmware update path holds the card or waits for the
@@ -481,7 +557,8 @@ int main() {
 #else
       const bool update_busy = false;
 #endif
-      if (mk66::open_wanted(audio_up, outputs_open(), /*asked=*/false, /*loading=*/false, update_busy, /*powering_off=*/false) && output_gate.ready(snap.boundaries) &&
+      // OS-POWER P1: once the shutdown has begun (the power-off latch, set at its stage A and never cleared) nothing reopens the outputs, whatever else says so (4.6).
+      if (mk66::open_wanted(audio_up, outputs_open(), /*asked=*/false, /*loading=*/false, update_busy, powering_off()) && output_gate.ready(snap.boundaries) &&
           open_retry.ready(false, ms)) {
         if (mk66::audio_device().unmute()) {  // blocks about 0.2 s, the display serviced by the idle hook
           set_outputs_open();

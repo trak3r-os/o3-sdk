@@ -7,6 +7,7 @@ build-host/apps/hello/hello_sim                                    # 500 ms, the
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /tmp/hello
 build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole run's audio
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out /tmp/hello
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out /tmp/hello    # notes and a master clock in (a fake MIDI device)
 ```
 
 `--firmware-dir DIR` gives the system Config screen a fake update path (`platform/host/fake_firmware.h`) over the `*.ptf` files of `DIR`, in name
@@ -14,6 +15,14 @@ order, the first being the reset target; without it the screen has no FIRMWARE s
 flashed, there is no flash. A file whose first line is one decimal number is listed with that size (a fixture is a few bytes; a `.ptf` is hundreds
 of KB); a name that contains `bad` fails its check at byte 1024 ("bad vector table"); a check takes 300 ms of simulated time; an install that the
 check allowed never ends, as on the unit. In a test, `sim::Harness(app, &sink)` takes any `hal::firmware::FirmwareSink`, and `load_firmware_dir()` fills a `FakeFirmwareSink` as the option does.
+
+`--midi` gives the app a fake MIDI device (`platform/host/fake_midi.h`, `hal::midi::Device`): the MIDI section of the system Config, the app's routes
+of notes to units, `App::midi()`, the clock followed or sent. A scenario that has a `midi` or `clock` line gets one without the option. Without a device
+(the default, and what the unit has until its MIDI service is in the image) the platform is the one that existed before MIDI: no MIDI section, no traffic.
+In a test, `sim::Harness(app, firmware, &fake_midi)` takes any `hal::midi::Device`; `Harness::midi()` is the fake, `due_samples()` the timeline sample "now".
+The fake is also the reference model of what a real device promises the kit (`hal/midi.h`): input stamped with a frame, an ideal master clock (`clock_start`,
+`clock_continue`, `clock_stop`, `clock_tempo`, `clock_off`: Start at the next block, a quiet master flywheeled for 48 clocks), and the clock and transport
+the app sends captured with their sample (`FakeMidi::sent`).
 
 The executable is built in the binary directory of the CMake directory that calls `o3sdk_app()` (`build-host/apps/hello/` here;
 `build-host/app/o3_303_sim` in the sibling o3-303, which builds o3sdk from outside).
@@ -57,5 +66,7 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 | `boot <name>` | the boot screen of this image (its logo: the kit's O3, or the app's own `LOGO`) as the first frame, `<out>/<name>.png`; the runtime's next frame replaces it |
 | `record on\|off` | keep the rendered audio |
 | `wav <name>` | `<out>/<name>.wav`, what has been recorded so far |
+| `midi <din\|usb> <hex...>` | MIDI bytes arriving on a port now, `midi din 90 3c 64` (a note on, channel 1, middle C); channel messages only, with running status, so `midi din 90 30 64 34 64` is two notes; they land in the block that renders next |
+| `clock <bpm> start\|stop` | a MIDI master at `<bpm>` (20 .. 300, decimals allowed) sends Start or Stop; `clock <bpm> continue <beats>` is a song position (sixteenths) then Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in the Config's MIDI section |
 
 Each command that touches the panel is followed by one millisecond, so the runtime sees the events in order.

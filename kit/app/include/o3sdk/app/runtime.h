@@ -12,6 +12,10 @@
 // poll() never blocks. A frame is a whole display list: the header strip (app name, screen title, tempo, transport, CPU), the
 // screen's content and the soft-key row. The pads' LEDs are one frame per UI frame, sent a piece at a time (hal/leds.h).
 //
+// MIDI (when Platform::midi is set). The render side of every block is: Device::begin_block, the routed notes injected into the engine
+// (Engine::inject), the clock frame (Engine::follow), Engine::render, Device::end_block with the transport and the hooks' messages. The main
+// loop forwards the app's Engine::play() / stop() while following (Device::request) and hands every message no route took to App::midi().
+//
 // The runtime owns the Config button: it opens the system Config screen (system_config.h) over the app's, and the app never sees the
 // button. While that screen is open, or the input is locked, the app gets no new press and no turn; the release of a button or pad
 // pressed before still reaches it, and a press the screen took is not released to the app either.
@@ -29,6 +33,7 @@
 #include <o3sdk/hal/firmware.h>
 #include <o3sdk/hal/input.h>
 #include <o3sdk/hal/leds.h>
+#include <o3sdk/hal/midi.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -47,6 +52,10 @@ struct Platform {
   // simulator's a fake folder. Null (or one that is not available()) hides the FIRMWARE section.
   hal::firmware::FirmwareSink* firmware = nullptr;
   const char* build = nullptr;  // the build id INFO shows ("o3sdk 0123456789ab-dirty"); null: none
+  // MIDI in and out (hal/midi.h, docs/M2B2-PLAN.md section 3): notes into the engine through the app's routes, the clock followed or sent,
+  // the rest to App::midi(), and the MIDI section of the system Config. Null (a test rig, an image without MIDI): none of it, and the runtime
+  // behaves as it did before MIDI existed.
+  hal::midi::Device* midi = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).
@@ -85,8 +94,9 @@ class Runtime {
   // `playing` is the last Play/Stop the main loop asked for, `tempo` is in milli-BPM (120000 = 120.0), `cpu` the render's load of the
   // last block in percent (0 without a cycle counter), `frames` the frames drawn. Spaces in a name become '_'. NUL terminated, cut
   // at a pair when `cap` is short; returns the length. Main loop only.
-  //   ... frames=<n> sys=0|1 section=<firmware|display|info> fw=<closed|list|ask_update|checking|ask_install|installing> [<the app's pairs>]
-  // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase.
+  //   ... frames=<n> sys=0|1 section=<firmware|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing> [<the app's pairs>]
+  // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase. `tempo` and
+  // `playing` are the master's while the engine follows a MIDI clock (Engine::tempo).
   std::size_t state_line(char* out, std::size_t cap) const noexcept;
 
   // ---- The system layer (system_config.h) -----------------------------------------------------------------------------------------
@@ -105,6 +115,8 @@ class Runtime {
 
  private:
   static void render_block(void* user, const hal::audio::BlockIo& io) noexcept;
+  void render_midi_in(std::uint32_t frames) noexcept;
+  void poll_midi() noexcept;
   void switch_screen() noexcept;
   void route(const Input& in) noexcept;
   void draw_header(ui::Renderer& r) noexcept;

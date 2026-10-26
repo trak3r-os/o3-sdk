@@ -107,6 +107,12 @@ class CommandTable {
   std::size_t skipped_ = 0;
 };
 
+// OS-POWER P1 (D2): the shell's gate once the shutdown has begun (console.cpp power_gate asks it with power::device::locked()). nullptr lets the command named `name` run: the gate is open while the
+// shutdown has not begun, and after it only the kit's reads that diagnose it (commands.h kPowerReads) run. Anything else, the app's rows included (an app row cannot carry a kit name), gets
+// kPoweringOff, which the shell prints in place of running the command.
+inline constexpr char kPoweringOff[] = "ERR powering off\n";
+const char* power_gate_text(bool shutting_down, const char* name) noexcept;
+
 // `state`: Runtime::state_line (the kit's pairs, then the app's) and a newline.
 void write_state(const app::Runtime& runtime, app::DiagOut& out) noexcept;
 

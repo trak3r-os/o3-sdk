@@ -11,6 +11,7 @@
 #   platform_mk66_update   the firmware update path: path guard, HEX validator, `fw` service, FirmwareStore, App firmware port (update/)
 #   platform_mk66_usb      the USB0 driver's pure parts, the `diag` platform text, the HIL injector, the `shot` stream, the USB audio tap (usb/)
 #   platform_mk66_console  the console's table, `state`, the USB crash-loop rule and the mode guard: pure parts (console/)
+#   platform_mk66_power    the Power switch's shutdown: the state machine, the VLPR off's sequence, the report; pure (power/)
 # The pure parts build on every platform and their tests (tests/) run on the host. With -DO3SDK_PLATFORM=mk66 the block at the end
 # builds one firmware image per app (`<app>.elf`, `<app>.hex`, `<app>.ptf`) with the hardware halves of each domain.
 
@@ -27,6 +28,7 @@ add_subdirectory(storage)
 add_subdirectory(update)
 add_subdirectory(usb)
 add_subdirectory(midi)
+add_subdirectory(power)
 add_subdirectory(console)
 
 if(NOT O3SDK_CROSS AND O3SDK_BUILD_TESTS)
@@ -90,6 +92,10 @@ option(O3SDK_MK66_SDRAM_FULL_TEST "Image: test every SDRAM cell at boot (a few s
 option(O3SDK_CODE_CACHE "Image: turn the K66's 8 KiB code cache on in the reset sequence, so flash code and constants run at cache speed" ON)
 option(O3SDK_SDRAM_ICODE_ALIAS "Image: after the SDRAM tests, make the controller answer at the ICode alias 0x0800_0000 as well as at 0x7000_0000" ON)
 option(O3SDK_MK66_AUDIO_TEST "Image: the audio bring-up image, the device plays the 1 kHz test tone (audio/test_tone.h) instead of the app's engine" OFF)
+# OS-POWER P2, as in track3r-os (O3OS_POWER_VLPR_OFF): the end of a real power-off (a hold of Power, `power off`) is the VLPR off: PTC3 polled in very-low-power RUN, a press is a software reset. OFF: the end is P1's
+# restart after the release of Power (the fallback of the decision "if the wake fails on the unit the alpha ships P1's restart-off only", spec section 1). `power off dry` is the restart in both. One place of the default.
+# Only an image with the console has the Power switch (power_host_mk66.cpp names the console's log, USB, the card and the update path).
+option(O3SDK_POWER_VLPR_OFF "Image: the end of a real power-off is the VLPR off with a polled wake (OS-POWER P2). OFF: a restart after the release of Power (P1)" ON)
 
 # The linker script, generated from mem_map.h at build time.
 set(_mk66_ld "${CMAKE_CURRENT_BINARY_DIR}/mk66.ld")
@@ -123,7 +129,7 @@ else()
   set(_mk66_main_libs platform_mk66_display platform_mk66_input platform_mk66_audio)
   if(O3SDK_MK66_CONSOLE)
     set(_mk66_console ON)
-    list(APPEND _mk66_main_libs platform_mk66_console platform_mk66_usb platform_mk66_storage platform_mk66_update usb)
+    list(APPEND _mk66_main_libs platform_mk66_console platform_mk66_usb platform_mk66_storage platform_mk66_update platform_mk66_power usb)
   endif()
 endif()
 add_library(platform_mk66_image OBJECT src/startup.cpp src/boot.cpp src/crash_store.cpp src/clock.cpp src/i2c.cpp src/cache.cpp ${_mk66_main})
@@ -138,6 +144,10 @@ target_compile_definitions(platform_mk66_image PRIVATE
   O3SDK_SDRAM_ICODE_ALIAS=$<BOOL:${O3SDK_SDRAM_ICODE_ALIAS}>
   O3SDK_AUDIO_TEST=$<BOOL:${O3SDK_MK66_AUDIO_TEST}>
   O3SDK_CONSOLE=$<BOOL:${_mk66_console}>)
+# The Power switch's image half (power/src/power_host_mk66.cpp): the end of a real off, see O3SDK_POWER_VLPR_OFF above.
+if(TARGET platform_mk66_power_hw)
+  target_compile_definitions(platform_mk66_power_hw PRIVATE O3SDK_POWER_VLPR_OFF=$<BOOL:${O3SDK_POWER_VLPR_OFF}>)
+endif()
 # The console's hardware half names the generated build identity (the banner and `version` print O3SDK_IMAGE_LABEL).
 if(TARGET platform_mk66_console_hw)
   target_include_directories(platform_mk66_console_hw PRIVATE ${_mk66_gen_dir})
@@ -161,7 +171,7 @@ function(o3sdk_mk66_image name app_target)
   if(NOT O3SDK_MK66_SKELETON)
     target_link_libraries(${name} PRIVATE platform_mk66_display_hw platform_mk66_input_hw platform_mk66_audio_hw)
     if(O3SDK_MK66_CONSOLE)
-      target_link_libraries(${name} PRIVATE platform_mk66_console_hw platform_mk66_usb_hw platform_mk66_storage_hw platform_mk66_update_hw)
+      target_link_libraries(${name} PRIVATE platform_mk66_console_hw platform_mk66_usb_hw platform_mk66_storage_hw platform_mk66_update_hw platform_mk66_power_hw)
     endif()
   endif()
   # Whole archive: o3sdk_app() is the app library's entry point and only main names it.

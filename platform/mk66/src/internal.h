@@ -32,6 +32,8 @@ void capture_reset_cause() noexcept;
 // before that they are sized for the clock the core is running at (see clock_config.h kFeiHz), good to tens of percent.
 void delay_us(std::uint32_t us) noexcept;
 void delay_ms(std::uint32_t ms) noexcept;
+// OS-POWER P2: the core clock the delays above are sized for, when the VLPR off changes it (init_clocks() is the only other writer). Main thread only.
+void set_core_hz(std::uint32_t hz) noexcept;
 
 // OS-003f: a function delay_ms() calls once every millisecond it waits (never from inside itself, and never from an interrupt: the
 // main thread only), so that the display keeps being serviced while a bring-up blocks for most of a second (the codec's waits are
@@ -119,4 +121,24 @@ void bind_engine(dsp::Engine& engine) noexcept;
 bool audio_outputs_open() noexcept;
 void audio_opened() noexcept;
 bool firmware_update_active() noexcept;
+
+// ---- Power slice (docs/M2B2-PLAN.md): the declarations are track3r-os's, line for line; the definitions are console/src/appimg.cpp's ----------------------------------------------------
+// ---- OS-POWER P1 (power/src/power_host_mk66.cpp, docs/specs/OS-POWER.md 4): what the shutdown asks of the composition root. Main loop only.
+// The power-off latch: set by power_quiesce() (stage A), before anything stops, and never cleared (a restart ends the run). main.cpp's audio poll takes no stall verdict and no pattern while it is
+// set, and mk66::open_wanted() is false: nothing reopens the outputs (4.6).
+bool power_off_latched() noexcept;
+// Stage 0: a WAV export, a set of stems or an OG project export runs (App::export_running); the second hold stops it (App::export_stop).
+bool power_export_running() noexcept;
+void power_export_stop() noexcept;
+// Stage A: the latch, the input locked (the keys, pads and encoder are dropped, the MIDI input is not read, the console refuses its commands), the transport and the live notes stopped, the app in
+// its power mode (App::power_begin: its card jobs cancelled, the save layer takes nothing new but the settings flush).
+void power_quiesce() noexcept;
+// Stage B: the save layer's own (SaveService::power_busy / power_committing / power_cancel).
+bool power_save_busy() noexcept;
+bool power_save_committing() noexcept;
+void power_save_cancel() noexcept;
+// Stage E, at its end: the display is dark and held and the chip is in power-down, so appimg::pass() does not touch it from here.
+void power_display_off() noexcept;
+// o3-sdk's own (track3r-os's appimg::pass() reads its flag in the same file): whether power_display_off() has been called. main.cpp's loop does not touch the display or the runtime once it is true.
+bool power_display_is_off() noexcept;
 }  // namespace o3sdk::platform::mk66::appimg

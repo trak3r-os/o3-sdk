@@ -19,6 +19,11 @@ constexpr core::Tick kMinFrameUs = 16'667;
 // The strip over the bottom of the screen (system_config.h): a Data-face line in the theme's row pitch.
 constexpr int kStripH = 28;
 
+// MIDI. The render takes at most this many notes from the device in a block (the rest wait there); the main loop hands App::midi() at most
+// this many messages in a pass.
+constexpr unsigned kMidiInPerBlock = 32;
+constexpr unsigned kMidiPerPass = 32;
+
 // "120.0" from milli-BPM.
 void format_tempo(std::uint32_t mbpm, char* out) noexcept {
   const std::uint32_t whole = mbpm / 1000u;
@@ -64,15 +69,17 @@ std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
 }  // namespace
 
 Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
-    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build) {
+    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
+  ctx_.midi_.bind(platform_.midi, &engine_);
 }
 
 bool Runtime::start() noexcept {
   ctx_.now_ = platform_.clock.now();
   ctx_.ms_ = platform_.clock.uptime_ms();
   const bool assets = ui::upload_assets(platform_.display) == hal::UploadResult::Ok;
+  ctx_.midi_.push_config();  // (the device starts from the kit's defaults; App::setup may change them)
   app_.setup(ctx_);
   engine_.start();
   switch_screen();
@@ -145,6 +152,7 @@ void Runtime::poll() noexcept {
     switch_screen();
   }
 
+  poll_midi();
   app_.update(ctx_);
   if (ctx_.screen_ != nullptr) {
     ctx_.screen_->update(ctx_);
@@ -283,6 +291,63 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
   return n;
 }
 
+// Main loop: the app's play() or stop() while the engine follows a master goes to the device, and the messages no route took go to the app.
+// While the input is locked (the power-off, an install: the system layer has the unit) the app hears nothing: what the device has is read and
+// dropped, so it does not pile up, and App::midi() does not run.
+void Runtime::poll_midi() noexcept {
+  hal::midi::Device* dev = platform_.midi;
+  if (dev == nullptr) {
+    return;
+  }
+  const core::TransportRequest request = engine_.take_transport_request();
+  if (request != core::TransportRequest::None) {
+    if (engine_.following()) {
+      dev->request(request);
+    } else if (request == core::TransportRequest::Play) {  // the master was let go before this pass: the request is the engine's own again
+      (void)engine_.play();
+    } else {
+      (void)engine_.stop();
+    }
+  }
+  const bool deaf = locked_ || sys_.locked();
+  core::MidiMessage m;
+  dsp::UnitId units[Midi::kMaxRoutes];
+  for (unsigned n = 0; n < kMidiPerPass && dev->poll(m); ++n) {
+    if (!deaf && ctx_.midi_.match(m, units) == 0u) {  // (a routed note went to its unit in the render)
+      (void)app_.midi(ctx_, m);
+    }
+  }
+}
+
+// Render context, before the engine: the notes of this block for the routes, at their frames, and the block's transport.
+void Runtime::render_midi_in(std::uint32_t frames) noexcept {
+  core::MidiMessage in[kMidiInPerBlock];
+  core::ClockFrame clock;
+  unsigned n = platform_.midi->begin_block(frames, in, kMidiInPerBlock, clock);
+  n = n < kMidiInPerBlock ? n : kMidiInPerBlock;
+  dsp::UnitId units[Midi::kMaxRoutes];
+  for (unsigned i = 0; i < n; ++i) {
+    const core::MidiMessage& m = in[i];
+    const unsigned routed = ctx_.midi_.match(m, units);
+    if (routed == 0u) {
+      continue;
+    }
+    const auto frame = static_cast<std::uint16_t>(m.frame < frames ? m.frame : frames - 1u);
+    dsp::Event e;
+    if (core::midi_kind(m.status) == core::kMidiControl) {  // all sound off, all notes off
+      e = dsp::all_notes_off(frame);
+    } else if (core::midi_kind(m.status) == core::kMidiNoteOn && m.data2 != 0u) {
+      e = dsp::note_on(m.data1, m.data2, 0u, frame);
+    } else {  // a note off, or a note on with velocity 0
+      e = dsp::note_off(m.data1, frame);
+    }
+    for (unsigned r = 0; r < routed; ++r) {
+      (void)engine_.inject(units[r], e);
+    }
+  }
+  engine_.follow(clock);
+}
+
 void Runtime::render_block(void* user, const hal::audio::BlockIo& io) noexcept {
   auto* self = static_cast<Runtime*>(user);
   constexpr std::uint32_t n = hal::audio::kBlock;
@@ -299,7 +364,16 @@ void Runtime::render_block(void* user, const hal::audio::BlockIo& io) noexcept {
   float out_l[n];
   float out_r[n];
   dsp::s16_to_planes(io.in, in_l, in_r, n);
+  hal::midi::Device* midi = self->platform_.midi;
+  if (midi != nullptr) {
+    self->render_midi_in(n);
+  }
   self->engine_.render(in_l, in_r, out_l, out_r, n);
+  if (midi != nullptr) {
+    unsigned sent = 0;
+    const core::MidiMessage* out = self->engine_.midi_out(sent);
+    midi->end_block(self->engine_.block_frame(), out, sent);
+  }
   if ((io.flags & hal::audio::kFlagSilence) == 0u) {
     dsp::planes_to_s16(out_l, out_r, io.out, n);
   }

@@ -381,6 +381,49 @@ TEST_CASE("console e2e: pad and enc, hold and down, and the refusals") {
   CHECK(has(c.say("key f1"), "ERR no input: the app has not started\r\n"));
 }
 
+// OS-POWER P1 (D2): the shell's gate over the real table. The image's gate is console.cpp's power_gate (power_gate_text asked with power::device::locked()); here the flag is the test's.
+namespace {
+bool g_shutting_down = false;
+const char* shutdown_gate(const shell::Command& cmd) noexcept { return console::power_gate_text(g_shutting_down, cmd.name); }
+}  // namespace
+
+TEST_CASE("console e2e: once the shutdown has begun the shell answers ERR powering off to everything but the reads, the app's rows included, and does not run them") {
+  Rig& rig = fresh();
+  USB_REQUIRE(rig.enumerate());
+  Console& c = fresh_console(rig);
+  c.sh->set_gate(&shutdown_gate);
+  g_shutting_down = false;
+  CHECK(has(c.say("key f1"), "ok key 0\r\n"));  // open: it runs
+  CHECK(c.app.f1_presses == 1u);
+  CHECK(has(c.say("ping"), "pong 1\r\n"));
+
+  g_shutting_down = true;
+  const unsigned pushed = c.port.pushed;
+  const unsigned run = c.sh->commands_run();
+  const std::string refused_key = c.say("key f1");
+  CHECK(has(refused_key, "ERR powering off\r\n"));
+  CHECK_FALSE(has(refused_key, "ok key"));
+  CHECK(c.port.pushed == pushed);  // not run: nothing reached the injector
+  CHECK(c.app.f1_presses == 1u);
+  CHECK(has(c.say("ping"), "ERR powering off\r\n"));  // an app row
+  CHECK(has(c.say("pad 3"), "ERR powering off\r\n"));
+  CHECK(has(c.say("enc 1"), "ERR powering off\r\n"));
+  CHECK(has(c.say("peek 0"), "ERR powering off\r\n"));  // a kit row that is not a read (this fixture binds no handler, so the gate's answer is the proof)
+  CHECK(c.sh->commands_run() == run);
+  // The reads still answer.
+  CHECK(has(c.say("version"), "Track3r o3sdk, build e2e-test\r\n"));
+  const std::string state = c.say("state");
+  CHECK(has(state, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames="));  // (the frame count has moved on: the runtime polled all the while)
+  CHECK(has(state, " sys=0 section=display fw=closed f1=1 pad=-1\r\n"));
+  CHECK(has(c.say("power"), "ERR not in this image\r\n"));  // a read: the gate lets it through (to the fixture's unbound row)
+  const std::string help = c.say("help");
+  CHECK(has(help, "power   power [press|release|pin|off [dry]]: the Power switch and the shutdown\r\n"));
+  CHECK(has(help, "ping    ping: answer pong\r\n"));  // help lists the whole table, the app's rows too
+  CHECK(c.sh->commands_run() == run + 4u);
+  g_shutting_down = false;
+  CHECK(has(c.say("key f1"), "ok key 0\r\n"));  // the gate is the platform's flag: open again, it runs again
+}
+
 TEST_CASE("console e2e: a key typed by name or by code is the same button, a release waits while injection is refused") {
   Rig& rig = fresh();
   USB_REQUIRE(rig.enumerate());

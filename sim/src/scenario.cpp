@@ -19,6 +19,39 @@ bool to_int(const std::string& s, long& out) {
   return end != nullptr && *end == '\0';
 }
 
+// "140" or "140.5" as milli-BPM; false for anything else or outside 20 .. 300 BPM.
+bool to_mbpm(const std::string& s, std::uint32_t& out) {
+  if (s.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const double bpm = std::strtod(s.c_str(), &end);
+  if (end == nullptr || *end != '\0' || !(bpm >= 20.0 && bpm <= 300.0)) {
+    return false;
+  }
+  out = static_cast<std::uint32_t>(bpm * 1000.0 + 0.5);
+  return true;
+}
+
+// Two hex digits a byte, "3c" or "0x3c".
+bool to_byte(const std::string& s, std::uint8_t& out) {
+  const std::size_t skip = s.size() > 2 && s[0] == '0' && (s[1] == 'x' || s[1] == 'X') ? 2u : 0u;
+  if (s.size() == skip || s.size() - skip > 2u) {
+    return false;
+  }
+  unsigned v = 0;
+  for (std::size_t i = skip; i < s.size(); ++i) {
+    const char c = s[i];
+    const int d = (c >= '0' && c <= '9') ? c - '0' : ((c >= 'a' && c <= 'f') ? c - 'a' + 10 : ((c >= 'A' && c <= 'F') ? c - 'A' + 10 : -1));
+    if (d < 0) {
+      return false;
+    }
+    v = v * 16u + static_cast<unsigned>(d);
+  }
+  out = static_cast<std::uint8_t>(v);
+  return true;
+}
+
 }  // namespace
 
 ScenarioResult run_scenario(Harness& h, const std::string& text, const std::string& out_dir) {
@@ -136,6 +169,44 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
         return fail("cannot write " + path);
       }
       std::printf("wav %s (%zu frames)\n", path.c_str(), h.audio().size() / 2u);
+    } else if (cmd == "midi") {
+      if (h.midi() == nullptr) {
+        return fail("midi: this harness has no MIDI device (<app>_sim makes one when the scenario has a midi or clock line, or with --midi)");
+      }
+      platform::host::FakeMidi::Port port{};
+      if (w.size() < 3 || (w[1] != "din" && w[1] != "usb")) {
+        return fail("midi din|usb <hex bytes>");
+      }
+      port = w[1] == "din" ? platform::host::FakeMidi::Port::Din : platform::host::FakeMidi::Port::Usb;
+      std::vector<std::uint8_t> bytes;
+      for (std::size_t i = 2; i < w.size(); ++i) {
+        std::uint8_t byte = 0;
+        if (!to_byte(w[i], byte)) {
+          return fail("midi: '" + w[i] + "' is not a hex byte");
+        }
+        bytes.push_back(byte);
+      }
+      if (h.midi()->in_bytes(port, bytes.data(), bytes.size(), h.due_samples()) == 0u) {
+        return fail("midi: no complete channel message in those bytes");
+      }
+    } else if (cmd == "clock") {
+      if (h.midi() == nullptr) {
+        return fail("clock: this harness has no MIDI device (<app>_sim makes one when the scenario has a midi or clock line, or with --midi)");
+      }
+      std::uint32_t mbpm = 0;
+      if (w.size() == 2 && w[1] == "off") {
+        h.midi()->clock_off();
+      } else if (w.size() == 3 && to_mbpm(w[1], mbpm) && (w[2] == "start" || w[2] == "stop")) {
+        if (w[2] == "start") {
+          h.midi()->clock_start(mbpm);
+        } else {
+          h.midi()->clock_stop(mbpm);
+        }
+      } else if (w.size() == 4 && to_mbpm(w[1], mbpm) && w[2] == "continue" && to_int(w[3], n) && n >= 0 && n < 16384) {
+        h.midi()->clock_continue(mbpm, static_cast<unsigned>(n));
+      } else {
+        return fail("clock <bpm 20..300> start|stop, clock <bpm> continue <beats>, or clock off");
+      }
     } else {
       return fail("unknown command '" + cmd + "'");
     }

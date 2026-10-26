@@ -216,6 +216,14 @@ void CommandTable::write_unknown(const char* name, app::DiagOut& out) noexcept {
   out.text("unknown command: ").text(name).text(" (help lists the commands)\n");
 }
 
+const char* power_gate_text(bool shutting_down, const char* name) noexcept {
+  if (!shutting_down) {
+    return nullptr;
+  }
+  Cmd which = Cmd::Help;
+  return find_kit(name, which) && power_read(which) ? nullptr : kPoweringOff;
+}
+
 void write_state(const app::Runtime& runtime, app::DiagOut& out) noexcept {
   char buf[kStateBuffer];
   const std::size_t n = runtime.state_line(buf, sizeof buf);

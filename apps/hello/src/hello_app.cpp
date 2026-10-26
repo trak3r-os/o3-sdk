@@ -8,7 +8,9 @@
 //   PARAMS        next page of values (SYNTH, DELAY); SHIFT + PARAMS: the previous one
 //   PLAY          the demo riff on and off (a clocked hook of the engine plays it, sample-accurate)
 //   UP / DOWN     tempo +-1 BPM (SHIFT: +-10)
-//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, DISPLAY (the theme), INFO
+//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, MIDI, DISPLAY (the theme), INFO
+//   MIDI          notes on the channel the user chose in the Config's MIDI section (any, by default) play SYNTH, frame-accurate; with FOLLOW on
+//                 there, the riff and the tempo follow a MIDI clock on DIN or USB (the riff is a clocked hook; it needs nothing to do so)
 //
 // One instrument (SYNTH) on slot 0, a DELAY on send A.
 
@@ -265,6 +267,7 @@ class HelloApp final : public app::App {
     const dsp::UnitId synth = e.attach(synth_);
     const dsp::UnitId delay = e.attach(delay_);
     (void)e.set_source(0, synth);
+    (void)ctx.midi().route(synth, 0);  // MIDI notes play the synth, on the user's channel (the Config's MIDI section; omni by default)
     (void)e.set_send_effect(0, delay);
     (void)e.set_mix(0, dsp::MixField::SendA, 0.3f);
     riff_.set_unit(synth);
@@ -300,7 +303,7 @@ class HelloApp final : public app::App {
     }
     if (in.press(Button::Up) || in.press(Button::Down)) {
       const int step = (in.shift ? 10'000 : 1'000) * (in.press(Button::Up) ? 1 : -1);
-      const int t = static_cast<int>(e.tempo()) + step;
+      const int t = static_cast<int>(e.own_tempo()) + step;  // (the engine's own: tempo() is the master's while one is followed)
       (void)e.set_tempo(static_cast<std::uint32_t>(t > 0 ? t : 0));
       ctx.redraw();
       return true;

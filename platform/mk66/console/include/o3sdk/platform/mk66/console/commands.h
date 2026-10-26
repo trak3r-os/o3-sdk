@@ -8,12 +8,13 @@
 // (core.h keeps an app's commands from using the words of that path).
 
 #include <cstddef>
+#include <cstdint>
 
 namespace o3sdk::platform::mk66::console {
 
 // The order of the table, and of `help`: track3r-os's relative order for the commands in scope.
 enum class Cmd : unsigned {
-  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Guard,
+  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard,
   Count
 };
 
@@ -46,6 +47,7 @@ inline constexpr CommandInfo kCommandInfo[] = {
     {"shot", "shot [565|8888 [w]] [pclk0]: the screen as framed base64 (o3console)"},
     {"leds", "leds: pad LED levels as the driver holds them, one line"},
     {"cache", "cache [on|off|inv|check]: the code cache (LMEM): state, switch, check"},
+    {"power", "power [press|release|pin|off [dry]]: the Power switch and the shutdown"},
     {"guard", "guard [n <1..255>]: the main-loop guard's window (OS-MAINGUARD)"},
 };
 static_assert(sizeof(kCommandInfo) / sizeof(kCommandInfo[0]) == static_cast<std::size_t>(Cmd::Count), "one row per Cmd");
@@ -53,5 +55,12 @@ static_assert(sizeof(kCommandInfo) / sizeof(kCommandInfo[0]) == static_cast<std:
 inline constexpr std::size_t kKitCommandCount = static_cast<std::size_t>(Cmd::Count);
 
 constexpr const CommandInfo& info(Cmd c) noexcept { return kCommandInfo[static_cast<unsigned>(c)]; }
+
+// OS-POWER P1 (D2): once the shutdown has begun the shell runs only these, the reads that diagnose it (console.cpp power_gate); every other command, the app's included, is answered `ERR powering off`. One bit per Cmd.
+static_assert(static_cast<unsigned>(Cmd::Count) <= 64u, "kPowerReads has a bit per Cmd");
+constexpr std::uint64_t cmd_bit(Cmd c) noexcept { return std::uint64_t{1} << static_cast<unsigned>(c); }
+inline constexpr std::uint64_t kPowerReads = cmd_bit(Cmd::Help) | cmd_bit(Cmd::Version) | cmd_bit(Cmd::Stage) | cmd_bit(Cmd::Log) | cmd_bit(Cmd::Crash) | cmd_bit(Cmd::Power) | cmd_bit(Cmd::State) |
+                                             cmd_bit(Cmd::Cpu) | cmd_bit(Cmd::Mem);
+constexpr bool power_read(Cmd c) noexcept { return (kPowerReads & cmd_bit(c)) != 0u; }
 
 }  // namespace o3sdk::platform::mk66::console

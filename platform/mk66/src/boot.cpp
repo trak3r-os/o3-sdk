@@ -137,6 +137,8 @@ void enable_dwt() noexcept {
   regs::dwt_ctrl() = regs::dwt_ctrl() | regs::kDwtCyccntena;
 }
 
+void set_core_hz(std::uint32_t hz) noexcept { g_core_hz = hz; }
+
 void delay_us(std::uint32_t us) noexcept {
   const std::uint32_t wait = us * (g_core_hz / 1'000'000u);
   const std::uint32_t start = regs::dwt_cyccnt();

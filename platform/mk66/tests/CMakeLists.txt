@@ -53,6 +53,8 @@ if(TARGET mk66_console_tests)
   # mk66_console_e2e_test.cpp runs the real shell and pump over the device and its fake controller: the rig and the fake controller are the kit's tests' (tests/usb).
   target_include_directories(mk66_console_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/usb)
 endif()
+# The Power switch's shutdown (power/): the state machine over a PowerHost, the VLPR off's sequence and poll loop over an OffPlatform, the record and the `power` report; the very code the image runs.
+mk66_suite(mk66_power_tests platform_mk66_power mk66_power_*_test.cpp)
 # The USB driver's pure parts (usb/): the SoC facts, the diag text, the injector, the input hold, the peek/poke lists, the `shot` stream, the real shell + pump + log pager over the
 # device and its fake controller (mk66_usb_console_test.cpp), the USB audio tap and the boot layout's descriptors. The fake controller and the rig are the kit's tests' (tests/usb).
 mk66_suite(mk66_usb_tests platform_mk66_usb
