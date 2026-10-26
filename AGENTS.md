@@ -68,6 +68,7 @@ python3 -I tools/gate.py <app> --host-build build-host   # the release gate's me
 
 # a new app
 python3 -I tools/new_app.py <dest-dir> <app-id> [--name NAME] [--git] [--no-harness]
+python3 -I tools/new_app.py --sync-harness <app-dir> [--diff] [--write [--with-settings]]   # an app's .claude vs this one: report, then repair (never deletes)
 ctest --test-dir build-host -L template               # the template, instantiated and built (host; in the mk66 tree: its image checks)
 ```
 
@@ -156,7 +157,8 @@ the rule**; an agent whose tool has no hooks follows the same rules by itself.
 Claude Code loads it by itself; for any other tool the files are plain Markdown and Python 3 scripts you can read and run. In an app repository
 the harness is a copy (`tools/new_app.py` copies it); its texts name o3-sdk's paths, which are `../o3-sdk/...` from the app. Read `apps/<name>/` in them as
 `app/`, `build-host/apps/<name>/<name>_sim` as `build-host/app/<id>_sim` and `build-gate-a/apps/<name>/` as `build-gate-a/app/`; the harness
-files themselves are not edited in an app repository without need (they drift from o3-sdk's copy: re-copy a newer one).
+files themselves are not edited in an app repository without need (they drift from o3-sdk's copy: `python3 -I tools/new_app.py --sync-harness <app-dir>` reports the
+differences, `--write` copies o3-sdk's versions over and keeps whatever the app added).
 
 | Agent | Use it for |
 |---|---|

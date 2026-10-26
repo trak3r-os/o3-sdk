@@ -63,6 +63,21 @@ myapp-repo/
 
 The licence: the image links the GPL-3.0-or-later kit statically, so an app is GPL-compatible, and the template says GPL-3.0-or-later.
 
+**Keeping the harness current.** `.claude/` is a copy: o3-sdk's agents, skills and hooks move on, and the copy in your repository does not.
+After you pull a newer o3-sdk, compare and then repair it:
+
+```sh
+python3 -I ../o3-sdk/tools/new_app.py --sync-harness .             # report: differs / missing / extra per file; exit 3 when it differs
+python3 -I ../o3-sdk/tools/new_app.py --sync-harness . --diff      # and the unified diff of each differing file
+python3 -I ../o3-sdk/tools/new_app.py --sync-harness . --write     # copy o3-sdk's version of every differing or missing file over yours
+```
+
+`--write` never deletes: a skill, agent or hook you added ("extra") stays, and a file you edited is replaced by o3-sdk's version (read the
+`--diff` first and keep your change somewhere else if you need it; the diff of your repository shows what changed). `settings.json` and
+`settings.local.json.example` hold the hook wiring and your own permissions, so they are reported but copied only with `--with-settings`
+(`--write --with-settings`); merge by hand when you have added permissions of your own. A symlinked harness directory is not written
+through. `tools/ci.sh`, `remote_ci.sh` and `gate.py` are not part of it (copy them from o3-sdk's `tools/`).
+
 ### First build, tests, simulator (about a minute)
 
 ```sh

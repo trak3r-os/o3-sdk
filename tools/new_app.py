@@ -3,6 +3,7 @@
 """new_app.py: instantiate templates/app into a new app repository that builds against this o3-sdk checkout.
 
     python3 -I tools/new_app.py <dest-dir> <app-id> [--name NAME] [--sdk-dir DIR] [--no-harness] [--git]
+    python3 -I tools/new_app.py --sync-harness <app-dir> [--write] [--with-settings] [--diff] [--sdk-dir DIR]
     python3 -I tools/new_app.py --self-test
 
 <dest-dir> is the new repository (it must not exist: nothing is ever overwritten; its parent is created if missing). <app-id> is the
@@ -21,9 +22,22 @@ What it writes (templates/app/, then the files that must stay identical to o3-sd
 --git runs `git init` in the new repository (nothing is staged or committed). A traceable image needs a commit: the image carries the
 git state of the app and of the kit (docs/FRAMEWORK.md section 11), "unknown" without one.
 
-Python 3 standard library only. Exit status: 0 done, 1 a usage error or a refused id/name/destination, 2 the template is broken.
+--sync-harness <app-dir> compares the harness of an existing app repository (<app-dir>/.claude: agents/, skills/, hooks/, and
+settings.json with settings.local.json.example) with this checkout's (the one a new app is created with) and reports every file that
+differs, that the app lacks ("missing") or that only the app has ("extra"). Nothing is written without --write; then o3-sdk's version of
+every differing or missing file is copied over the app's, and a file the app added is never deleted or touched. The two settings files
+hold the hook wiring and the app's own permissions, so they are reported but copied only with --with-settings. --diff prints the
+unified diff of each differing file (the app's text to o3-sdk's). The harness drifts as o3-sdk's moves on (agents, skills and hooks are
+copies): run it after pulling a newer o3-sdk, read the report, then --write and review the diff in the app. The tools (ci.sh,
+remote_ci.sh, gate.py) are not part of it.
+
+Python 3 standard library only. Exit status: 0 done (a new app created; or a harness in sync, or synchronised with --write), 1 a usage
+error or a refused id/name/destination/directory, 2 the template is broken, 3 --sync-harness found differences and wrote nothing.
 """
 import argparse
+import contextlib
+import difflib
+import io
 import os
 import re
 import shutil
@@ -142,6 +156,160 @@ def copy_harness(sdk, dst):
     return True
 
 
+# The harness files an app repository carries (copy_harness above): three directories, and the settings files that wire the hooks.
+HARNESS_DIRS = ("agents", "skills", "hooks")
+SETTINGS_FILES = ("settings.json", "settings.local.json.example")
+
+
+def harness_files(claude_dir):
+    """{path relative to claude_dir, with '/': absolute path} of the harness files under claude_dir. Caches, local settings and locks are
+    not part of the harness."""
+    found = {}
+    for sub in HARNESS_DIRS:
+        for base, dirs, files in os.walk(os.path.join(claude_dir, sub)):
+            dirs[:] = sorted(d for d in dirs if d != "__pycache__")
+            for name in sorted(files):
+                if name.endswith(".pyc"):
+                    continue
+                path = os.path.join(base, name)
+                found[os.path.relpath(path, claude_dir).replace(os.sep, "/")] = path
+    for name in SETTINGS_FILES:
+        path = os.path.join(claude_dir, name)
+        if os.path.isfile(path):
+            found[name] = path
+    return found
+
+
+def read_bytes(path):
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def compare_harness(sdk, app_dir):
+    """[(status, rel)] for every harness file of either side, sorted by rel. status: 'same'; 'differs' (both have it, the bytes differ);
+    'missing' (o3-sdk has it, the app does not); 'extra' (only the app has it)."""
+    mine = harness_files(os.path.join(sdk, ".claude"))
+    theirs = harness_files(os.path.join(app_dir, ".claude"))
+    entries = []
+    for rel in sorted(set(mine) | set(theirs)):
+        if rel not in theirs:
+            entries.append(("missing", rel))
+        elif rel not in mine:
+            entries.append(("extra", rel))
+        elif read_bytes(mine[rel]) == read_bytes(theirs[rel]):
+            entries.append(("same", rel))
+        else:
+            entries.append(("differs", rel))
+    return entries
+
+
+def text_diff(sdk, app_dir, rel):
+    """The unified diff from the app's file to o3-sdk's, as a list of lines ([] for binary content)."""
+    try:
+        old = read_bytes(os.path.join(app_dir, ".claude", rel)).decode("utf-8").splitlines(keepends=True)
+        new = read_bytes(os.path.join(sdk, ".claude", rel)).decode("utf-8").splitlines(keepends=True)
+    except UnicodeDecodeError:
+        return []
+    return list(difflib.unified_diff(old, new, "app/.claude/" + rel, "o3-sdk/.claude/" + rel))
+
+
+def count_changes(diff):
+    """(lines o3-sdk's version adds, lines it removes) in a unified diff."""
+    added = sum(1 for l in diff if l.startswith("+") and not l.startswith("+++"))
+    removed = sum(1 for l in diff if l.startswith("-") and not l.startswith("---"))
+    return added, removed
+
+
+def inside(path, root):
+    """`path` (symlinks resolved) is `root` or below it; `root` is already resolved."""
+    real = os.path.realpath(path)
+    return real == root or real.startswith(root + os.sep)
+
+
+def copy_into(src, dst, claude_real):
+    """Copies src over dst through a temporary file, so that a reader never sees half a file. False, nothing written, when dst would land
+    outside the app's .claude (a symlinked directory or file in the app's harness)."""
+    if os.path.islink(dst) or not inside(dst, claude_real):
+        return False
+    os.makedirs(os.path.dirname(dst), exist_ok=True)
+    if not inside(os.path.dirname(dst), claude_real):
+        return False
+    tmp = dst + ".o3sdk-new"
+    shutil.copyfile(src, tmp)
+    shutil.copymode(src, tmp)
+    os.replace(tmp, dst)
+    return True
+
+
+def sync_harness(app_dir, sdk, write=False, with_settings=False, show_diff=False, out=None):
+    """Reports (and with `write` repairs) the drift of <app_dir>/.claude from sdk's. Returns the exit status: 0 in sync or synchronised,
+    1 a refusal or a file that could not be written, 3 differences found and nothing written."""
+    out = out or sys.stdout
+    app_dir = os.path.abspath(app_dir)
+    sdk = os.path.abspath(sdk)
+    if not os.path.isdir(app_dir):
+        print("new_app.py: %s is not a directory" % app_dir, file=sys.stderr)
+        return 1
+    if os.path.realpath(app_dir) == os.path.realpath(sdk):
+        print("new_app.py: %s is the o3-sdk checkout itself, not an app repository" % app_dir, file=sys.stderr)
+        return 1
+    if not os.path.isdir(os.path.join(sdk, ".claude")):
+        print("new_app.py: no .claude/ in %s: nothing to compare with" % sdk, file=sys.stderr)
+        return 1
+    has_harness = os.path.isdir(os.path.join(app_dir, ".claude"))
+    if not has_harness and not os.path.isfile(os.path.join(app_dir, "CMakeLists.txt")):
+        print("new_app.py: %s has no .claude/ and no CMakeLists.txt: not an app repository (a new one is created with "
+              "new_app.py <dest-dir> <app-id>)" % app_dir, file=sys.stderr)
+        return 1
+    entries = compare_harness(sdk, app_dir)
+    print("harness of %s compared with %s" % (os.path.join(app_dir, ".claude"), os.path.join(sdk, ".claude")), file=out)
+    if not has_harness:
+        print("note: the app has no .claude/ at all", file=out)
+    tally = {"same": 0, "differs": 0, "missing": 0, "extra": 0}
+    pending = []  # what --write copies
+    for status, rel in entries:
+        tally[status] += 1
+        if status == "same":
+            continue
+        diff = []
+        if status == "differs":
+            diff = text_diff(sdk, app_dir, rel)
+            added, removed = count_changes(diff)
+            detail = "o3-sdk's version adds %d and removes %d lines" % (added, removed) if diff else "binary content"
+        elif status == "extra":
+            detail = "the app's own: never touched"
+        else:
+            detail = "o3-sdk's file, the app lacks it"
+        if status != "extra":
+            if rel in SETTINGS_FILES and not with_settings:
+                detail += "; settings are copied only with --with-settings"
+            else:
+                pending.append(rel)
+        print("  %-8s %-44s %s" % (status, rel, detail), file=out)
+        if show_diff and diff:
+            out.writelines(diff if diff[-1].endswith("\n") else diff + ["\n"])
+    print("%d files: %d same, %d differ, %d missing, %d extra (the app's own)" %
+          (len(entries), tally["same"], tally["differs"], tally["missing"], tally["extra"]), file=out)
+    if not tally["differs"] and not tally["missing"]:
+        print("in sync", file=out)
+        return 0
+    if not write:
+        print("nothing written: --write copies o3-sdk's version of %d file(s) over the app's and keeps its extras" % len(pending), file=out)
+        return 3
+    claude_real = os.path.realpath(os.path.join(app_dir, ".claude"))
+    status = 0
+    for rel in pending:
+        if copy_into(os.path.join(sdk, ".claude", rel), os.path.join(app_dir, ".claude", rel), claude_real):
+            print("  wrote    %s" % rel, file=out)
+        else:
+            print("  skipped  %s (it would land outside the app's .claude: a symlink)" % rel, file=out)
+            status = 1
+    held = [rel for status_, rel in entries if status_ in ("differs", "missing") and rel not in pending]
+    if held:
+        print("not copied (--with-settings): %s" % ", ".join(held), file=out)
+    return status
+
+
 def instantiate(dest, app_id, name, sdk, harness, git):
     """Creates `dest` (which must not exist). Returns the list of notes to print. Raises ValueError for a refusal."""
     reason = check_id(app_id)
@@ -183,6 +351,125 @@ def instantiate(dest, app_id, name, sdk, harness, git):
     except BaseException:
         shutil.rmtree(dest, ignore_errors=True)  # the directory is ours: this call created it
         raise
+
+
+def run_sync(app_dir, **kwargs):
+    """sync_harness against this checkout with its report captured: (exit status, report text)."""
+    sink = io.StringIO()
+    with contextlib.redirect_stderr(io.StringIO()):
+        status = sync_harness(app_dir, SDK_ROOT, out=sink, **kwargs)
+    return status, sink.getvalue()
+
+
+def run_main(*argv):
+    """main() with the output captured: (exit status, stdout, stderr)."""
+    out, err = io.StringIO(), io.StringIO()
+    with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+        status = main(list(argv))
+    return status, out.getvalue(), err.getvalue()
+
+
+def self_test_sync(tmp, plain, expect):
+    """--sync-harness: a copy in sync, drift reported, --write repairs it and keeps what the app added. `plain` is an app without .claude."""
+    app = os.path.join(tmp, "synced")
+    instantiate(app, "synced", "SYNCED", SDK_ROOT, True, False)
+    status, text = run_sync(app)
+    expect(status == 0 and "in sync" in text, "a fresh instance is not in sync: " + text)
+
+    claude = os.path.join(app, ".claude")
+    skill = os.path.join(claude, "skills", "fw-build", "SKILL.md")
+    agent = os.path.join(claude, "agents", "doc-keeper.md")
+    settings = os.path.join(claude, "settings.json")
+    own_skill = os.path.join(claude, "skills", "mine", "SKILL.md")
+    own_hook = os.path.join(claude, "hooks", "mine.py")
+    cache = os.path.join(claude, "hooks", "__pycache__", "mine.cpython-312.pyc")
+    with open(skill, "a", encoding="utf-8") as f:
+        f.write("a local edit\n")
+    with open(settings, "a", encoding="utf-8") as f:
+        f.write("\n")
+    os.remove(agent)
+    os.makedirs(os.path.dirname(own_skill))
+    os.makedirs(os.path.dirname(cache))
+    for path in (own_skill, own_hook, cache):
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("the app's own\n")
+
+    status, text = run_sync(app)
+    expect(status == 3, "drift: exit %d, expected 3" % status)
+    expect(re.search(r"^\s+differs\s+skills/fw-build/SKILL\.md\s+o3-sdk's version adds 0 and removes 1 lines", text, re.M), "differs line: " + text)
+    expect(re.search(r"^\s+missing\s+agents/doc-keeper\.md\b", text, re.M), "missing line: " + text)
+    expect(re.search(r"^\s+extra\s+skills/mine/SKILL\.md\b", text, re.M), "extra skill: " + text)
+    expect(re.search(r"^\s+extra\s+hooks/mine\.py\b", text, re.M), "extra hook: " + text)
+    expect(re.search(r"^\s+differs\s+settings\.json\b.*--with-settings", text, re.M), "settings line: " + text)
+    expect("__pycache__" not in text and ".pyc" not in text, "a cache file was reported")
+    expect("nothing written" in text, "report mode did not say it wrote nothing")
+    with open(skill, encoding="utf-8") as f:
+        expect(f.read().endswith("a local edit\n"), "report mode changed a file")
+    expect(not os.path.exists(agent), "report mode restored a file")
+
+    status, text = run_sync(app, show_diff=True)
+    expect(status == 3 and "-a local edit" in text and "--- app/.claude/skills/fw-build/SKILL.md" in text, "--diff: " + text)
+
+    # --write: o3-sdk's versions over the app's, the app's own files untouched, settings held back, no temporary file left.
+    status, text = run_sync(app, write=True)
+    expect(status == 0, "--write: exit %d: %s" % (status, text))
+    expect("wrote    skills/fw-build/SKILL.md" in text and "wrote    agents/doc-keeper.md" in text, "--write report: " + text)
+    expect(read_bytes(skill) == read_bytes(os.path.join(SDK_ROOT, ".claude", "skills", "fw-build", "SKILL.md")), "skill not restored")
+    expect(read_bytes(agent) == read_bytes(os.path.join(SDK_ROOT, ".claude", "agents", "doc-keeper.md")), "agent not restored")
+    for path in (own_skill, own_hook, cache):
+        expect(os.path.isfile(path) and read_bytes(path) == b"the app's own\n", "the app's own file was touched: " + path)
+    expect(read_bytes(settings) != read_bytes(os.path.join(SDK_ROOT, ".claude", "settings.json")), "settings.json copied without --with-settings")
+    expect("not copied (--with-settings): settings.json" in text, "held-back settings not announced")
+    expect(not [n for _, _, names in os.walk(claude) for n in names if n.endswith(".o3sdk-new")], "a temporary file was left")
+    status, text = run_sync(app)
+    drift = re.findall(r"^\s+(differs|missing)\s+(\S+)", text, re.M)
+    expect(status == 3 and drift == [("differs", "settings.json")], "after --write only settings.json should differ: " + text)
+    status, text = run_sync(app, write=True, with_settings=True)
+    expect(status == 0, "--with-settings: exit %d" % status)
+    status, text = run_sync(app)
+    expect(status == 0 and "in sync" in text and "2 extra (the app's own)" in text, "not in sync after --with-settings: " + text)
+    expect(os.path.isfile(own_skill) and os.path.isfile(own_hook), "the app's own files are gone")
+
+    # An app without .claude gets the whole harness with --write; a directory that is no app is refused and left alone.
+    status, text = run_sync(plain)
+    expect(status == 3 and "the app has no .claude/" in text and "missing" in text, "no harness: " + text)
+    status, text = run_sync(plain, write=True)
+    expect(status == 0 and os.path.isfile(os.path.join(plain, ".claude", "hooks", "guard_flash.py")), "harness not created: " + text)
+    expect(run_sync(plain)[0] == 3, "settings were not held back for a new harness")  # settings.json is still missing
+    expect(run_sync(plain, write=True, with_settings=True)[0] == 0 and run_sync(plain)[0] == 0, "a new harness is not complete")
+    stranger = os.path.join(tmp, "stranger")
+    os.mkdir(stranger)
+    expect(run_sync(stranger, write=True)[0] == 1 and os.listdir(stranger) == [], "a directory that is no app was written to")
+    expect(run_sync(os.path.join(tmp, "nowhere"))[0] == 1, "a missing directory was accepted")
+    expect(run_sync(SDK_ROOT, write=True)[0] == 1, "o3-sdk itself was accepted as an app")
+
+    # A harness directory that is a symlink out of the app is not written through.
+    linked = os.path.join(tmp, "linked")
+    instantiate(linked, "linked", "LINKED", SDK_ROOT, True, False)
+    outside = os.path.join(tmp, "outside_hooks")
+    shutil.copytree(os.path.join(linked, ".claude", "hooks"), outside)
+    shutil.rmtree(os.path.join(linked, ".claude", "hooks"))
+    os.symlink(outside, os.path.join(linked, ".claude", "hooks"))
+    shared = os.path.join(outside, "verify_gate.py")
+    with open(shared, "a", encoding="utf-8") as f:
+        f.write("# shared with another repository\n")
+    before = read_bytes(shared)
+    status, text = run_sync(linked, write=True)
+    expect(status == 1 and "skipped  hooks/verify_gate.py" in text and read_bytes(shared) == before, "wrote through a symlink: " + text)
+
+    # The command line: exit codes and the combinations it refuses.
+    cli = os.path.join(tmp, "cli")
+    instantiate(cli, "cli", "CLI", SDK_ROOT, True, False)
+    os.remove(os.path.join(cli, ".claude", "agents", "dsp-scout.md"))
+    expect(run_main("--sync-harness", cli)[0] == 3, "cli: report exit")
+    expect(run_main("--sync-harness", cli, "--diff")[0] == 3, "cli: --diff exit")
+    expect(run_main("--sync-harness", cli, "--write")[0] == 0, "cli: --write exit")
+    status, out, _ = run_main("--sync-harness", cli)
+    expect(status == 0 and "in sync" in out, "cli: in sync exit")
+    for bad in (("--sync-harness", cli, "dest", "id"), ("--sync-harness", cli, "--with-settings"), ("--sync-harness", cli, "--no-harness"),
+                ("--write",), ("--diff", "somewhere", "id")):
+        status, _, err = run_main(*bad)
+        expect(status == 1 and err != "", "cli: %s not refused (exit %d)" % (" ".join(bad), status))
 
 
 def self_test():
@@ -247,6 +534,7 @@ def self_test():
         plain = os.path.join(tmp, "plain")
         instantiate(plain, "plain", "PLAIN", SDK_ROOT, False, False)
         expect(not os.path.exists(os.path.join(plain, ".claude")), "--no-harness copied .claude")
+        self_test_sync(tmp, plain, expect)
     for f in failures:
         print("new_app.py self-test FAILED: " + f, file=sys.stderr)
     if not failures:
@@ -259,13 +547,30 @@ def main(argv):
     parser.add_argument("dest", nargs="?", help="the new repository's directory (must not exist)")
     parser.add_argument("app_id", nargs="?", help="the app's identifier, e.g. mysynth")
     parser.add_argument("--name", help="the name the screen shows (default: the id in upper case)")
-    parser.add_argument("--sdk-dir", default=SDK_ROOT, help="the o3-sdk checkout to take LICENSE, tools and the harness from (default: this one)")
+    parser.add_argument("--sdk-dir", default=SDK_ROOT, help="the o3-sdk checkout to take LICENSE, tools and the harness from, or to compare with (default: this one)")
     parser.add_argument("--no-harness", action="store_true", help="do not copy .claude/ (agents, skills, hooks)")
     parser.add_argument("--git", action="store_true", help="run git init in the new repository (no commit)")
+    parser.add_argument("--sync-harness", metavar="APP_DIR",
+                        help="compare the .claude harness of an existing app repository with this checkout's and report the differences")
+    parser.add_argument("--write", action="store_true", help="--sync-harness: copy o3-sdk's version of every differing or missing file (never deletes)")
+    parser.add_argument("--with-settings", action="store_true",
+                        help="--sync-harness --write: also copy settings.json and settings.local.json.example (hook wiring, permissions)")
+    parser.add_argument("--diff", action="store_true", help="--sync-harness: print the unified diff of each differing file")
     parser.add_argument("--self-test", action="store_true", help="run the checks of this tool and exit")
     args = parser.parse_args(argv)
     if args.self_test:
         return self_test()
+    if args.sync_harness is not None:
+        if args.dest or args.app_id or args.name or args.no_harness or args.git:
+            print("new_app.py: --sync-harness takes the app directory only (no <dest-dir> <app-id>, --name, --no-harness or --git)", file=sys.stderr)
+            return 1
+        if args.with_settings and not args.write:
+            print("new_app.py: --with-settings needs --write (without it nothing is copied)", file=sys.stderr)
+            return 1
+        return sync_harness(args.sync_harness, os.path.abspath(args.sdk_dir), args.write, args.with_settings, args.diff)
+    if args.write or args.with_settings or args.diff:
+        print("new_app.py: --write, --with-settings and --diff belong to --sync-harness", file=sys.stderr)
+        return 1
     if not args.dest or not args.app_id:
         parser.print_usage(sys.stderr)
         return 1

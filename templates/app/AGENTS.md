@@ -63,4 +63,5 @@ unit (the screen by eye, real presses, the LEDs by eye, sound by ear, the render
 `.claude/` is a copy of o3-sdk's: agents (`firmware-engineer` for one scoped change, `firmware-reviewer` read-only, `build-verifier` for numbers,
 `doc-keeper`, `dsp-scout`), skills (`app-feature`, `fw-build`, `fw-gate-check`, `dsp-port`, `rt-optimize`, `hw-session`, `decide`, `handoff`) and hooks.
 Their texts name o3-sdk's paths: from here the kit, the platform and the simulator are in `../o3-sdk`, and this repository's code is `app/`, `units/`
-and `tests/`. `../o3-sdk/AGENTS.md` section 8 says when to use each.
+and `tests/`. `../o3-sdk/AGENTS.md` section 8 says when to use each. After pulling a newer o3-sdk, `python3 -I ../o3-sdk/tools/new_app.py
+--sync-harness .` reports how this copy differs (`--write` copies o3-sdk's versions over and keeps what this repository added).
