@@ -8,7 +8,7 @@
 //   PARAMS        next page of values (SYNTH, DELAY); SHIFT + PARAMS: the previous one
 //   PLAY          the demo riff on and off (a clocked hook of the engine plays it, sample-accurate)
 //   UP / DOWN     tempo +-1 BPM (SHIFT: +-10)
-//   CONFIG        the next theme
+//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, DISPLAY (the theme), INFO
 //
 // One instrument (SYNTH) on slot 0, a DELAY on send A.
 
@@ -196,7 +196,7 @@ class PlayScreen final : public app::Screen {
     const int hy = map_y + 4 * cell_h + 18;
     r.text(16, hy, "PADS play   F1-F8 pick a value   ENCODER turn it (SHIFT coarse)   hold F + turn: for a moment", Color::TextDim,
            Face::Label);
-    r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG theme", Color::TextDim, Face::Label);
+    r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG system", Color::TextDim, Face::Label);
 
     app::knob_strip(r, Rect{0, area.y + area.h - app::kKnobStripH, ui::kScreenW, app::kKnobStripH}, ctx.engine(), keys_);
   }
@@ -295,11 +295,6 @@ class HelloApp final : public app::App {
     dsp::Engine& e = ctx.engine();
     if (in.press(Button::Play)) {
       (void)(e.playing() ? e.stop() : e.play());
-      ctx.redraw();
-      return true;
-    }
-    if (in.press(Button::Config)) {
-      ctx.set_theme(ui::next_theme(ctx.theme()));
       ctx.redraw();
       return true;
     }

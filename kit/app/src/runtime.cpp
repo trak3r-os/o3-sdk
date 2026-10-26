@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <o3sdk/app/runtime.h>
 
+#include <o3sdk/app/firmware_flow.h>
 #include <o3sdk/ui/assets.h>
 #include <o3sdk/ui/components.h>
 
@@ -14,6 +15,9 @@ using ui::Rect;
 
 // At most one frame this often when a screen asks for redraws (encoder turns): the display's swap paces it anyway.
 constexpr core::Tick kMinFrameUs = 16'667;
+
+// The strip over the bottom of the screen (system_config.h): a Data-face line in the theme's row pitch.
+constexpr int kStripH = 28;
 
 // "120.0" from milli-BPM.
 void format_tempo(std::uint32_t mbpm, char* out) noexcept {
@@ -59,7 +63,8 @@ std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
 
 }  // namespace
 
-Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept : app_(app), engine_(engine), platform_(platform) {
+Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
+    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
 }
@@ -93,6 +98,42 @@ void Runtime::switch_screen() noexcept {
   ctx_.redraw_ = true;
 }
 
+// One input: the system layer's or the app's. The Config button is the runtime's and never reaches the app (press or release). While the
+// system screen is open (or the input is locked) a press or a turn is the system's, and a press it took is not released to the app
+// either; the release of something the app saw pressed does reach it, so a pad held when the screen opened does not leave a note on.
+void Runtime::route(const Input& in) noexcept {
+  if (in.is(Button::Config)) {
+    if (in.type == Input::Type::Press && !locked_) {
+      if (sys_.open()) {
+        sys_.close(ctx_);  // (not past INSTALL)
+      } else {
+        sys_.show(ctx_);
+      }
+    }
+    return;
+  }
+  const bool key = in.kind == core::InputKind::Button || in.kind == core::InputKind::Pad;
+  std::uint64_t* taken = in.kind == core::InputKind::Pad ? &taken_pads_ : &taken_buttons_;
+  const std::uint64_t bit = key && in.id < 64u ? std::uint64_t{1} << in.id : 0u;
+  if (in.type == Input::Type::Release) {
+    if ((*taken & bit) != 0u) {
+      *taken &= ~bit;  // its press was the system's
+      return;
+    }
+  } else if (locked_ || sys_.open()) {
+    if (in.type == Input::Type::Press) {
+      *taken |= bit;
+    }
+    if (!locked_) {
+      sys_.input(ctx_, in);
+    }
+    return;
+  }
+  if (!app_.input(ctx_, in) && ctx_.screen_ != nullptr) {
+    ctx_.screen_->input(ctx_, in);
+  }
+}
+
 void Runtime::poll() noexcept {
   ctx_.now_ = platform_.clock.now();
   ctx_.ms_ = platform_.clock.uptime_ms();
@@ -100,10 +141,7 @@ void Runtime::poll() noexcept {
   core::InputEvent e;
   for (unsigned n = 0; n < 32u && platform_.input.poll(e); ++n) {
     ctx_.panel_.apply(e);
-    const Input in = make_input(e, ctx_.panel_.shift());
-    if (!app_.input(ctx_, in) && ctx_.screen_ != nullptr) {
-      ctx_.screen_->input(ctx_, in);
-    }
+    route(make_input(e, ctx_.panel_.shift()));
     switch_screen();
   }
 
@@ -112,6 +150,7 @@ void Runtime::poll() noexcept {
     ctx_.screen_->update(ctx_);
   }
   switch_screen();
+  sys_.update(ctx_);
 
   const std::uint32_t since = core::tick_elapsed(ctx_.now_, next_frame_ - kFrameUs);
   if (core::tick_reached(ctx_.now_, next_frame_) || (ctx_.redraw_ && since >= kMinFrameUs)) {
@@ -137,9 +176,12 @@ bool Runtime::draw() noexcept {
   }
   ctx_.redraw_ = false;
   draw_header(r);
-  if (ctx_.screen_ != nullptr) {
+  if (sys_.open()) {
+    sys_.draw(ctx_, r, kContentArea);
+  } else if (ctx_.screen_ != nullptr) {
     ctx_.screen_->draw(ctx_, r, kContentArea);
   }
+  sys_.draw_strip(r, Rect{0, ui::kScreenH - kKeysH - kStripH, ui::kScreenW, kStripH});
   draw_keys(r);
   last_words_ = static_cast<std::uint32_t>(r.words());
   if (!r.end()) {
@@ -159,8 +201,9 @@ void Runtime::draw_header(ui::Renderer& r) noexcept {
 
   const char* name = app_.info().name;
   r.text(8, data_y, name, Color::ChromeText, Face::Data);
-  if (ctx_.screen_ != nullptr) {
-    r.text(8 + r.text_width(name, Face::Data) + 14, label_y, ctx_.screen_->title(), Color::ChromeDim, Face::Label);
+  const char* title = sys_.open() ? "CONFIG" : (ctx_.screen_ != nullptr ? ctx_.screen_->title() : nullptr);
+  if (title != nullptr) {
+    r.text(8 + r.text_width(name, Face::Data) + 14, label_y, title, Color::ChromeDim, Face::Label);
   }
 
   const dsp::EngineStats s = engine_.stats();
@@ -179,7 +222,9 @@ void Runtime::draw_header(ui::Renderer& r) noexcept {
 
 void Runtime::draw_keys(ui::Renderer& r) noexcept {
   SoftKeys keys;
-  if (ctx_.screen_ != nullptr) {
+  if (sys_.open()) {
+    sys_.soft_keys(ctx_, keys);
+  } else if (ctx_.screen_ != nullptr) {
     ctx_.screen_->soft_keys(ctx_, keys);
   }
   const char* labels[kFKeyCount];
@@ -193,7 +238,7 @@ void Runtime::draw_keys(ui::Renderer& r) noexcept {
 
 void Runtime::update_leds() noexcept {
   leds_.clear();
-  if (ctx_.screen_ != nullptr) {
+  if (ctx_.screen_ != nullptr && !sys_.open()) {  // (the pads are not the app's while the system screen is up)
     ctx_.screen_->leds(ctx_, leds_);
   }
   if (platform_.leds != nullptr) {
@@ -201,6 +246,10 @@ void Runtime::update_leds() noexcept {
       platform_.leds->set(i, leds_.get(i));
     }
   }
+}
+
+void Runtime::system_strip(const char* text, int progress, std::uint32_t hold_ms) noexcept {
+  sys_.strip(text, progress, hold_ms, platform_.clock.now());
 }
 
 std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
@@ -214,6 +263,9 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
   w.num("tempo", engine_.tempo());
   w.num("cpu", platform_.cpu_meter ? cpu_percent(engine_.stats()) : 0u);
   w.num("frames", frames_);
+  w.flag("sys", sys_.open());
+  w.str("section", sys_.section_name());
+  w.str("fw", firmware_phase_name(sys_.firmware().phase));
   std::size_t n = w.size();
   // The app's pairs go after a space; the room is what the kit's pairs left (the separator, one character and the terminator at least).
   if (w.complete() && n + 3u <= cap) {

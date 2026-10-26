@@ -2,12 +2,13 @@
 //
 // <app>_sim: runs the app this executable is linked with (o3sdk_app(), cmake/O3sdkTargets.cmake) headless on the host.
 //
-//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N]
+//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
 // refused (an attach, a route or a hook that was not taken: Engine::setup_errors(); the refusals are listed on stderr), so a script can
-// gate on it.
+// gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
+// read or written, no flash exists); without it the screen has no FIRMWARE section.
 #include <o3sdk/app/app.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
@@ -22,7 +23,7 @@
 namespace {
 
 void usage(const char* argv0) {
-  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N]\n", argv0);
+  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR]\n", argv0);
 }
 
 std::string lower_name(const char* s) {
@@ -40,6 +41,7 @@ int main(int argc, char** argv) {
   std::string scenario;
   std::string out = ".";
   std::string wav;
+  std::string firmware_dir;
   long ms = 500;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -50,6 +52,8 @@ int main(int argc, char** argv) {
       out = argv[++i];
     } else if (std::strcmp(a, "--wav") == 0 && has_value) {
       wav = argv[++i];
+    } else if (std::strcmp(a, "--firmware-dir") == 0 && has_value) {
+      firmware_dir = argv[++i];
     } else if (std::strcmp(a, "--ms") == 0 && has_value) {
       ms = std::strtol(argv[++i], nullptr, 10);
     } else {
@@ -59,7 +63,15 @@ int main(int argc, char** argv) {
   }
 
   o3sdk::app::App& app = o3sdk_app();
-  o3sdk::sim::Harness h(app);
+  o3sdk::platform::host::FakeFirmwareSink firmware;
+  if (!firmware_dir.empty()) {
+    std::string error;
+    if (!o3sdk::sim::load_firmware_dir(firmware, firmware_dir, error)) {
+      std::fprintf(stderr, "--firmware-dir: %s\n", error.c_str());
+      return 2;
+    }
+  }
+  o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware);
   if (!h.start()) {
     // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
     if (h.engine().setup_errors() != 0u) {

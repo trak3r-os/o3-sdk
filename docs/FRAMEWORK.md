@@ -17,7 +17,7 @@ lives inside the limits it is given. o3sdk turns that around. **An app is the pr
   SRAM with an attribute. Loadable units from the SD card can come later, when someone needs to ship a unit without a rebuild.
 - Switching apps means flashing another `.ptf` through the bootloader's update path (track3r-os `platform/mk66/README.md`, "What the
   bootloader needs"): today over the USB console (`o3console.py --put`, then `--update`; verified on the unit, `docs/NEW-APP.md` section 11)
-  or by card. The on-screen firmware switcher and an app launcher are planned (section 10).
+  or by card. The on-screen firmware switcher (Config, FIRMWARE: host-tested, not yet run on a unit) is built; an app launcher is planned (section 10).
 
 ## 2. Layers
 
@@ -155,7 +155,7 @@ shows the first screen. Every app defines exactly one entry point:
 o3sdk::app::App& o3sdk_app() noexcept { static MyApp app; return app; }
 ```
 
-- `App::input()` sees every input first (global keys: Play, the screen buttons; Config too today, and will not once the kit's system Config exists, below); `true`
+- `App::input()` sees every input first (global keys: Play, the screen buttons; not Config, which is the runtime's: the system Config, below); `true`
   consumes it.
 - A **screen** (`screen.h`) is what the display, the pads, the soft keys and the encoder mean right now: `input()`, `update()`,
   `draw()` into the content area, `soft_keys()` (labels, the hot key, dimmed keys; a Shift row if it wants one), `leds()` (a whole frame
@@ -182,33 +182,42 @@ The kit's apps share one way to edit values, so the hand learns it once:
 The platform's USB console (`state`, and the commands an app adds) reaches an app through two optional `App` methods, so `kit/app`
 depends on no USB code. `App::describe_state(ctx, out, cap)` writes the app's `key=value` pairs (`StateWriter`; a value has no space;
 a pair that does not fit is dropped whole); `Runtime::state_line()` puts the kit's pairs first, `app=<name> screen=<title>
-playing=0|1 tempo=<mbpm> cpu=<pct> frames=<n>`, then the app's. `App::diag_commands(rows)` returns a table of `DiagCommand` (name, help
+playing=0|1 tempo=<mbpm> cpu=<pct> frames=<n> sys=0|1 section=<firmware|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>`, then the app's. `App::diag_commands(rows)` returns a table of `DiagCommand` (name, help
 line, `void run(const DiagArgs&, DiagOut&) noexcept`); the console takes at most 16, a row whose name is not 2-7 lowercase letters,
 is a kit command's, or carries a word of the update path (`update flash boot ...`) is skipped and logged. Handlers run in the main loop
 and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the example.
 
-### The system Config (the kit's, in every app) — planned, not built
+### The system Config (the kit's, in every app)
 
-**Status: planned (M2b, after the remote-install round: the console is the way to change image for now); none of this exists yet.** Today the Config button reaches `App::input()` like any other
-button (HELLO and o3-303 use it for a theme toggle); a new app does not give it a meaning, so that nothing breaks when the system screen lands.
-What follows is the maintainer's decision (2026-10-25) for what it will be: the kit brings the machine up (clocks, SDRAM, display, input,
+**Status: built (M2b, second round, slice F; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO; host-tested, with the
+simulator scenario `apps/hello/scenarios/config.txt`. Not yet run on a unit.** MIDI (slice K), AUDIO, the settings on the card and the app's own pages are planned.
+What follows is the maintainer's decision (2026-10-25) for what it is: the kit brings the machine up (clocks, SDRAM, display, input,
 LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
 the app's. "Por defecto config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
 
-- The runtime will take Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back.
-  The app will never see the Config button.
-- The kit's sections come first, the same in every app: FIRMWARE (the firmware switcher, section 10), AUDIO (USB audio out and the
-  outputs), MIDI (channel, clock in and out, DIN and USB), DISPLAY (theme, brightness), INFO (the app's name and version, the build id,
-  the render's load, the last crash record). A section whose driver does not exist yet is not shown.
-- An app adds its own pages after them: `App::config_pages()` returns pages of up to eight items, each a value (a parameter
-  descriptor with get and set on the main loop) or an action (run after a confirming hold). An app reads the kit's settings (the theme,
-  the MIDI channel) through `Context`.
+- The runtime takes Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back.
+  The app never sees the Config button, press or release. While the screen is open the app gets no new input (the release of a button
+  or pad pressed before still reaches it, so no note is left on), its screen goes on running and sounding underneath, and the pad LEDs are
+  dark. `Runtime::lock_input(bool)` locks input altogether, `Runtime::system_strip(text, progress, hold_ms)` puts one line over the bottom of
+  whatever is on screen (the platform's power-off hold feeds it), `Runtime::card_changed()` is the platform's card watch.
+- Sections, in this order: FIRMWARE (hidden when `Platform::firmware` is null), DISPLAY (the theme), INFO (the app's name and version, the
+  build id, the uptime). Keys: LEFT / RIGHT change section, F8 is BACK (one level up; the last closes the screen), CONFIG closes it.
+  FIRMWARE: the `Firmware/*.ptf` list is read in one pass when the section opens (UP / DOWN or the encoder choose), F1 asks "UPDATE
+  TO name?", F1 again starts the sliced check, F1 once more at "IMAGE OK, length, CRC" installs; any other control takes a question back, F8
+  cancels a check, and nothing is written before INSTALL. Past INSTALL no key acts. The list stops at 12 files (track3r-os's OS-BUG-FWLIST,
+  ported as it is). The path is `hal::firmware::FirmwareSink`: on the unit `update::device::sink()`, the same service `fw` uses, with its
+  guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`).
+- An app can refuse for a moment with `App::update_blocker(ctx)` (a text, or null: asked when the list opens and at INSTALL), for
+  example while it records. `App::config_pages()` (default 0) is declared for the pages an app will add; the kit draws none yet.
+- The remaining plan (the maintainer, 2026-10-25): AUDIO (USB audio out and the outputs), MIDI (channel, clock in and out, DIN and USB),
+  brightness and the last crash record in INFO; a section whose driver does not exist yet is not shown. An app adds its own pages after
+  the kit's: up to eight items each, a value (a parameter descriptor with get and set on the main loop) or an action (run after a
+  confirming hold), and it reads the kit's settings (the theme, the MIDI channel) through `Context`.
 - An app can also extend or change the kit's sections ("engine puede añadir o cambiar también salidas usb", the maintainer): add items
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
   in every app, so any unit can always be switched to another engine and tell what it runs (confirmed by the maintainer, 2026-10-25).
-- The kit will store its settings and the app's Config values on the card (M2b); until then they last until power-off. HELLO and o3-303 move
-  their own use of Config (a theme toggle) into it when it lands.
+- The kit will store its settings and the app's Config values on the card (M2b); until then they last until power-off.
 
 ### Pad LEDs (`pad_leds.h`)
 
@@ -282,8 +291,8 @@ machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driv
 | USB console and update | USB0 device, CDC | `hal::firmware` | `diag` over USB: version, state, cpu, log, leds, screenshot, input injection, `fw put/arm/update`; an app adds its own state and commands (`App::describe_state`, `diag_commands`) | **Verified on the unit** (M2b-R): images put, installed and read back; the way back to track3r-os v1.0.0 in about 45 s |
 | USB audio out | USB0 device, isochronous, 44.1 kHz, 16-bit, composite with the console | platform, every app | the master streamed to the computer as a class-compliant interface (channels 7-8 of 8; 1-6 are silent, kept for an app's stems) | **Verified on the unit** (M2b-R): AUDIO set, profile 8, 8 out / 2 in, configured, recorded. Stems beyond the master and the computer's return stream into the engine: planned |
 | SD card | SDHC, FAT (FatFs) | `hal::storage` (read-only) | the card is mounted and read; `fw put` writes `Firmware/` | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **An app has no file API**: `hal::storage` is read-only by contract, `hal::storage_write` is declared with no implementation, and the update path is the card's only writer (`check_writers.py`). Saving patterns, kits and settings: **planned** |
-| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, confirms with a hold, stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Planned**. What exists is the same path driven from the computer (USB console row), which is verified on the unit |
-| System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Planned** |
+| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, asks twice (F1 each), stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Host only** (M2b round 2): the flow and its two questions are tested on a fake sink and in `config.txt`; the path behind it is the one the USB console row drives, verified on the unit. Not yet run from the screen on a unit: the final F1 INSTALL needs a finger |
+| System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Host only** (M2b round 2): FIRMWARE, DISPLAY, INFO; MIDI, AUDIO and an app's pages are planned |
 | MIDI | DIN in/out (UART), USB MIDI | kit `midi` (new) | notes and CCs into the engine as events, clock in/out on the transport, MIDI learn | **Planned** (M2b): the USB descriptors keep the MIDI interfaces and the port is silent; DIN is not ported |
 | Power switch | PTC3 | `core::PowerHold` | a clean shutdown: silent, dark, card released | **Planned** (M2b): the pure logic is host-tested; no driver |
 | Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (`in_l`, `in_r` of a unit; `BlockContext::input_l()` of a hook), input select and gain, recording into SDRAM | **Host only** for the input planes (the RX ring runs in the pipeline; line in on the unit is not verified). Input select, gain, microphone and recording: **planned** (M2c): `hal::capture` is a contract with no driver |

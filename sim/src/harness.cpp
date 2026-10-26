@@ -6,7 +6,10 @@
 #include <o3sdk/platform/host/png.h>
 #include <o3sdk/ui/boot_screen.h>
 
+#include <algorithm>
 #include <cstdio>
+#include <filesystem>
+#include <fstream>
 
 namespace o3sdk::sim {
 
@@ -59,12 +62,12 @@ void put_u16(std::FILE* f, std::uint16_t v) {
 
 }  // namespace
 
-Harness::Harness(app::App& app)
+Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware)
     : app_(app),
       raster_(std::make_unique<EveRaster>()),
       display_(std::make_unique<RasterDisplay>(*raster_)),
       engine_(std::make_unique<dsp::Engine>()) {
-  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false});
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware, "sim"});
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
   clock_.set(1000);  // not zero: a tick of 0 is a legal time, but starting elsewhere catches code that treats it as "never"
 }
@@ -189,6 +192,50 @@ bool Harness::snapshot(const std::string& path) const {
 bool Harness::write_wav(const std::string& path) const {
   const auto rate = static_cast<std::uint32_t>(core::kRefRateHz + 0.5f);
   return write_wav_s16(path, audio_, rate);
+}
+
+namespace {
+// A check takes this many passes of the main loop (a millisecond each in the simulator): about what 2 KiB a pass makes of a 600 KB image.
+constexpr unsigned kCheckSlices = 300;
+}  // namespace
+
+bool load_firmware_dir(platform::host::FakeFirmwareSink& fake, const std::string& dir, std::string& error) {
+  namespace fs = std::filesystem;
+  std::error_code ec;
+  if (!fs::is_directory(dir, ec)) {
+    error = "not a directory: " + dir;
+    return false;
+  }
+  std::vector<std::pair<std::string, std::uint32_t>> files;
+  for (const fs::directory_entry& e : fs::directory_iterator(dir, ec)) {
+    if (e.is_regular_file(ec) && e.path().extension() == ".ptf") {
+      std::uint64_t size = e.file_size(ec);
+      // A fixture is a few bytes: when the whole file is one decimal number, that is the size the list shows (a .ptf is hundreds of KB).
+      std::ifstream in(e.path());
+      std::string text;
+      std::getline(in, text);
+      while (!text.empty() && (text.back() == '\r' || text.back() == ' ')) {
+        text.pop_back();
+      }
+      if (!text.empty() && text.size() <= 9 && text.find_first_not_of("0123456789") == std::string::npos) {
+        size = std::stoul(text);
+      }
+      files.emplace_back(e.path().filename().string(), static_cast<std::uint32_t>(size));
+    }
+  }
+  std::sort(files.begin(), files.end());
+  fake.clear_files();
+  for (const auto& f : files) {
+    fake.add(f.first, f.second);
+    platform::host::FakeFirmwareSink::Script s;
+    s.slices = kCheckSlices;
+    if (f.first.find("bad") != std::string::npos) {
+      s.verdict = hal::firmware::CheckStatus::State::Failed;
+      s.offset = 1024;
+    }
+    fake.script(f.first, s);
+  }
+  return true;
 }
 
 bool write_wav_s16(const std::string& path, const std::vector<std::int16_t>& lr, std::uint32_t rate) {

@@ -6,7 +6,14 @@ Every app built with `o3sdk_app()` gets an executable `<name>_sim`: the app's ow
 build-host/apps/hello/hello_sim                                    # 500 ms, then ./hello.png
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /tmp/hello
 build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole run's audio
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out /tmp/hello
 ```
+
+`--firmware-dir DIR` gives the system Config screen a fake update path (`platform/host/fake_firmware.h`) over the `*.ptf` files of `DIR`, in name
+order, the first being the reset target; without it the screen has no FIRMWARE section. Nothing is read from the files and nothing is written or
+flashed, there is no flash. A file whose first line is one decimal number is listed with that size (a fixture is a few bytes; a `.ptf` is hundreds
+of KB); a name that contains `bad` fails its check at byte 1024 ("bad vector table"); a check takes 300 ms of simulated time; an install that the
+check allowed never ends, as on the unit. In a test, `sim::Harness(app, &sink)` takes any `hal::firmware::FirmwareSink`, and `load_firmware_dir()` fills a `FakeFirmwareSink` as the option does.
 
 The executable is built in the binary directory of the CMake directory that calls `o3sdk_app()` (`build-host/apps/hello/` here;
 `build-host/app/o3_303_sim` in the sibling o3-303, which builds o3sdk from outside).

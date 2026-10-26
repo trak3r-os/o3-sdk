@@ -246,9 +246,9 @@ TEST_CASE("app: an override gives its rows") {
 TEST_CASE("state line: the kit's pairs, in the documented order, before the first frame") {
   Rig<PlainApp> r;
   // Not started: no screen yet.
-  CHECK(r.line() == "app=TEST screen=- playing=0 tempo=120000 cpu=0 frames=0");
+  CHECK(r.line() == "app=TEST screen=- playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed");
   REQUIRE(r.runtime.start());
-  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0");
+  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed");
 }
 
 TEST_CASE("state line: playing, tempo and frames follow the engine and the runtime") {
@@ -258,7 +258,7 @@ TEST_CASE("state line: playing, tempo and frames follow the engine and the runti
   CHECK(r.engine.set_tempo(133'500));
   CHECK(r.runtime.draw());
   CHECK(r.runtime.draw());
-  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=1 tempo=133500 cpu=0 frames=2");
+  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=1 tempo=133500 cpu=0 frames=2 sys=0 section=display fw=closed");
   CHECK(r.engine.stop());
   CHECK(r.line().find("playing=0") != std::string::npos);
 }
@@ -282,7 +282,7 @@ TEST_CASE("state line: the app's pairs follow the kit's, after one space, and se
   REQUIRE(r.runtime.start());
   CHECK(r.engine.set_tempo(99'000));
   r.app.mode = 11;
-  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=0 tempo=99000 cpu=0 frames=0 mode=11 label=A_B seen_tempo=99000");
+  CHECK(r.line() == "app=TEST screen=PLAY_SCREEN playing=0 tempo=99000 cpu=0 frames=0 sys=0 section=display fw=closed mode=11 label=A_B seen_tempo=99000");
   CHECK(r.app.calls == 1u);
   CHECK(r.app.last_cap > 100u);  // handed the room that was left, not the whole buffer
 }
@@ -291,7 +291,7 @@ TEST_CASE("state line: an app with nothing to say adds no separator") {
   Rig<SilentApp> r;
   REQUIRE(r.runtime.start());
   const std::string line = r.line();
-  CHECK(line == "app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0");
+  CHECK(line == "app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed");
 }
 
 TEST_CASE("state line: spaces in the app name become underscores") {
@@ -332,10 +332,10 @@ TEST_CASE("state line: a short buffer is cut at a pair, never inside one, and al
 TEST_CASE("state line: an app that reports more than it was given is clamped and terminated") {
   Rig<GreedyApp> r;
   REQUIRE(r.runtime.start());
-  char buf[90];
+  char buf[120];  // the kit's pairs take about 100 characters now (sys, section, fw): room for the app's first
   std::memset(buf, '#', sizeof buf);
   const std::size_t n = r.runtime.state_line(buf, sizeof buf);
   CHECK(n == sizeof buf - 1u);
   CHECK(buf[n] == '\0');
-  CHECK(std::string(buf).rfind("app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0 x", 0) == 0);
+  CHECK(std::string(buf).rfind("app=TEST screen=PLAY_SCREEN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed x", 0) == 0);
 }

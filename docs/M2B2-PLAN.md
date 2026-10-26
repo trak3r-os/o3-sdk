@@ -155,7 +155,7 @@ power and mdrv. At most two agents at a time, with no shared file:
 
 | Slice | Exposes |
 |---|---|
-| F | `Runtime`: the Config intercept (an app never sees Config), `system_strip()`, `lock_input()`, `system_open()`; `App::update_blocker`, `App::config_pages` (default 0); `Platform::firmware` (null hides FIRMWARE); `state` pairs `sys=0/1 section=<name> fw=<phase>` |
+| F | `Runtime`: the Config intercept (an app never sees Config), `system_strip(text, progress, hold_ms)`, `lock_input(bool)`, `system_open()`, `system()`, `card_changed()` (main.cpp calls it from the card watch); `App::update_blocker`, `App::config_pages` (default 0); `Platform::firmware` (null hides FIRMWARE); `state` pairs `sys=0/1 section=<name> fw=<phase>` |
 | MC | `o3sdk::platform::mk66::midi::*`, identical to track3r-os's `o3os::midi::*`: `DinEmitter`, `RtInRing`, `MidiIn`, `ClockDll`, `ClockMap`, `TimeRef`, `MidiOut`, `UsbMidiOut`, `CcInput`, `MidiConfig`, `SeqLockBox`, `usb_midi_sof/from_host`; `audio::SeqEvent`; target `platform_mk66_midi` |
 | K | section 3 |
 | P | `power::device::{init, pass, locked, request_off, inject, report, vlpr_off, take_screenshot_request, pressed}`; console `power`, `power press/release/pin`, `power off [dry]` |

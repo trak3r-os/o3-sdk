@@ -13,7 +13,9 @@
 #include <o3sdk/app/panel.h>
 #include <o3sdk/app/runtime.h>
 #include <o3sdk/dsp/engine.h>
+#include <o3sdk/hal/firmware.h>
 #include <o3sdk/hal/leds.h>
+#include <o3sdk/platform/host/fake_firmware.h>
 #include <o3sdk/platform/host/fakes.h>
 #include <o3sdk/sim/eve_raster.h>
 #include <o3sdk/sim/raster_display.h>
@@ -49,7 +51,9 @@ class FakeLeds final : public hal::Leds {
 
 class Harness {
  public:
-  explicit Harness(app::App& app);
+  // `firmware`: the update path the system Config screen lists (a platform::host::FakeFirmwareSink; null: no FIRMWARE section). It must
+  // outlive the harness.
+  explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr);
   ~Harness();
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
@@ -108,6 +112,12 @@ class Harness {
   bool recording_ = false;
   std::vector<std::int16_t> audio_;
 };
+
+// Fills `fake` with the *.ptf files of `dir`, in name order (the first is the reset target), each with its size; a file whose first line
+// is one decimal number (a fixture) is listed with that size. Nothing else is read from them. A check takes 300 passes of the main loop (300 ms of simulated time). A name that contains "bad" fails its check at byte
+// 1024 ("bad vector table"); every other file checks out. An install the check allowed never ends, as on the unit. false, with
+// `error` set: `dir` is not a directory.
+bool load_firmware_dir(platform::host::FakeFirmwareSink& fake, const std::string& dir, std::string& error);
 
 // A 16-bit stereo PCM WAV of interleaved samples at `rate` Hz.
 bool write_wav_s16(const std::string& path, const std::vector<std::int16_t>& lr, std::uint32_t rate);

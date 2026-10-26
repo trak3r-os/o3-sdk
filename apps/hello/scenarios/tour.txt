@@ -1,4 +1,4 @@
-# A tour of HELLO: the first screen, a chord on the pads, the encoder on the cutoff, a hold-and-turn, the delay page, the riff.
+# A tour of HELLO (the theme is changed in the system Config screen, section DISPLAY; scenarios/config.txt tours that screen): the first screen, a chord on the pads, the encoder on the cutoff, a hold-and-turn, the delay page, the riff.
 wait 300
 snap 01_boot
 record on
@@ -31,6 +31,8 @@ release shift
 wait 1000
 tap play
 wait 600
+tap config
+turn 1
 tap config
 snap 08_theme
 wav tour

@@ -212,6 +212,6 @@ result with exit codes and counts, tests and scenarios added, docs touched, risk
 - The display list is 2048 words; a frame that does not fit is dropped silently on the unit and is `refused` (exit 1) in the simulator.
 - The simulator's `--out` directory must exist; its PNGs are 800 x 697 (the screen above the pads), the unit's `--shot` 800 x 480.
 - `o3console.py --put` of a name already on the card is refused; use a new name. After a put, `fw` shows `first-ptf`: the reset button's target may have moved.
-- The Config button belongs to the kit (the system Config screen is planned): a new app does not give it a meaning.
+- The Config button belongs to the kit (the runtime takes it for the system Config screen: FIRMWARE, DISPLAY, INFO): an app never sees it.
 - An image built without the console (`-DO3SDK_MK66_CONSOLE=OFF`, the skeleton) cannot be installed or read over USB.
 - Build identity: an image built without a commit says `unknown`, with changed tracked files `-dirty`; the gate wants both trees clean and committed.

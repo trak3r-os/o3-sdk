@@ -1,0 +1,59 @@
+# The system Config screen on HELLO: the Config button is the runtime's, so the app never sees it. FIRMWARE lists the .ptf files of a
+# folder (here the fixture folder, through the simulator's fake update path), checks one in slices, asks twice (F1 each) and installs;
+# DISPLAY changes the theme, INFO says what is running.
+#
+#   build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out <dir>
+#
+# A fixture file holds one number, the size it is listed with. A name that contains "bad" fails its check. Nothing is ever written or
+# flashed.
+wait 100
+snap 00_app
+tap config
+wait 50
+snap 01_firmware_list
+turn 1
+snap 02_second_file
+tap f1
+snap 03_ask_update
+tap f1
+wait 100
+snap 04_checking
+wait 300
+snap 05_ask_install
+tap f8
+snap 06_back_to_the_list
+# A pad pressed now is not the app's: the screen is modal.
+pad 36
+turn 1
+tap f1
+tap f1
+wait 400
+snap 07_failed_check
+tap right
+turn 1
+snap 08_display_black
+turn 1
+snap 09_display_white
+tap right
+snap 10_info_white
+tap left
+turn 1
+tap left
+snap 11_firmware_again
+tap config
+wait 50
+snap 12_app_again
+# The way through: choose, ask, check, ask again, INSTALL. Nothing acts after it, not even Config.
+tap config
+turn 1
+tap f1
+tap f1
+wait 400
+snap 13_ask_install
+tap f1
+wait 50
+snap 14_installing
+tap config
+tap f8
+wait 50
+snap 15_locked

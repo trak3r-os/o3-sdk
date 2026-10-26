@@ -6,7 +6,8 @@
 //
 //   o3sdk::app::App& o3sdk_app() noexcept { static HelloApp app; return app; }
 //
-// which the platform's main (platform/mk66) and the simulator (sim/) call. Nothing else in the image names the app.
+// which the platform's main (platform/mk66) and the simulator (sim/) call. Nothing else in the image names the app. The Config button
+// belongs to the runtime (the system Config screen): an app's input() never sees it.
 
 #include <o3sdk/app/diag.h>
 #include <o3sdk/app/input.h>
@@ -33,6 +34,14 @@ class App {
   virtual bool input(Context&, const Input&) noexcept { return false; }
   // Every pass of the main loop, before the screen's update.
   virtual void update(Context&) noexcept {}
+
+  // ---- The system Config screen (system_config.h, docs/M2B2-PLAN.md section 4). The runtime owns it; an app cannot hide it. ------------
+  // What stops a firmware update right now (a recording, an export, unsaved work), as the strip says it in upper case, or nullptr (the
+  // default). Asked when the FIRMWARE list opens and again at INSTALL; the update is refused with that text while it is not null.
+  virtual const char* update_blocker(const Context&) const noexcept { return nullptr; }
+  // The pages the app adds to the Config screen. Declared for the apps to come: the kit draws none yet, and 0 (the default) is the only
+  // value that means something.
+  virtual unsigned config_pages() const noexcept { return 0; }
 
   // ---- Diagnostics (diag.h; the platform's console, docs/FRAMEWORK.md section 5). Both default to nothing. -----------------------
   // Extra console commands: points `rows` at a table that lives as long as the app (a constexpr array) and returns its length. Asked

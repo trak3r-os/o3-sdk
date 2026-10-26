@@ -43,6 +43,7 @@
 #include <o3sdk/platform/mk66/console/attach.h>
 #include <o3sdk/platform/mk66/console/modules.h>
 #include <o3sdk/platform/mk66/storage/device.h>
+#include <o3sdk/platform/mk66/update/fw_device.h>
 #include <o3sdk/platform/mk66/usb/boot_layout.h>
 #include <o3sdk/platform/mk66/usb/console.h>
 #include <o3sdk/platform/mk66/usb/diag_text.h>
@@ -69,6 +70,7 @@ namespace input = o3sdk::platform::mk66::input::device;
 #if O3SDK_CONSOLE
 namespace console = o3sdk::platform::mk66::console;
 namespace storage = o3sdk::platform::mk66::storage;
+namespace update = o3sdk::platform::mk66::update::device;
 namespace usb0 = o3sdk::platform::mk66::usb0;
 namespace usb_audio = o3sdk::platform::mk66::usb_audio;
 #endif
@@ -136,30 +138,34 @@ std::uint32_t g_card_mount_at = 0;
 
 bool card_mount_pending() noexcept { return g_card_mount_pending; }
 
-void poll_card(std::uint32_t now) noexcept {
+// Returns true on the pass that saw the card taken out or put in: the system Config screen closes a firmware list that is open (Runtime::card_changed).
+bool poll_card(std::uint32_t now) noexcept {
+  bool changed = false;
   switch (storage::device::poll(now)) {
     case storage::CardSwap::Event::Removed:
       g_card_mount_pending = false;
+      changed = true;
       console::log("sd: card removed, volume released");
       break;
     case storage::CardSwap::Event::Inserted:
       g_card_mount_pending = true;
       g_card_mount_at = now;
+      changed = true;
       console::log("sd: card inserted");
       break;
     case storage::CardSwap::Event::None:
       break;
   }
   if (!g_card_mount_pending || now - g_card_mount_at < kCardMountDelayMs) {
-    return;
+    return changed;
   }
   g_card_mount_pending = false;  // (the pending mount is itself a claim: it must not count against its own gate)
   if (storage::device::card_busy()) {
     g_card_mount_pending = true;  // the update path holds the card: ask again next pass
-    return;
+    return changed;
   }
   if (storage::device::owner() == storage::CardOwner::Host) {
-    return;  // OS-USBDISK F1: the computer has the card; nothing mounts here (device::mount() would refuse as well)
+    return changed;  // OS-USBDISK F1: the computer has the card; nothing mounts here (device::mount() would refuse as well)
   }
   const std::uint64_t started = mk66::system_clock().uptime_ms();
   const o3sdk::hal::storage::Status status = storage::device::mount();
@@ -173,6 +179,7 @@ void poll_card(std::uint32_t now) noexcept {
     text.str("sd: card NOT mounted: ").str(o3sdk::hal::storage::status_name(status)).str(", ").dec(took_ms).str(" ms");
   }
   console::log(line);
+  return changed;
 }
 
 // ---- The pad bus in `diag log` (OS-BUG-PADS; track3r-os app_main.cpp watch_pad_bus, the same text) --------------------------------------------------------------------------------------
@@ -269,9 +276,11 @@ int main() {
   g_engine.set_cycle_counter(&o3sdk::hal::cycles);  // the header's CPU %
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
-  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true};
+  // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
+  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL};
 #else
-  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true};
+  // No update path in this image: the Config screen has no FIRMWARE section.
+  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   if (rt.start()) {
@@ -446,7 +455,9 @@ int main() {
 
     const auto ms = static_cast<std::uint32_t>(clock.uptime_ms());
 #if O3SDK_CONSOLE
-    poll_card(ms);  // a card taken out or put in
+    if (poll_card(ms)) {  // a card taken out or put in
+      rt.card_changed();  // a firmware list that is open closes and the update path is cancelled
+    }
 #endif
     if (audio_up && ms - last_audio_poll >= kAudioPollMs) {
       last_audio_poll = ms;

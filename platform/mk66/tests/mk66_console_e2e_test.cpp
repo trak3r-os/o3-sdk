@@ -321,7 +321,7 @@ TEST_CASE("console e2e: state is the kit's pairs, then the app's, on one line") 
   USB_REQUIRE(rig.enumerate());
   Console& c = fresh_console(rig);
   const std::string reply = c.say("state");
-  CHECK(has(reply, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 f1=0 pad=-1\r\n"));
+  CHECK(has(reply, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed f1=0 pad=-1\r\n"));
 }
 
 TEST_CASE("console e2e: an app command runs with its words; an unknown command and a refused app row get the shell's reply") {
