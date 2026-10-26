@@ -71,8 +71,17 @@ class Unit {
 Writing one: `docs/NEW-APP.md` section 3 is the step list, and `templates/app/units/voice/` the smallest worked unit (an instrument with
 three parameters, a click-free level, a test against the engine). `units/synth` (an instrument) and `units/delay` (an effect with SDRAM
 buffers) are the kit's; o3-303's `units/tb303` is a port with an oracle test. Add `o3sdk_unit(<name> SOURCES …)` and test the unit on the
-host against the engine (`tests/units_test.cpp`). **`core::kParamSmooth` is advisory**: no kit code reads it, so a value that clicks when it
-jumps is smoothed inside the unit (`dsp/smooth.h`).
+host against the engine (`tests/units_test.cpp`).
+
+**Smoothing is the unit's.** The engine never ramps a parameter: `set_param` and `step_param` clamp the value, keep it as the target
+(`param()` always reports it) and send it as one `Param` event, a step, at frame 0 of the next block (a clocked hook's at its own frame).
+A value that clicks when it jumps (a level, a cutoff) is ramped inside `process()` (`dsp/smooth.h`: `Ramp`, `OnePole`). The descriptor
+flag `core::kParamSmooth` (declared in `kit/core/include/o3sdk/core/param.h`) is **advisory metadata and nothing more**: no kit code reads
+it. Set, it is the unit author's statement that the unit smooths this parameter itself, so a UI or host may change it at any rate and by
+any amount (an encoder turned fast, a motion lane, automation) without a click; the unit's test should prove it. Clear, the unit makes no
+promise and applies the value at the event's frame (a switch, a choice, a time, a value meant to jump). A UI or host may take the flag as
+the author's word only; the kit does not enforce it, and a missing flag is not a defect. (`ParamChange::ramp_samples` in the same header is
+a leftover of track3r-os's engine that o3sdk's does not use.)
 
 ### Porting a plugin
 

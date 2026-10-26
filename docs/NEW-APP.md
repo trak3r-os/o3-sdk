@@ -139,8 +139,10 @@ with big buffers.
 5. **The rules in `process()`**: no heap, no blocking, no file or SD access, no `printf`, bounded loops, **no `double`** (the build treats
    unsuffixed constants as `float`; the cross build is checked for `__aeabi_d*`). No `libm` in the sample loop if you can avoid it (`sinf`,
    `powf` and `tanf` are software on the M4F): coefficients per block or per event, `core/fast_math.h`, a table.
-6. **Smoothing is yours.** `core::kParamSmooth` in a descriptor is advisory: no kit code reads it. A value that clicks when it jumps
-   (a level, a cutoff) is ramped inside the unit (`dsp/smooth.h` `Ramp`; the template's Level does it, and its test proves it).
+6. **Smoothing is yours.** The engine delivers a changed value as one `Param` event, a step; it never ramps. A value that clicks when it
+   jumps (a level, a cutoff) is ramped inside the unit (`dsp/smooth.h` `Ramp`; the template's Level does it, and its test proves it).
+   `core::kParamSmooth` in a descriptor is advisory and no kit code reads it: set, it tells a UI or host that this unit smooths the
+   parameter itself, so it may be turned fast or automated without a click. Set it only when the unit does (`docs/FRAMEWORK.md`, "Units").
 7. **Big buffers** (a delay line, a sample) belong to the app, in the SDRAM: `O3SDK_BIG float g_line[N];` at namespace scope
    (`kit/core/include/o3sdk/core/placement.h`) and handed to the unit's constructor, as `apps/hello/src/hello_app.cpp` does for DELAY. They
    start at zero; the cross compiler refuses a non-zero initialiser on them. SRAM is 256 KiB (SRAM_U, 192 KiB, holds data and stacks and keeps
