@@ -41,7 +41,7 @@ namespace o3sdk::dsp {
 inline constexpr std::uint32_t kMaxBlockFrames = 64;
 inline constexpr unsigned kMaxUnits = 16;
 inline constexpr unsigned kMaxSlots = 8;
-inline constexpr unsigned kMaxInserts = 2;
+inline constexpr unsigned kMaxInserts = 4;
 inline constexpr unsigned kSendCount = 2;
 inline constexpr unsigned kMaxHooks = 4;
 inline constexpr unsigned kMaxParamsPerUnit = 64;
@@ -217,7 +217,7 @@ class Engine {
 
   struct Slot {
     UnitId source = kNoUnit;
-    UnitId inserts[kMaxInserts] = {kNoUnit, kNoUnit};
+    UnitId inserts[kMaxInserts] = {kNoUnit, kNoUnit, kNoUnit, kNoUnit};
     // Render side: the targets and the gains reached at the end of the last block (ramped across a block when they change).
     float level = 1.0f;
     float pan = 0.0f;
@@ -242,7 +242,7 @@ class Engine {
   Clocked* hooks_[kMaxHooks] = {};
   unsigned hook_count_ = 0;
   UnitId send_fx_[kSendCount] = {kNoUnit, kNoUnit};
-  UnitId master_inserts_[kMaxInserts] = {kNoUnit, kNoUnit};
+  UnitId master_inserts_[kMaxInserts] = {kNoUnit, kNoUnit, kNoUnit, kNoUnit};
   bool started_ = false;
   float values_[kMaxUnits][kMaxParamsPerUnit] = {};
   float mix_main_[kMaxSlots][kMixFieldCount] = {};

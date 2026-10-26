@@ -104,10 +104,12 @@ convolutions.
 `kit/dsp/include/o3sdk/dsp/engine.h`. A fixed topology set up once:
 
 ```
-clocked hooks ─events─▶ slot 0..7: source ─ insert ─ insert ─ level/pan ─┬──────────────▶ master ─ insert ─ insert ─ level ─ clip ─▶ out
-(sequencers)                                                              ├─ send A ─ fx ─┘
-main loop ──commands──▶                                                   └─ send B ─ fx ─┘
+clocked hooks ─events─▶ slot 0..7: source ─ insert ×4 ─ level/pan ─┬──────────────▶ master ─ insert ×4 ─ level ─ clip ─▶ out
+(sequencers)                                                        ├─ send A ─ fx ─┘
+main loop ──commands──▶                                             └─ send B ─ fx ─┘
 ```
+
+Each slot and the master have up to `kMaxInserts` = 4 inserts in series (an unused one costs nothing).
 
 - **Setup** (main loop, before `start()`): `attach()` units (up to 16), `set_source()`, `set_insert()`, `set_send_effect()`,
   `set_master_insert()`, `add_hook()`. A refused call (a slot or index out of range, an id never attached, an effect given as a source,
