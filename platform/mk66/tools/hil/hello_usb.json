@@ -26,7 +26,7 @@
   {"cmd": "usb map reset", "expect": ["S2 = T2"], "expect_not": "ERR"},
   {"pad": 12, "gesture": "up"},
 
-  {"say": "THE RETURN. START o3tone.py NOW (1 kHz, -12 dBFS): the tone is added to the master at RETURN LEVEL (100 per cent by default): the master's pitch is 1 kHz and the stem T1 has none of it."},
+  {"say": "THE RETURN. RETURN LEVEL is 0 by default (the boot stays as verified): FIRST raise it by hand (Config, AUDIO, RETURN LEVEL 100 per cent, then Config to leave), THEN START o3tone.py (1 kHz, -12 dBFS): the tone is added to the master at RETURN LEVEL: the master's pitch is 1 kHz and the stem T1 has none of it. The next part sets it back to 0."},
   {"wait": 3.0},
   {"audio": {"seconds": 2, "channels": "${CHANNELS}", "channel": 9, "pitch_hz": "${HZ}", "cents": 40, "silent": false, "clipping": false}, "soft": true, "note": "(soft until a unit has run it: the master carries the computer's tone; needs o3tone.py running)"},
   {"audio": {"seconds": 1, "channels": "${CHANNELS}", "channel": 1, "silent": true}, "soft": true, "note": "(T1 is silent: HELLO plays nothing and the stems never hear the return)"},
