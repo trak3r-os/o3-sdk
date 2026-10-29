@@ -25,7 +25,7 @@ Unofficial; not affiliated with or endorsed by Polyend. "Tracker" is used only t
 | Display | FT812, 800×480, no frame buffer: a display list of at most 2048 words per frame |
 | Audio | SGTL5000 codec, I2S + eDMA, 44.1 kHz, 64-frame blocks (261,224 cycles each); line in and microphone on the codec; USB audio out |
 | Controls | 48 pads in 4 rows of 12, one monochrome LED each, no velocity; 33 buttons without LEDs; one encoder without a push |
-| Other | SD card (FAT), USB device (console and audio on the same port), DIN MIDI (driver built, not yet run on a unit), FM receiver (not yet driven) |
+| Other | SD card (FAT), USB device (console and audio on the same port), DIN MIDI (driver built, not run on a unit), FM receiver (Si4703 driver built, host only; not run on a unit) |
 
 ## What is verified on the unit
 
@@ -36,9 +36,10 @@ o3-303 playing, channels 7-8, 1-6 silent); 0 underruns and 0 faults over a 10-mi
 and at most 39.8 % with o3-303 playing; the way back to track3r-os v1.0.0 took about 45 s.
 
 **Not verified yet**: anything that needs eyes, hands or ears (the screen itself, real presses of pads and buttons, the LEDs by eye, sound on the analogue
-outputs), the FT812's per-line fill rate, a provoked crash and its record, and everything planned (the system Config screen and the on-screen
-firmware switcher, MIDI, a file API for apps, the power switch, audio in beyond the engine's input planes, the FM radio). The per-capability table
-is `docs/FRAMEWORK.md` section 10: each row says verified on the unit, host only or planned.
+outputs), the FT812's per-line fill rate, a provoked crash and its record, the final firmware INSTALL from the Config screen, and everything that
+is host only: the MIDI core and drivers, the Power switch, the system Config's pages, the app file API, audio in, the FM radio, recording, USB
+stems and the computer's return, the card as a USB disk and the screenshot to the card (M2b round 2 and M2c). The per-capability table is
+`docs/FRAMEWORK.md` section 10: each row says verified on the unit, host only or planned.
 
 ## Quick start (10 minutes)
 
@@ -60,16 +61,15 @@ mkdir -p /tmp/hello
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /tmp/hello
 
 # 4. build the firmware image (HELLO's: build-mk66/apps/hello/hello.ptf) and run its static checks
-export ARM_GNU_ROOT=<the arm-gnu-toolchain-15.3.rel1 directory that holds bin/>
+python3 -I tools/fetch_toolchain.py                                  # optional: downloads the pinned toolchain into .toolchains/
+export ARM_GNU_ROOT=<the arm-gnu-toolchain-15.3.rel1 directory that holds bin/>   # or set this instead (an explicit path wins)
 cmake -S . -B build-mk66 -DO3SDK_PLATFORM=mk66
 cmake --build build-mk66 -j4
 ctest --test-dir build-mk66 -L mk66 --output-on-failure
 
 # 5. install it over USB (only with the maintainer's go and a known-good image on the card: docs/NEW-APP.md section 11)
-O3=platform/mk66/tools
-python3 -I $O3/o3console.py --put build-mk66/apps/hello/hello.ptf --name hello-0.1.ptf       # prints the CRC
-python3 -I $O3/o3console.py --update hello-0.1.ptf --crc <that crc> --yes-update
-python3 -I $O3/o3console.py version state cpu --shot /tmp/hello-unit.png                      # read it back
+python3 -I tools/o3install.py build-mk66/apps/hello/hello.ptf --yes      # check, put, update, wait for the unit, version; prints the way back
+python3 -I platform/mk66/tools/o3console.py version state cpu --shot /tmp/hello-unit.png   # read it back
 ```
 
 Then **your own instrument**, in its own repository next to this one:
@@ -95,7 +95,7 @@ inspects. `docs/NEW-APP.md` explains each one.
 | `sim/README.md` | the simulator and its scenario language |
 | `docs/ci.md` | `tools/ci.sh` and the remote CI |
 | `docs/hw/` | what the unit has shown, dated (`2026-10-25-usb.md`: installed and run over USB; `2026-10-25.md`: the card session, prepared) |
-| `docs/M2-PLAN.md`, `docs/M2B-PLAN.md` | the plans and decisions of the platform milestones (history) |
+| `docs/M2-PLAN.md`, `docs/M2B-PLAN.md`, `docs/M2B2-PLAN.md`, `docs/M2C-PLAN.md` | the plans and decisions of the platform milestones (history); M2C-PLAN ends with the as-built notes |
 | `templates/app/` | the starter for a new app (instantiated by `tools/new_app.py`) |
 | `../o3-303/docs/DESIGN-303.md` | a complete app design, as an example of what to write before the code |
 
@@ -105,8 +105,8 @@ inspects. `docs/NEW-APP.md` explains each one.
 |---|---|---|
 | M1 | The kit (core, hal, eve, ui, dsp, app), the simulator, two example units, the HELLO app | done, host-tested; the libraries cross-build for the Cortex-M4F |
 | M2 | The MK66 platform: boot, display, input, LEDs, audio; a bootable `.ptf` image of an app | image built and statically gated; HELLO and o3-303 run on the unit over USB (2026-10-25, `docs/hw/2026-10-25-usb.md`); the eyes-and-hands card session is still pending (`docs/hw/2026-10-25.md`), so not closed |
-| M2b | USB console and install over USB, USB audio out, SD card (M2b-R); the system Config screen and the on-screen firmware switcher (F), the MIDI core and service with DIN and USB (MC, K, MD), the Power switch (P) | M2b-R verified on the unit over USB; F verified in part on the unit (2026-10-26, reported: Config opened and worked; the final INSTALL from the screen needs a finger); MC, K, P, MD built and host-tested (MD 5937691); the unit round pending for MIDI and Power (`docs/FRAMEWORK.md` section 10) |
-| M2c | The rest of the SDK: app files, audio in (line, microphone), recording, FM radio, USB stems and the computer's return stream, the Config pages | planned; `docs/M2C-PLAN.md` |
+| M2b | USB console and install over USB, USB audio out, SD card (M2b-R); the system Config screen and the on-screen firmware switcher (F), the MIDI core and service with DIN and USB (MC, K, MD), the Power switch (P) | M2b-R verified on the unit over USB; F verified in part on the unit (2026-10-26, reported: Config opened and worked; the final INSTALL from the screen needs a finger); MC, K, P, MD built and host-tested (MD 5937691); M2b's unit round pending (MIDI, Power and the rest of round 2; `docs/M2B2-PLAN.md`, `docs/FRAMEWORK.md` section 10) |
+| M2c | The rest of the SDK: app files, audio in (line, microphone), recording, FM radio, USB stems and the computer's return stream, the card as a USB disk, the Config pages, MIDI learn, screenshots | built and host-tested, every slice reviewed; the unit round pending (`docs/M2C-PLAN.md`) |
 | M3 | o3-303 on the kit | in progress; its own repository `../o3-303` (`../o3-303/docs/DESIGN-303.md`) |
 | M4 | The HOOKS device (sample launcher, synced sampling) | planned |
 | M5 | A port (Plaits is the obvious candidate) to prove the unit API | planned |
@@ -114,10 +114,10 @@ inspects. `docs/NEW-APP.md` explains each one.
 
 ## Layout
 
-`kit/` the framework (`core` `hal` `eve` `ui` `dsp` `app` `usb`) · `units/` the kit's example units (`synth`, `delay`) · `apps/` the kit's example apps
-(`hello`, `fillrate`; a new instrument lives in its own repository) · `platform/` the HAL implementations (`host` for the simulator, `mk66` for the
+`kit/` the framework (`core` `hal` `eve` `ui` `dsp` `app` `usb` `formats`) · `units/` the kit's example units (`synth`, `delay`) · `apps/` the kit's example apps
+(`hello`, `fillrate`, `crashtest`, a session-only app that provokes faults; a new instrument lives in its own repository) · `platform/` the HAL implementations (`host` for the simulator, `mk66` for the
 unit) · `sim/` the simulator · `templates/app/` the starter for a new app · `tests/` host tests · `docs/` · `tools/` (`ci.sh`, `remote_ci.sh`,
-`gate.py`, `new_app.py`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, `o3sdk_app_test_suite`, the toolchain) · `.claude/` the agent
+`gate.py`, `new_app.py`, `o3install.py`, `fetch_toolchain.py`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, `o3sdk_app_test_suite`, the toolchain) · `.claude/` the agent
 harness · `third_party/` (see `THIRD_PARTY.md`).
 
 ## Licence and origin

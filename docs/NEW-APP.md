@@ -44,7 +44,7 @@ python3 -I o3-sdk/tools/new_app.py myapp-repo myapp --name MYAPP --git
 cd myapp-repo
 ```
 
-`<app-id>` (`myapp`) is lower case letters, digits and `_`, 2 to 24 characters, starting with a letter. It becomes the CMake project, the
+`<app-id>` (`myapp`) is lower case letters, digits and `_`, 2 to 15 characters, starting with a letter (the card folder `Apps/<id>/` takes at most 15 bytes). It becomes the CMake project, the
 image (`myapp.ptf`), the simulator (`myapp_sim`), the C++ namespace and an include directory, so the tool refuses a C++ keyword and the names
 o3-sdk uses (`core`, `app`, `sim`, `hello`, ...). `--name` is what the header strip and the boot screen show (upper case; default: the id
 in upper case). The tool never overwrites: the destination must not exist. `--git` runs `git init` (no commit); `--no-harness` leaves out
@@ -214,7 +214,7 @@ Learn the descriptor fields from `kit/core/include/o3sdk/core/param.h`; copy a r
 
 App-level settings that are not a unit's (a swing, a pattern length) are the app's own state, shown on a screen and read by the hook. To keep them, and patterns and kits,
 across a power-off, save them to the card with `ctx.files()` (`kit/app/files.h`, `docs/FRAMEWORK.md` "Files on the card"): your app's folder is `Apps/<id>/` with `<id>` the CMake
-id you gave `o3sdk_app()`, so choose it as a folder name (at most 15 characters of letters, digits, `_`, `-`, no dot). The kit already keeps the theme and the MIDI settings there for you.
+id you gave `o3sdk_app()`, so choose it as a folder name (at most 15 bytes of letters, digits, `_`, `-` and space, starting with a letter or digit; `o3sdk_app()` refuses others). Files are `<stem>.<ext>` with the extension `o3a`, `o3s`, `wav`, `mid`, `syx`, `txt`, `json` or `csv`, in `Apps/<id>/` or one project folder under it; `Samples/` is the card's folder for takes meant for any firmware, and `system.o3s` is the kit's (an app's save of that name is refused). The kit already keeps the theme, the MIDI settings, the audio in's source and the USB layout there for you, and the values of your Config pages (section 13).
 
 ## 7. A sequencer (a clocked hook)
 
@@ -228,7 +228,7 @@ single-writer protocol, stated at the declaration (`AGENTS.md`, "Rules").
 ## 8. A scenario and tests
 
 - **Scenario** (`app/scenarios/*.txt`, commands in `sim/README.md`): `wait`, `press`, `release`, `tap`, `pad`, `paddown`, `padup`, `turn`, `snap`, `boot`,
-  `record`, `wav`. It is the evidence for a screen or a sound change: run it, open the PNGs, listen to or measure the WAV. `tests/app_test.cpp`
+  `record`, `wav`, `midi`, `clock`, `input`, `radio`, `card`, `usb`, `usbwav`, `reboot`, `expect` (the card and the console's `state` in a scenario), `expect backlight`: the full list is `sim/README.md`. It is the evidence for a screen or a sound change: run it, open the PNGs, listen to or measure the WAV. `tests/app_test.cpp`
   runs every scenario in the directory and fails when a command is wrong or a frame does not fit, so a new scenario is a regression test for free.
 - **Tests** are doctest (`tests/*_test.cpp`, globbed: rerun the configure after adding one; one executable, one ctest per file;
   `o3sdk_app_test_suite` in `tests/CMakeLists.txt`). Pure logic gets a test (maths, mappings, sequencer arithmetic); a unit is tested against the engine
@@ -384,6 +384,8 @@ over hours. Those are the checks that stay with a person at the unit (`hw-sessio
 `App::diag_commands(rows)` returns a constexpr table of `DiagCommand {name, help, run}`; the handler runs in the main loop, says well under 1,600
 bytes and reaches the app through `o3sdk_app()`. Details: `kit/app/include/o3sdk/app/diag.h`.
 
+The kit's own console commands (`o3console.py`, the list is `platform/mk66/console`) that an app's session uses: `files [crc <path>]` (the card, the last job, its cost, the CRC of a file), `radio [retry]`, `mon [off|on|0..100]`, `rec` (the recorder), `usb [audio|mode|profile|return|map|ep0 ...]`, `disk [share [ro]|eject]` (the card as a USB disk), `midi`, `power`, `crash` and `stage`. `fault` is the crashtest app's only (`apps/crashtest`, a session-only test app, never a release). Their state pairs are in `docs/FRAMEWORK.md` section 5 ("Diagnostics").
+
 ## 13. What a new app cannot use yet
 
 The capability map is `docs/FRAMEWORK.md` section 10 (done and verified on the unit, done on the host only, planned). The gaps that
@@ -395,7 +397,8 @@ matter for an instrument today:
 | MIDI in/out on the unit | the kit's MIDI is host-tested; the DIN and USB drivers are built and have not run on a unit | none yet; in the simulator, `--midi` and the `midi` and `clock` scenario lines |
 | The on-screen firmware switcher's final INSTALL | the FIRMWARE section opened and worked on a unit (2026-10-26, reported); the final F1 INSTALL needs a finger and is not verified | install over USB (section 11) |
 | Power switch shutdown on the unit | the shutdown is built and host-tested; it has not run on a unit (the pin's pull and polarity, the VLPR wake are open) | `power off dry` over USB (the stages, then a restart) |
-| Audio in (line, microphone), FM radio | units receive `in_l`/`in_r` planes but input select, gain and recording are contract-only | none |
+| Audio in, FM radio, recording | built (M2c slices AI, RC): `ctx.audio_in()`, `ctx.radio()`, `ctx.recorder()` (`app/audio_in.h`, `radio.h`, `recorder.h`); host only until the unit session (the line in, the microphone and the radio are not yet seen on a unit) | `Context::audio_in().select(...)`, `Context::recorder().arm(...)`; `docs/FRAMEWORK.md` section 5 says what each needs; the Config's AUDIO section appears only with `Platform::capture` |
+| USB audio: stems, the computer's return, the card as a disk | built (M2c slice U): `ctx.usb_audio()` (`app/usb_audio.h`); host only, the image carries it; only the boot layout (P8, the master on 7-8) is verified on the unit | `usb.request_profile`, `set_stem`, `set_return_level` (0 by default); the Config's CARD AS DISK |
 | Header and transport | built (M2c slice CP): `App::header()` returns a `HeaderStyle`; an app with no sequencer sets `tempo` and `transport` false | override `header()` |
 | Your own Config pages | built (M2c slice CP): `App::config_pages()`, `config_page()`, `config_get/set/run` (`app/config_page.h`; HELLO has one: `apps/hello/src/hello_app.cpp`, `scenarios/config_pages.txt`) | add a page of values and actions after the kit's sections; the kit keeps the values |
 

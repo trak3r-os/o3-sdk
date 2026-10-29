@@ -1,6 +1,7 @@
 # M2c: the whole hardware for every app (plan, interfaces and ownership)
 
-Status: plan, 2026-10-29. Decisions D1-D18 are taken as recommended under the maintainer's standing "no questions, decide by the rules"
+Status: built and host-tested, every slice reviewed (2026-10-29); the unit round is pending. The section "As built" at the end records what
+differs from this plan. Decisions D1-D18 were taken as recommended under the maintainer's standing "no questions, decide by the rules"
 (2026-10-25); the maintainer may override any of them. The maintainer (2026-10-29): first finish the whole SDK properly, with all functionality
 available from the SDK; only after that, a usability round of the o3-303 app. This plan is the map of that remaining SDK work. It was drafted
 by a read-only exploration of both trees (track3r-os at 5155757a). `docs/M2B-PLAN.md` is the model: its I/X/N classes (its D1), its renames and
@@ -548,6 +549,100 @@ Memory [est, from track3r-os's sizes]:
   - `app/include/o3os/app/recorder.h:20` says the Record screen "needs the SD write layer, which this tree has not got"; `save_actions.cpp`
     saves takes through `SaveService::save_wav`.
   - OS-RAD1's fix was never re-run on a unit.
+  - `param_step` leaves a float residue when it brings a value down to 0.
+  - `o3console.py` sends arguments without quotes as separate lines.
+  - `midi/CLAUDE.md` has the tools path wrong.
+  - The `OS-POWER.md` header says there is no code yet.
+  - `kStartLead=64` is tied to the block size.
+  - A card still mounting at shutdown makes the wait reach its 8 s cap.
+  - The `kPowerReads` bit scheme assumes no more than 64 commands.
+  - `clock_dll`'s float-to-int64 conversion pulls software double helpers. o3-sdk's image defines `__aeabi_f2lz` for it.
+  - `out.cpp`'s flush stops at a full head item, so DIN stalls when the USB ring is never drained (worked around in `MidiService`).
+  - `DirScan` ignores `skip_probe` when `probe` is null.
+  - `AtomicSave` reports a pulled card as VERIFY FAILED.
+  - `select_source(Radio)` powers the radio again on every call.
+  - The input switch moves even when the codec write was refused.
+  - `apply_input` returns false before audio starts.
+  - `disk_share.h` names `src/disk_share_port.cpp`.
+  - `usb0` `start()` accepts `Mode::Disk`.
+  - `o3tone.py` hard-codes "Track3r" names.
+  - `format_stem_map`'s heading says "runtime only".
+  - One marked line of o3-sdk's own, in ported code: `bindable_kind` in `kit/core/src/learn.cpp` also accepts `ParamKind::Unit` (commented in the code). Not a track3r-os defect; the maintainer may keep or change it.
+  - These are for the maintainer and are not fixed here.
+
+## As built (2026-10-29)
+
+Built on `main` at o3-sdk b03c9e3, not pushed. Nothing built in M2c has run on a unit yet. Slice commits after 774df16 (wave 1 is before it):
+
+| Slice | Commits | What |
+|---|---|---|
+| FS, AP (wave 1) | f671c04 | the save machinery; taps, kernels, stem map, Si4703 |
+| SE | 9711b38 | the engine's input gate, monitor, peaks, stem staging |
+| LW | 917d882 | ListView and the keyboard widget; `o3install.py`, `fetch_toolchain.py` |
+| CT | c5e1247 | the crashtest app |
+| FA | 9561cd8 | the app file API, the kit's settings on the card, the card in the simulator |
+| AI | 201ffb3; review fixes a71b983 | audio in, the FM radio, the AUDIO section |
+| TP | e065d11 | the template saves and loads; new app ids are at most 15 characters |
+| RC | 1f1f275; review fixes a71b983 | recording |
+| U | 1cf43c6; review fixes 15419c0 | USB stems, the return, profiles, the disk, AUDIO's USB rows, CARD |
+| CP | cded5f8; review fixes b03c9e3 | app Config pages, MIDI learn, brightness and pad lights, INFO's crash line, screenshot to the card, FilePicker and NameEntry |
+
+Every slice was reviewed by an independent reviewer, and the fixes were folded (the review-fix commits above).
+
+**Deviations**, as the slices reported them:
+- FS: `og_timing.cpp` and `dir_index.cpp` were ported too (`AtomicSave` and `DirScan` need them). Each of the four X files also needs an
+  `#include <o3sdk/hal/app_guard.h>` beside its alias line. App and project names forbid '.'.
+- AP: `test_signal.cpp` and `tests/support/static_slot.h` were ported as well. `tap_mem.h` drops `meters.h`. Audio takes only usb's
+  include directories (a full `DEPENDS usb` would reorder every image's link).
+- SE: `set_input_peaks()` (peaks only on request) and `feature_work()` (the zero-cost proof) are added. A send stem is null when its bus
+  has no effect.
+- FA:
+  - `Entry::name` is 40 bytes.
+  - A WAV streamed through a `ByteSink` needs an adapter, which is not written.
+  - "Samples" is refused as a project name.
+  - The writer's guard admits track3r-os's rows. The files service narrows writes to `Apps/<id>/` and `Samples/` (`ScopedWriter`), and
+    `system.o3s` is reserved.
+  - A card's settings are read whenever a card comes in. A newer or unreadable settings file is kept and the card is protected for the
+    session.
+- LW: `keyboard_view` takes any `TextEntry`-shaped object (ui cannot include app); the app glue came with CP.
+- AI:
+  - The engine gate stays open until a source is selected, so renders are unchanged.
+  - The line's channel map (mix, left, right) is applied in `Runtime::render_block` after the gate has shut.
+  - `i2c::sda_hold` was restored verbatim for the radio's reset.
+  - A refused codec write does not re-probe a dead radio.
+- RC:
+  - `wrap(cb, engine)` takes the engine.
+  - Aligned takes wait while the transport is stopped.
+  - The grid is straight (no swing).
+  - The service filters Bar and Pattern boundaries for the ported `RecTap`, so patterns of 12 or 24 steps work.
+  - An Input take applies the line's channel map.
+  - No `TapMem` is placed, so `O3SDK_TAP_MEM_L` was not needed by RC. U added the section.
+- U:
+  - `disk_share.h` lives in `platform/mk66/usb/include`.
+  - `wrap(inner, engine)`.
+  - A disk share flushes pending settings and waits up to 3 s.
+  - P8's o3-sdk factory map keeps channels 1-6 silent, also after `usb map reset`.
+  - A new SRAM_L section `.tapmem_l` holds the stem pool (15,808 B of a 20 KiB budget), paid by every console image.
+- CP:
+  - An action asks with F1 and runs on a second F1 within 5 s; there is no hold timer.
+  - Learn bindings (LRNB) and page values (APPV) live in `system.o3s`. Stale bindings are dropped at boot, and the MIDI section has CLEAR
+    LEARN.
+  - Screenshots have their own `ScopedWriter` scope.
+  - PAD LIGHTS needs a backlight.
+  - One marked o3sdk line in the ported `kit/core/src/learn.cpp`.
+- TP: a new app's id is at most 15 characters, the card's folder rule (D6). `tools/new_app.py` refuses a longer id.
+- The return is off by default and HELLO's longest take is 30 s (see the next list).
+
+**Decisions changed after the plan.** Neither is renumbered here.
+- The return stream is off by default, RETURN LEVEL 0, so that boot stays as verified: P8, the master on channels 7-8, never DISK. It sets the default of the return mix in D11.
+- HELLO's longest take is 30 s. The 60 s take in section 6's unit checks is not built as a HELLO choice.
+
+**Figures.** From the integrator's report on b03c9e3 (not re-run for this update):
+- Host ctest 191/191; mk66 `ctest -L mk66` 30/30; no `__aeabi_d` symbol in the cross build.
+- HELLO image: FLASH about 312 KB; `.ramfunc_l` 9,016 B; `.tapmem_l` 15,808 B of the 20 KiB SRAM_L budget (sections 7 and 11 estimated about 18 KB for the stem pool).
+- o3-303: 34/34 ctests pass; SRAM_U 38,808 B free (the rule is at least 32 KiB).
+
+**Owed on a unit** (the unit round, `docs/FRAMEWORK.md` section 10 lists each row): the checks in sections 3 to 7 and 9 of this plan, the hands session (card pulled mid-save, write protect, Power during a save, brightness and pad lights by eye, the microphone, the radio by ear, the crash's blink code), the FT812 fill rate and the colour order.
 
 ## Decisions
 
