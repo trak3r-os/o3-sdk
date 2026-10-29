@@ -1,0 +1,12 @@
+# CRASH TEST (session only): the boot screen, the one screen (it says what it is and lists the faults), and the state pairs. The faults themselves are
+# provoked only on the unit (CHECKLIST.md): the simulator has nothing to fault. The pads and buttons do nothing here: the pictures stay the same.
+wait 50
+boot 01_boot
+wait 300
+snap 02_screen
+pad 12
+tap play
+wait 100
+snap 03_after_keys
+expect state app=CRASH_TEST_SESSION_ONLY
+expect state armed=none prev=none nofault=none
