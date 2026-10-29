@@ -245,6 +245,9 @@ void Runtime::poll() noexcept {
 
   poll_midi();
   ctx_.audio_in_.poll(ctx_.ms_);
+  if (platform_.recorder != nullptr) {  // the Input tap hears the line's channel map as the engine does (hal/record.h)
+    platform_.recorder->set_line_map(static_cast<hal::record::LineMap>(ctx_.audio_in_.channel_map()));
+  }
   ctx_.radio_.poll();
   app_.update(ctx_);
   if (ctx_.screen_ != nullptr) {

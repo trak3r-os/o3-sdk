@@ -16,7 +16,7 @@
 //   SAMPLE LOAD   LOAD it back (a riff that is not there says so on the strip). The card, the file and the last job show on the screen.
 //   REC           records a take (Context::recorder(): into a buffer of the app's own, ten seconds by default) and stops it; REC again after a take discards it and starts the next.
 //                 Where the take starts is START (SAMPLE REC cycles FREE, STEP, BAR, LEVEL: on the transport's sixteenth or bar, to the sample, or when the input reaches -30 dB, with
-//                 50 ms before it), how long it can be is LEN (SAMPLE PLAY: 1, 10, 60 s) and what it records is TAP (SAMPLE EDIT: the audio INPUT, or the MASTER).
+//                 50 ms before it), how long it can be is LEN (SAMPLE PLAY: 1, 10, 30 s) and what it records is TAP (SAMPLE EDIT: the audio INPUT, or the MASTER).
 //   SHIFT + FILE  saves the take to the card as a WAV, Apps/hello/take_NNN.wav.
 //   SHIFT + REC   the audio in through the master: the monitor on (the usual 70 %) and off. Where the input comes from (line, microphone, radio) is the Config's AUDIO
 //                 section; the screen's IN meter shows what arrives. With no capture device (a platform without audio in) neither exists.
@@ -177,8 +177,8 @@ class Riff final : public dsp::Clocked {
 
 constexpr std::uint32_t kRate = 44'100;
 constexpr unsigned kTakeLens = 3;
-constexpr std::uint32_t kTakeSeconds[kTakeLens] = {1, 10, 60};
-constexpr std::uint32_t kTakeCapacity = 60 * kRate;  // the longest take: one minute, mono, 5.3 MB of the SDRAM
+constexpr std::uint32_t kTakeSeconds[kTakeLens] = {1, 10, 30};
+constexpr std::uint32_t kTakeCapacity = 30 * kRate;  // the longest take: half a minute, mono, 2.6 MB of the SDRAM
 constexpr std::int32_t kLevelThreshold = 1036;       // -30 dBFS
 constexpr std::uint32_t kPreRoll = kRate / 20;       // 50 ms
 // The take's buffer: the app's own, in the SDRAM (the kit allocates none). 4-byte aligned for the recorder's word writes.
@@ -356,9 +356,11 @@ class PlayScreen final : public app::Screen {
     r.text(rx, area.y + 70, "OUT", Color::TextDim, Face::Label);
     const dsp::EngineStats s = ctx.engine().stats();
     app::level_meter(r, Rect{rx + 40, area.y + 72, rw - 40, 10}, s.peak_l > s.peak_r ? s.peak_l : s.peak_r);
-    // The audio in (Context::audio_in()): its peak, while the monitor plays it ("MON"). Asking for the peaks is what makes the engine measure them; nothing of this exists without a capture device.
+    // The audio in (Context::audio_in()): its peak, while the monitor plays it ("MON"). Asking for the peaks is what makes the engine measure them, so they are asked for only while
+    // there is something to see: a source was chosen or the monitor is on (the Config's AUDIO section meters on its own). Nothing of this exists without a capture device.
     if (ctx.audio_in().available()) {
-      const dsp::InputPeaks in_peak = ctx.audio_in().peaks();
+      const bool watching = ctx.audio_in().selected() || ctx.audio_in().monitor() != 0u;
+      const dsp::InputPeaks in_peak = watching ? ctx.audio_in().peaks() : dsp::InputPeaks{};
       r.text(rx, area.y + 84, ctx.audio_in().monitor() != 0u ? "MON" : "IN", ctx.audio_in().monitor() != 0u ? Color::Play : Color::TextDim, Face::Label);
       app::level_meter(r, Rect{rx + 40, area.y + 86, rw - 40, 10}, in_peak.l > in_peak.r ? in_peak.l : in_peak.r);
     }

@@ -160,14 +160,14 @@ class FakeCapture final : public hal::capture::CaptureHw {
   // ---- hal::capture::CaptureHw ----------------------------------------------------------------------------------------------------------
   bool select_source(Source source, std::uint8_t gain_percent) noexcept override {
     ++selects_;
+    if (source == Source::Radio) {
+      radio_power(true);  // the receiver is powered when it is first wanted, whether or not the codec acknowledges (capture.cpp does the same)
+    }
     if (refuse()) {
       return false;
     }
     source_ = source;
     gain_ = gain_percent > 100u ? 100u : gain_percent;
-    if (source == Source::Radio) {
-      radio_power(true);  // the receiver is powered when it is first wanted
-    }
     return true;
   }
   bool set_gain(Source source, std::uint8_t gain_percent) noexcept override {

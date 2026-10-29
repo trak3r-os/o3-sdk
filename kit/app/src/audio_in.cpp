@@ -31,15 +31,24 @@ bool AudioIn::send(Pending what) noexcept {
   return what == Pending::Select ? hw_->select_source(source_, gain_) : hw_->set_gain(source_, gain_);
 }
 
+bool AudioIn::radio_is_dead() const noexcept {
+  const hal::capture::RadioStatus::State s = hw_->radio_status().state;
+  return s == hal::capture::RadioStatus::State::Absent || s == hal::capture::RadioStatus::State::Failed;
+}
+
 bool AudioIn::select(Source source, unsigned gain_percent) noexcept {
   if (hw_ == nullptr || static_cast<unsigned>(source) >= hal::capture::kSourceCount) {
     return false;
   }
   source_ = source;
   gain_ = static_cast<std::uint8_t>(clamped(gain_percent));
-  map_.store(map_for(source), std::memory_order_relaxed);
-  // The planes go silent first (one block's fade), so that nothing of the switch reaches the units or the monitor.
+  selected_ = true;
+  // The planes go silent first (a one-block fade), so that nothing of the switch reaches the units or the monitor; the new channel map joins them only once the fade is done
+  // (poll(), kMapDelayMs on), or the first block of the fade would carry it at full level.
   engine_->set_input_gate(false);
+  map_next_ = map_for(source);
+  map_pending_ = true;
+  map_at_ = now_ms_ + kMapDelayMs;
   settling_ = true;
   settle_until_ = now_ms_ + kSettleMs;
   if (send(Pending::Select)) {
@@ -107,8 +116,15 @@ void AudioIn::poll(std::uint64_t now_ms) noexcept {
   if (hw_ == nullptr) {
     return;
   }
-  // A refused write: again every kRetryMs, one write a pass. The gate stays shut until it went through, then a new settling time starts.
-  if (pending_ != Pending::None && now_ms >= retry_at_) {
+  if (map_pending_ && now_ms >= map_at_) {
+    map_.store(map_next_, std::memory_order_relaxed);
+    map_pending_ = false;
+  }
+  // A refused write: again every kRetryMs, one write a pass. The gate stays shut until it went through, then a new settling time starts. The platform's select of Radio powers the
+  // receiver (from Absent or Failed that is a full probe: a reset and three bus reads), so a retry of it waits while the radio is dead; the first call and a person's
+  // radio().power(true) are what probe it, and the retry goes on once that has started it again.
+  const bool radio_dead = source_ == Source::Radio && pending_ == Pending::Select && radio_is_dead();
+  if (pending_ != Pending::None && now_ms >= retry_at_ && !radio_dead) {
     if (send(pending_)) {
       if (pending_ == Pending::Select) {
         settling_ = true;

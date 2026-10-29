@@ -27,6 +27,8 @@ bool RecordService::arm(const hr::Take& take) noexcept {
   // One channel of the pair, or the mix of both, for a mono take (RecTap::set_channel); the stereo take ignores it.
   tap_.set_channel(take.channels == hr::Channels::Left ? RecTap::Channel::Left : (take.channels == hr::Channels::Right ? RecTap::Channel::Right : RecTap::Channel::Mix));
   armed_tap_ = tap();
+  armed_align_ = take.align;
+  stop_rule_.store(static_cast<std::uint8_t>(hr::Align::Free), std::memory_order_relaxed);
   if (take.align == hr::Align::Level) {
     return tap_.arm_level(take.buf, take.capacity_frames, channels, take.threshold, take.preroll_frames, take.auto_steps);
   }
@@ -68,18 +70,34 @@ void RecordService::record_block(const hal::audio::BlockIo& io, RecTap::State s)
     t.frames = n;
     t.following = f.follow;
     const std::uint32_t pattern = pattern_steps_.load(std::memory_order_relaxed);
-    dsp::for_each_step(t, dsp::kTicksPerSixteenth, 0u, 0u, [&](std::uint32_t frame, std::uint64_t k) { tap_.on_step(tap_step(k, pattern), frame); });
+    // Which boundary RecTap asks about: the take's start alignment while it waits, the pending stop_at() once it records (tap_step: 0 at a boundary of that rule, 1 elsewhere).
+    dsp::for_each_step(t, dsp::kTicksPerSixteenth, 0u, 0u, [&](std::uint32_t frame, std::uint64_t k) {
+      const hr::Align rule = tap_.state() == RecTap::State::Waiting ? armed_align_ : static_cast<hr::Align>(stop_rule_.load(std::memory_order_relaxed));
+      tap_.on_step(tap_step(k, pattern, rule), frame);
+    });
     if (f.stopped) {
       tap_.on_stopped(0u);  // (the engine applies a stop at frame 0 of the block)
     }
   }
+  const RecTap::State now = tap_.state();
+  if (now != RecTap::State::Armed && now != RecTap::State::Listening) {
+    // Still Waiting for its step: nothing is written, so no block is split. push() is what ends a Waiting take that disarm() cancelled; it reads no plane in this state.
+    alignas(4) static const std::int16_t kNone[n] = {};
+    tap_.push(kNone, kNone, n);
+    return;
+  }
   const std::int16_t* src = armed_tap_ == hr::Tap::Master ? io.out : io.in;
+  // The Input tap hears the line's channel map, as the engine's own input does (the mean of the two channels, or one of them, in both planes).
+  const std::uint8_t map = armed_tap_ == hr::Tap::Input ? line_map_.load(std::memory_order_relaxed) : 0u;
   alignas(4) std::int16_t l[n];
   alignas(4) std::int16_t r[n];
   static_assert(n % 2u == 0u, "the planes are whole words");
   for (std::uint32_t i = 0; i < n; ++i) {
-    l[i] = src[2u * i];
-    r[i] = src[2u * i + 1u];
+    const std::int32_t a = src[2u * i];
+    const std::int32_t b = src[2u * i + 1u];
+    const std::int32_t v = map == static_cast<std::uint8_t>(hr::LineMap::Mix) ? (a + b + 1) >> 1 : (map == static_cast<std::uint8_t>(hr::LineMap::Left) ? a : b);
+    l[i] = static_cast<std::int16_t>(map == 0u ? a : v);
+    r[i] = static_cast<std::int16_t>(map == 0u ? b : v);
   }
   tap_.push(l, r, n);
 }

@@ -51,7 +51,8 @@ class Recorder {
   // ---- A take ---------------------------------------------------------------------------------------------------------------------------
   // hal::record::Recorder::arm: false when there is no recorder, it is not Idle, or the take is not usable.
   bool arm(const Take& take) noexcept;
-  void stop_at(Align boundary) noexcept;
+  // The take ends at the sample of the next Step, Bar or Pattern boundary (Free: disarm()). false: no recorder, or Align::Level (a level starts a take, it is no end): nothing changes.
+  bool stop_at(Align boundary) noexcept;
   void disarm() noexcept;
   State state() const noexcept;
   // Frames written so far; a Level take counts from the buffer's start with its ring (clip() is the audio).

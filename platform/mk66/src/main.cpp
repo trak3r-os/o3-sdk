@@ -395,17 +395,24 @@ int main() {
   g_engine.set_cycle_counter(&o3sdk::hal::cycles);  // the header's CPU %
   // Audio in and the radio (Platform::capture): the radio stays off until a radio source is chosen; nothing here touches the codec until an app or the Config's AUDIO section selects a source.
   o3sdk::hal::capture::CaptureHw& capture = mk66::capture_create(g_capture_storage);
+  // Recording (Platform::recorder): the service, wrapped around the render below. The audio bring-up image plays the test tone instead and never calls the wrap, so there it has none:
+  // a take armed there would wait for ever.
+#if O3SDK_AUDIO_TEST
+  o3sdk::hal::record::Recorder* const recorder = nullptr;
+#else
+  o3sdk::hal::record::Recorder* const recorder = &record_service::service();
+#endif
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
   // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
                                        &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture,
-                                       &record_service::service()};
+                                       recorder};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi,
-                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture, &record_service::service()};
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture, recorder};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   const bool app_started = rt.start();

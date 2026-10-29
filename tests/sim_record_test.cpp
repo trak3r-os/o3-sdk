@@ -8,6 +8,8 @@
 #include <doctest/doctest.h>
 
 #include <o3sdk/app/app.h>
+#include <o3sdk/app/audio_in.h>
+#include <o3sdk/app/context.h>
 #include <o3sdk/app/recorder.h>
 #include <o3sdk/dsp/transport.h>
 #include <o3sdk/hal/record.h>
@@ -373,4 +375,45 @@ TEST_CASE("sim record: an idle recorder does no work, and recording changes noth
   CHECK(rig.h.recorder().active_blocks() > 300u);
   REQUIRE(rig.h.audio().size() == idle_audio.size());
   CHECK(std::memcmp(rig.h.audio().data(), idle_audio.data(), idle_audio.size() * sizeof(std::int16_t)) == 0);
+}
+
+TEST_CASE("sim record: an Input take hears the line's channel map the runtime applies, and the runtime passes it to the recorder") {
+  Rig rig("sim-record-map");
+  Pcm lr = ramp_wav();
+  for (std::uint32_t i = 0; i < kLoop; ++i) {
+    lr[2u * i + 1u] = static_cast<std::int16_t>(i + 1u + 1000u);  // the right channel is the left one plus 1,000
+  }
+  rig.capture.input_wav(lr);
+  REQUIRE(rig.h.start());
+  rig.h.run_ms(10);
+  REQUIRE(rig.h.runtime().context().audio_in().select(hal::capture::Source::LineLeft, 0));
+  rig.h.run_ms(300);  // the gate opens again after the switch settles; the map reached the recorder on the first pass
+  Pcm buf(256);
+  // A take of the RIGHT channel is the left one: the engine's input is the left channel in both planes.
+  REQUIRE(rig.rec().arm(take_of(buf, 128, hr::Channels::Right, hr::Align::Free)));
+  const std::uint64_t armed_at = rig.h.samples_rendered();
+  REQUIRE(rig.wait_state(hr::State::Done, 50));
+  std::uint64_t first = armed_at;
+  while (ramp_at(first) != buf[0]) {
+    ++first;
+    REQUIRE(first < armed_at + 4u * hal::audio::kBlock);
+  }
+  for (std::uint32_t i = 0; i < 128; ++i) {
+    REQUIRE(buf[i] == ramp_at(first + i));
+  }
+  rig.rec().release();
+  // Back to the line's two channels as they are (LineMix is their mean; here: the mean of l and l + 1,000).
+  REQUIRE(rig.h.runtime().context().audio_in().select(hal::capture::Source::LineMix, 0));
+  rig.h.run_ms(300);
+  REQUIRE(rig.rec().arm(take_of(buf, 128, hr::Channels::Left, hr::Align::Free)));
+  const std::uint64_t armed2 = rig.h.samples_rendered();
+  REQUIRE(rig.wait_state(hr::State::Done, 50));
+  std::uint64_t second = armed2 - 0u;
+  while (static_cast<std::int16_t>(ramp_at(second) + 500) != buf[0] && second < armed2 + 4u * hal::audio::kBlock) {
+    ++second;
+  }
+  CHECK(second < armed2 + 4u * hal::audio::kBlock);
+  for (std::uint32_t i = 0; i < 128; ++i) {
+    CHECK(buf[i] == static_cast<std::int16_t>(ramp_at(second + i) + 500));
+  }
 }

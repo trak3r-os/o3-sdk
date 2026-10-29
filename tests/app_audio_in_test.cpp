@@ -394,6 +394,93 @@ TEST_CASE("audio in: a refused codec write is tried again every 500 ms, the gate
   CHECK(rig.h.engine().input_gate());
 }
 
+TEST_CASE("audio in: a refused codec write does not make the retry re-probe a radio that did not answer") {
+  Rig rig(0.0f, true);
+  REQUIRE(rig.started);
+  rig.cap.radio_absent();
+  rig.cap.refuse_writes(100000);  // a dead codec (or the audio path not started yet), with the radio as the source
+  CHECK_FALSE(rig.in().select(Source::Radio, 10));
+  CHECK(rig.in().failed());
+  // Probes: the radio going from Absent (or Off) to Starting. The first select is the one that may probe it.
+  RState last = rig.radio().status().state;
+  CHECK(last == RState::Starting);  // the first select started it
+  unsigned probes = 1;
+  const auto run = [&](unsigned ms) {
+    for (unsigned i = 0; i < ms; ++i) {
+      rig.h.run_ms(1);
+      const RState now = rig.radio().status().state;
+      probes += (now == RState::Starting && last != RState::Starting) ? 1u : 0u;
+      last = now;
+    }
+  };
+  run(100);
+  CHECK(rig.radio().status().state == RState::Absent);
+  CHECK(probes == 1u);
+  run(5000);  // ten retry periods
+  CHECK(probes == 1u);
+  CHECK(rig.cap.power_calls() == 1u);
+  CHECK(rig.cap.selects() == 1u);  // the retry waits: it is not sent while the radio is dead
+  CHECK(rig.in().failed());
+  CHECK_FALSE(rig.h.engine().input_gate());  // silent meanwhile
+  // A person's retry of the radio is what probes it again; the codec's retry then goes on (and is refused again, without another probe).
+  rig.radio().power(true);
+  run(2000);
+  CHECK(probes == 2u);
+  CHECK(rig.radio().status().state == RState::Absent);
+  CHECK(rig.cap.selects() >= 2u);
+  const unsigned selects_after = rig.cap.selects();
+  run(3000);
+  CHECK(probes == 2u);
+  CHECK(rig.cap.selects() == selects_after);
+  // Without the dead radio the retry still goes through as before.
+  rig.cap.refuse_writes(0);
+  rig.cap.radio_absent(false);
+  rig.radio().power(true);
+  run(2500);
+  CHECK_FALSE(rig.in().failed());
+  CHECK(rig.h.engine().input_gate());
+  CHECK(rig.radio().status().state == RState::Ready);
+}
+
+TEST_CASE("audio in: the new channel map joins the planes only after the gate has faded them out, so the switch never steps") {
+  Rig rig(0.0f, false);  // an instrument that does not listen: the monitor is the only way the input reaches the master
+  REQUIRE(rig.started);
+  std::vector<std::int16_t> lr;  // left: a sine at 0.4 (44 whole cycles, so the loop has no seam), right: silence
+  for (unsigned i = 0; i < 4410; ++i) {
+    lr.push_back(static_cast<std::int16_t>(0.4f * 32767.0f * std::sin(6.2831853f * 44.0f * static_cast<float>(i) / 4410.0f)));
+    lr.push_back(0);
+  }
+  rig.cap.input_wav(lr);
+  REQUIRE(rig.in().select(Source::LineLeft, 0));
+  rig.in().monitor(100);
+  rig.h.run_ms(400);
+  rig.h.record(true);
+  rig.h.run_ms(20);
+  const std::size_t from = rig.h.audio().size() / 2u;
+  // Every switch between the maps: the largest step between two samples of the master over the switch and the settling after it.
+  const Source order[] = {Source::LineMix, Source::LineLeft, Source::LineRight, Source::LineMix, Source::LineLeft};
+  for (const Source to : order) {
+    const std::size_t start = rig.h.audio().size() / 2u;
+    REQUIRE(rig.in().select(to, 0));
+    rig.h.run_ms(350);
+    float biggest = 0.0f;
+    std::size_t at_biggest = 0;
+    float prev = static_cast<float>(rig.h.audio()[2u * (start - 1u)]) / 32768.0f;
+    for (std::size_t i = start; i < rig.h.audio().size() / 2u; ++i) {
+      const float v = static_cast<float>(rig.h.audio()[2u * i]) / 32768.0f;
+      if (std::fabs(v - prev) > biggest) {
+        biggest = std::fabs(v - prev);
+        at_biggest = i - start;
+      }
+      prev = v;
+    }
+    // The sine itself steps 2 pi 440 / 44100 * 0.4 = 0.025 at most; a fade over one block adds amplitude / 64. A map that jumped in at full level steps by about a fifth.
+    INFO("switch to source " << static_cast<int>(to) << ", the biggest step " << biggest << " at sample " << at_biggest);
+    CHECK(biggest < 0.045f);
+  }
+  CHECK(from > 0u);
+}
+
 // ---- The radio ----------------------------------------------------------------------------------------------------------------------------------------
 
 TEST_CASE("radio: a source of Radio powers it up, a request made while it starts is held and runs when it is ready") {
@@ -905,6 +992,25 @@ TEST_CASE("sim audio in: scenarios/audio_in_absent.txt runs as it is") {
   CHECK(r.ok);
   CHECK(r.snapshots == 3u);
   CHECK(cap.power_calls() == 2u);  // the first request and the one retry the scenario made: nothing else asked
+}
+
+TEST_CASE("sim audio in: HELLO asks for the input's peaks only while there is something to see") {
+  host::FakeCapture cap;
+  sim::Harness h(o3sdk_app(), nullptr, nullptr, nullptr, nullptr, &cap);
+  REQUIRE(h.start());
+  cap.input_tone(440.0f, -12.0f);
+  h.run_ms(1500);  // frames are drawn all the while
+  CHECK_FALSE(h.engine().input_peaks_on());
+  CHECK(h.engine().feature_work().peak_frames == 0u);
+  h.runtime().context().audio_in().monitor(70);  // the monitor is on: the meter is of interest
+  h.run_ms(200);
+  CHECK(h.engine().input_peaks_on());
+  h.runtime().context().audio_in().monitor(0);
+  h.run_ms(1500);
+  CHECK_FALSE(h.engine().input_peaks_on());
+  REQUIRE(h.runtime().context().audio_in().select(Source::LineMix, 0));  // a chosen source is too
+  h.run_ms(300);
+  CHECK(h.engine().input_peaks_on());
 }
 
 TEST_CASE("sim audio in: HELLO without a capture device renders what it did (the scenario lines that need one fail with a message)") {

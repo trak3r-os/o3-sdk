@@ -14,11 +14,7 @@ bool Recorder::arm(const Take& take) noexcept {
   return true;
 }
 
-void Recorder::stop_at(Align boundary) noexcept {
-  if (hw_ != nullptr) {
-    hw_->stop_at(boundary);
-  }
-}
+bool Recorder::stop_at(Align boundary) noexcept { return hw_ != nullptr && hw_->stop_at(boundary); }
 
 void Recorder::disarm() noexcept {
   if (hw_ != nullptr) {

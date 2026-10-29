@@ -8,7 +8,9 @@
 //   The take. An app hands over a Take: a buffer of its own (an `O3SDK_BIG` array in the SDRAM; the kit allocates nothing), its capacity in frames, whether the take is
 //   mono (the mix of the two channels, or the left, or the right one) or interleaved stereo, and when it starts.
 //
-//   The tap. Input is what the codec delivers (or what the USB return makes of it): the block the engine was given. Master is the block the engine made, after the master
+//   The tap. Input is the block the engine is given: what the codec delivers (or what the USB return makes of it) through the line's channel map (set_line_map(): the runtime tells the
+//   recorder the map AudioIn applies, so a take of a LineLeft source is the left channel in both planes, as the units hear it; to within a rounding of the last bit, the map being integer here
+//   and float in the engine). It is NOT gated: the 200 ms an input switch settles are recorded as they are. Master is the block the engine made, after the master
 //   level, which is what the main output plays (a resample). Chosen with set_tap() while the recorder is idle; it applies to the next take.
 //
 //   Start. Free: at the next block. Step, Bar, Pattern: on the transport's grid, AT THE SAMPLE of the sixteenth (a Bar is 16 sixteenths; a Pattern is the app's pattern length,
@@ -41,6 +43,8 @@ enum class Tap : std::uint8_t { Input = 0, Master };
 enum class Channels : std::uint8_t { Mix = 0, Left, Right, Stereo };
 enum class Align : std::uint8_t { Free = 0, Step, Bar, Pattern, Level };
 enum class State : std::uint8_t { Idle = 0, Waiting, Listening, Recording, Done };
+// How the line's two channels reach the engine's input (app/audio_in.h): as they are, their mean in both planes, the left in both, the right in both.
+enum class LineMap : std::uint8_t { AsIs = 0, Mix, Left, Right };
 
 constexpr unsigned channel_count(Channels c) noexcept { return c == Channels::Stereo ? 2u : 1u; }
 
@@ -62,8 +66,9 @@ class Recorder {
   // false: not Idle (release() the last take first), or the take is not usable (no buffer, a buffer that is not 4-byte aligned, no room, a Level take with no threshold or no room
   // behind its ring).
   virtual bool arm(const Take& take) noexcept = 0;
-  // The take ends at the sample of the next step `boundary` accepts (Step, Bar or Pattern), or where the transport stops. Free is disarm(). Meaningful while Recording.
-  virtual void stop_at(Align boundary) noexcept = 0;
+  // The take ends at the sample of the next step `boundary` accepts (Step, Bar or Pattern), or where the transport stops. Free is disarm() (true). Level is no boundary: false, nothing
+  // changes. Meaningful while Recording.
+  virtual bool stop_at(Align boundary) noexcept = 0;
   // Ends the take at the next block (a Waiting or Listening one is Done with 0 frames).
   virtual void disarm() noexcept = 0;
   virtual State state() const noexcept = 0;
@@ -78,6 +83,8 @@ class Recorder {
   // Idle only (ignored otherwise): the tap of the next take.
   virtual void set_tap(Tap tap) noexcept = 0;
   virtual Tap tap() const noexcept = 0;
+  // The line's channel map for the Input tap (the runtime calls it every pass of the main loop with AudioIn's map; AsIs until then).
+  virtual void set_line_map(LineMap map) noexcept = 0;
   // The app's pattern length in sixteenths, for Align::Pattern (1..255; 16 by default).
   virtual void set_pattern_steps(std::uint32_t steps) noexcept = 0;
   virtual std::uint32_t pattern_steps() const noexcept = 0;

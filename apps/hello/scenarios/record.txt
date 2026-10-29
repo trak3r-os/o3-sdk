@@ -3,7 +3,7 @@
 #
 #   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/record.txt --card <card> --out <dir> --wav <dir>/hello.wav
 #
-# The keys: REC arms a take (or stops one), SAMPLE REC cycles START (FREE, STEP, BAR, LEVEL), SAMPLE PLAY cycles LEN (1, 10, 60 s), SAMPLE EDIT cycles TAP (INPUT, MASTER), SHIFT + FILE saves
+# The keys: REC arms a take (or stops one), SAMPLE REC cycles START (FREE, STEP, BAR, LEVEL), SAMPLE PLAY cycles LEN (1, 10, 30 s), SAMPLE EDIT cycles TAP (INPUT, MASTER), SHIFT + FILE saves
 # the take as Apps/hello/take_NNN.wav (and frees the buffer when the file is there). SHIFT + REC is the input monitor. The scenario fails at the first `expect` that is wrong; the card
 # directory should be empty to start with (the takes are take_001 .. take_004). tests/sim_record_test.cpp runs it and reads the WAVs back.
 record on
@@ -16,7 +16,7 @@ expect state len=10
 expect state tap=input
 snap 00_idle
 
-# 1. A FREE take of the INPUT, one second long (SAMPLE PLAY twice: 10 s, 60 s, 1 s). The buffer fills: the take is Done with 44,100 frames, and the 60 frames of the last block that did
+# 1. A FREE take of the INPUT, one second long (SAMPLE PLAY twice: 10 s, 30 s, 1 s). The buffer fills: the take is Done with 44,100 frames, and the 60 frames of the last block that did
 # not fit are counted (over=60), nothing is written past them. SHIFT + FILE saves it; once the file is on the card the recorder is free again.
 tap sampleplay
 tap sampleplay

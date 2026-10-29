@@ -51,7 +51,14 @@ class FakeRecorder final : public hr::Recorder {
     st = t.align == hr::Align::Free ? hr::State::Recording : (t.align == hr::Align::Level ? hr::State::Listening : hr::State::Waiting);
     return true;
   }
-  void stop_at(hr::Align a) noexcept override { stopped_at = a; }
+  bool stop_at(hr::Align a) noexcept override {
+    if (a == hr::Align::Level) {
+      return false;
+    }
+    stopped_at = a;
+    return true;
+  }
+  void set_line_map(hr::LineMap m) noexcept override { line_map = m; }
   void disarm() noexcept override { ++disarms; }
   hr::State state() const noexcept override { return st; }
   std::uint32_t frames() const noexcept override { return nframes; }
@@ -73,6 +80,7 @@ class FakeRecorder final : public hr::Recorder {
   hr::State st = hr::State::Idle;
   hr::Take last;
   hr::Align stopped_at = hr::Align::Free;
+  hr::LineMap line_map = hr::LineMap::AsIs;
   std::uint32_t arms = 0, disarms = 0, settles = 0, releases = 0;
   std::uint32_t nframes = 0, lost = 0, lead = 0, pattern = 16;
   hr::Tap tap_ = hr::Tap::Input;
@@ -107,7 +115,7 @@ TEST_CASE("app recorder: with no recorder every call is refused and says so") {
   CHECK(r.frames() == 0u);
   CHECK(r.overrun() == 0u);
   CHECK(r.settle() == 0u);
-  r.stop_at(hr::Align::Bar);
+  CHECK_FALSE(r.stop_at(hr::Align::Bar));
   r.disarm();
   r.release();
   r.set_tap(hr::Tap::Master);
@@ -142,7 +150,9 @@ TEST_CASE("app recorder: each call reaches the recorder as made") {
   rig.fake.refuse = true;
   CHECK_FALSE(r.arm(t));
   rig.fake.refuse = false;
-  r.stop_at(hr::Align::Pattern);
+  CHECK(r.stop_at(hr::Align::Pattern));
+  CHECK(rig.fake.stopped_at == hr::Align::Pattern);
+  CHECK_FALSE(r.stop_at(hr::Align::Level));  // a level is no end
   CHECK(rig.fake.stopped_at == hr::Align::Pattern);
   r.disarm();
   CHECK(rig.fake.disarms == 1u);

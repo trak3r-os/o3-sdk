@@ -24,7 +24,8 @@
 //   or while the system Config's AUDIO section is open. The first call returns zeros.
 //
 //   Failures. A codec write that is not acknowledged is kept (the choice stands, the gate stays closed) and tried again every kRetryMs from the main loop
-//   until it works (failed() says so); nothing waits. A select() in App::setup() is such a case on the unit: the audio path starts after setup, the codec is not
+//   until it works (failed() says so); nothing waits. The retry never re-powers a receiver that did not answer: with the radio as the source and Absent or Failed it waits
+//   until the radio is started again (radio().power(true): the Config's F5, the console's `radio retry`), since the platform's select of Radio powers the chip. A select() in App::setup() is such a case on the unit: the audio path starts after setup, the codec is not
 //   there yet, and the retry carries the choice through half a second later (the gate stays shut until then).
 //
 // The kit keeps source, gain and monitor on the card with its other settings (settings.h). Main loop only; the render sees the gate, the monitor and the
@@ -48,6 +49,7 @@ class AudioIn {
   static constexpr std::uint32_t kRetryMs = 500;       // a refused codec write is tried again this often
   static constexpr std::uint32_t kPeaksHoldMs = 1000;  // the peaks keep being measured this long after the app's last peaks()
   static constexpr unsigned kMonitorOn = 70;           // the monitor's "on" in per cent
+  static constexpr std::uint32_t kMapDelayMs = 5;      // the new channel map reaches the planes this long after the gate began to shut (two blocks: the fade is done)
 
   // The platform has a capture device. false: select(), set_gain() and monitor() change nothing and say so, peaks() is zero.
   bool available() const noexcept { return hw_ != nullptr; }
@@ -60,6 +62,8 @@ class AudioIn {
   bool set_gain(unsigned gain_percent) noexcept;
   Source source() const noexcept { return source_; }
   unsigned gain() const noexcept { return gain_; }
+  // An app or the user chose a source (select() went through, or the card's choice was applied): until then the codec is as the board powered it up.
+  bool selected() const noexcept { return selected_; }
   // The input is being switched: the planes are silent until this is false.
   bool settling() const noexcept { return settling_; }
   // A codec write was refused and is being retried.
@@ -99,6 +103,7 @@ class AudioIn {
   std::uint8_t channel_map() const noexcept { return map_.load(std::memory_order_relaxed); }
   static std::uint8_t map_for(Source s) noexcept;
   bool send(Pending what) noexcept;
+  bool radio_is_dead() const noexcept;
 
   hal::capture::CaptureHw* hw_ = nullptr;
   dsp::Engine* engine_ = nullptr;
@@ -106,6 +111,10 @@ class AudioIn {
   std::uint8_t gain_ = 0;
   std::uint8_t monitor_ = 0;
   bool settling_ = false;
+  bool selected_ = false;
+  bool map_pending_ = false;        // the channel map waits for the gate to be shut (poll applies it)
+  std::uint8_t map_next_ = kMapAsIs;
+  std::uint64_t map_at_ = 0;
   Pending pending_ = Pending::None;
   std::uint64_t settle_until_ = 0;  // uptime ms
   std::uint64_t retry_at_ = 0;

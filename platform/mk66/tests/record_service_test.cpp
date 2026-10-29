@@ -267,15 +267,19 @@ TEST_CASE("record service: every sixteenth of a long run is found at its own sam
 
 TEST_CASE("record service: Bar and Pattern are the transport's grid and the app's pattern length") {
   using RS = RecordService;
-  // The index RecTap judges: 0 at a pattern boundary, 16 at another bar, 1 at any other sixteenth.
-  CHECK(RS::tap_step(0, 16) == 0u);
-  CHECK(RS::tap_step(16, 16) == 0u);
-  CHECK(RS::tap_step(5, 16) == 1u);
-  CHECK(RS::tap_step(16, 6) == 16u);  // a bar that is not a pattern start
-  CHECK(RS::tap_step(18, 6) == 0u);
-  CHECK(RS::tap_step(48, 6) == 0u);
-  CHECK(RS::tap_step(32, 32) == 0u);
-  CHECK(RS::tap_step(16, 32) == 16u);
+  // The index RecTap judges: 0 at a boundary of the rule asked, 1 elsewhere.
+  using hr::Align;
+  CHECK(RS::tap_step(5, 16, Align::Step) == 0u);
+  CHECK(RS::tap_step(0, 16, Align::Bar) == 0u);
+  CHECK(RS::tap_step(16, 16, Align::Bar) == 0u);
+  CHECK(RS::tap_step(5, 16, Align::Bar) == 1u);
+  CHECK(RS::tap_step(12, 12, Align::Bar) == 1u);  // a pattern start that is no bar
+  CHECK(RS::tap_step(24, 24, Align::Bar) == 1u);
+  CHECK(RS::tap_step(16, 12, Align::Pattern) == 1u);  // a bar that is no pattern start
+  CHECK(RS::tap_step(24, 12, Align::Pattern) == 0u);
+  CHECK(RS::tap_step(48, 24, Align::Pattern) == 0u);
+  CHECK(RS::tap_step(32, 32, Align::Pattern) == 0u);
+  CHECK(RS::tap_step(16, 32, Align::Pattern) == 1u);
 
   Rig r;
   REQUIRE(r.engine->set_tempo(300'000));  // 2,205 samples to a sixteenth
@@ -301,6 +305,90 @@ TEST_CASE("record service: Bar and Pattern are the transport's grid and the app'
   CHECK(r.svc.pattern_steps() == 1u);
   r.svc.set_pattern_steps(100000);
   CHECK(r.svc.pattern_steps() == RS::kMaxPatternSteps);
+}
+
+namespace {
+// The first sixteenth at or after `k` that is a multiple of `m`.
+std::uint64_t round_up(std::uint64_t k, std::uint64_t m) { return (k + m - 1u) / m * m; }
+}  // namespace
+
+TEST_CASE("record service: a Bar is a real bar and a Pattern a pattern boundary, whatever the pattern's length (12 and 24 steps)") {
+  for (const std::uint32_t pattern : {12u, 24u}) {
+    for (const std::uint64_t phase : {2u, 13u, 17u, 25u}) {  // the sixteenth the run has reached when the take is armed
+      Rig r;
+      REQUIRE(r.engine->set_tempo(300'000));  // 2,205 samples to a sixteenth
+      REQUIRE(r.engine->play());
+      r.svc.set_pattern_steps(pattern);
+      r.svc.set_tap(hr::Tap::Master);
+      r.blocks(1);
+      while (r.pos < r.step_sample(phase) + 10u) {
+        r.block();
+      }
+      alignas(4) static std::int16_t buf[128];
+      // Bar start: the next multiple of 16, not the pattern's boundary.
+      REQUIRE(r.svc.arm(take_of(buf, 8, hr::Channels::Left, hr::Align::Bar)));
+      const std::uint64_t kb = round_up(r.step_at_or_after(r.pos), 16u);
+      REQUIRE(r.run_until_done(3000));
+      CHECK(buf[0] == master_l(r.step_sample(kb)));
+      r.svc.release();
+      // Pattern start: the next multiple of the pattern's length, not a bar.
+      REQUIRE(r.svc.arm(take_of(buf, 8, hr::Channels::Left, hr::Align::Pattern)));
+      const std::uint64_t kp = round_up(r.step_at_or_after(r.pos), pattern);
+      REQUIRE(r.run_until_done(5000));
+      CHECK(buf[0] == master_l(r.step_sample(kp)));
+      r.svc.release();
+      // Stop on a bar and on a pattern boundary: a Free take that begins at the next block ends AT THE SAMPLE of the right step.
+      for (const hr::Align stop : {hr::Align::Bar, hr::Align::Pattern}) {
+        alignas(4) static std::int16_t big[100000];
+        REQUIRE(r.svc.arm(take_of(big, 100000, hr::Channels::Mix, hr::Align::Free)));
+        const std::uint64_t start = r.pos;
+        r.block();
+        CHECK(r.svc.state() == hr::State::Recording);
+        CHECK(r.svc.stop_at(stop));
+        const std::uint64_t ke = round_up(r.step_at_or_after(r.pos), stop == hr::Align::Bar ? 16u : pattern);
+        REQUIRE(r.run_until_done(5000));
+        CHECK(r.svc.frames() == r.step_sample(ke) - start);
+        CHECK(r.svc.overrun() == 0u);
+        r.svc.release();
+      }
+    }
+  }
+}
+
+TEST_CASE("record service: a level is no end of a take, and the Input tap hears the line's channel map") {
+  Rig r;
+  alignas(4) static std::int16_t buf[1024];
+  REQUIRE(r.svc.arm(take_of(buf, 600, hr::Channels::Stereo)));
+  r.block();
+  CHECK_FALSE(r.svc.stop_at(hr::Align::Level));
+  CHECK(r.svc.state() == hr::State::Recording);
+  CHECK(r.svc.stop_at(hr::Align::Free));  // Free is disarm()
+  REQUIRE(r.run_until_done(5));
+  r.svc.release();
+  // The map: as they are, the mean of the two in both planes, the left in both, the right in both. The master is never mapped.
+  const hr::LineMap maps[4] = {hr::LineMap::AsIs, hr::LineMap::Mix, hr::LineMap::Left, hr::LineMap::Right};
+  for (unsigned m = 0; m < 4; ++m) {
+    r.svc.set_line_map(maps[m]);
+    r.blocks(1);
+    REQUIRE(r.svc.arm(take_of(buf, 128, hr::Channels::Stereo)));
+    const std::uint64_t start = r.pos;
+    REQUIRE(r.run_until_done(10));
+    for (std::uint32_t i = 0; i < 128; ++i) {
+      const std::int32_t l = ramp_l(start + i, 0);
+      const std::int32_t rr = ramp_r(start + i, 1);
+      const std::int32_t v = m == 1 ? (l + rr + 1) >> 1 : (m == 2 ? l : rr);
+      REQUIRE(buf[2u * i] == (m == 0 ? l : v));
+      REQUIRE(buf[2u * i + 1u] == (m == 0 ? rr : v));
+    }
+    r.svc.release();
+  }
+  r.svc.set_tap(hr::Tap::Master);
+  r.blocks(1);
+  REQUIRE(r.svc.arm(take_of(buf, 64, hr::Channels::Stereo)));
+  const std::uint64_t start = r.pos;
+  REQUIRE(r.run_until_done(10));
+  CHECK(buf[0] == master_l(start));
+  CHECK(buf[1] == master_r(start));
 }
 
 TEST_CASE("record service: stop_at and auto_steps end a take at the sample of a step: the take is exactly the frames between two samples") {
