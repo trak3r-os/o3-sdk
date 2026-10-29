@@ -26,6 +26,16 @@
 #define O3SDK_AUDIO_HOT_FLAT
 #endif
 
+// Render-context code that runs once a block (or per event), not per sample, and so lives in flash to keep SRAM_L for the per-block kernels (track3r-os OS-MEM1; here
+// RecTap::listen, M2c slice AP). `long_call` is required: the caller is in SRAM_L and flash is too far for a plain BL, so the call is made through a register (`blx rN`), which
+// tools/check_ramfunc.py allows as it does any indirect call. THE EXCEPTION LIST of the "SRAM_L calls nothing in flash" rule is exactly the functions marked
+// O3SDK_AUDIO_COLD (grep for it); each states its call rate beside the declaration. On the host the macro is empty.
+#if defined(O3SDK_AUDIO_RAMFUNC) && O3SDK_AUDIO_RAMFUNC
+#define O3SDK_AUDIO_COLD [[gnu::noinline, gnu::long_call]]
+#else
+#define O3SDK_AUDIO_COLD
+#endif
+
 // For the tiny ISR-path helpers that must be folded into their caller (which is itself in SRAM_L). The GNU spelling, not [[gnu::]],
 // so that it may stand anywhere in the specifiers (`static O3SDK_AUDIO_INLINE ...`).
 #define O3SDK_AUDIO_INLINE __attribute__((always_inline)) inline

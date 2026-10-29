@@ -34,8 +34,16 @@ mk66_suite(mk66_input_tests platform_mk66_input
 # (mk66_storage_swap_test.cpp drives the firmware upload through the update path's FwService: the storage suite links the update library, which brings storage.)
 mk66_suite(mk66_storage_tests platform_mk66_update mk66_storage_*_test.cpp)
 mk66_suite(mk66_update_tests platform_mk66_update mk66_update_*_test.cpp)
+# (M2c slice AP, ported from track3r-os: audio_kernels, audio_test_signal, audio_stem_map, audio_taps (its cases that do not drive the Graph) and mk66_si4703_test, which tests the
+# Si4703 driver of audio/ against a model of the chip. support/static_slot.h is track3r-os's tests/support one: a Cortex-M4 test stack is small.)
 mk66_suite(mk66_audio_tests platform_mk66_audio
-  mk66_audio_config_test.cpp mk66_sgtl5000_test.cpp mk66_output_gate_test.cpp audio_*_test.cpp)
+  mk66_audio_config_test.cpp mk66_sgtl5000_test.cpp mk66_output_gate_test.cpp mk66_si4703_test.cpp audio_*_test.cpp)
+if(TARGET mk66_audio_tests)
+  # The taps call the kit's usb kernels (sum_slots, interleave) and the stem map reads its profiles: platform_mk66_audio has usb's headers, not the library (audio/CMakeLists.txt).
+  target_link_libraries(mk66_audio_tests PRIVATE usb)
+  # The kernels' property test runs every kernel against its reference over many random blocks: slow under the sanitizers.
+  set_tests_properties(audio_kernels_test PROPERTIES TIMEOUT 300)
+endif()
 # audio_status_thread_test.cpp: std::thread needs the platform's thread library (pthread on Linux).
 if(TARGET mk66_audio_tests)
   target_link_libraries(mk66_audio_tests PRIVATE Threads::Threads)

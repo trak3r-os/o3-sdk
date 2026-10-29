@@ -13,7 +13,7 @@
 # build then: O3SDK_BUILD_APPS and O3SDK_BUILD_TESTS default to ON only when o3sdk is the top-level project.
 #
 # Layering (enforced by CMake link dependencies):
-#   core <- hal <- eve <- ui <- app;  core <- dsp <- app;  units depend on dsp only;  an app depends on kit/app and its units.
+#   core <- hal <- eve <- ui <- app;  core <- dsp <- app;  core <- formats <- app;  units depend on dsp only;  an app depends on kit/app and its units.
 #   platform/<name> and sim implement the HAL contracts and run an app.
 cmake_minimum_required(VERSION 3.24)  # $<LINK_LIBRARY:WHOLE_ARCHIVE,...> (cmake/O3sdkTargets.cmake, the mk66 image) needs 3.24
 
@@ -41,6 +41,7 @@ add_subdirectory(kit/hal)
 add_subdirectory(kit/eve)
 add_subdirectory(kit/ui)
 add_subdirectory(kit/dsp)
+add_subdirectory(kit/formats)  # core <- formats: CRC-32, the resumable WAV reader and the sample probe (app depends on it)
 add_subdirectory(kit/app)
 add_subdirectory(kit/usb)  # core <- usb: the portable USB device library (descriptors, control pipe, CDC, shell, log, UAC2)
 
