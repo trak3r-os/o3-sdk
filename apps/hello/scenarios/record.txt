@@ -1,0 +1,108 @@
+# Recording on HELLO (kit/app recorder.h, docs/M2C-PLAN.md section 6): Context::recorder() takes of the input and of the master into HELLO's own SDRAM buffer, started on the spot,
+# on the transport's sixteenth (to the sample) or on a level (with 50 ms before it), stopped by the key or by a full buffer, and saved to the card as a WAV.
+#
+#   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/record.txt --card <card> --out <dir> --wav <dir>/hello.wav
+#
+# The keys: REC arms a take (or stops one), SAMPLE REC cycles START (FREE, STEP, BAR, LEVEL), SAMPLE PLAY cycles LEN (1, 10, 60 s), SAMPLE EDIT cycles TAP (INPUT, MASTER), SHIFT + FILE saves
+# the take as Apps/hello/take_NNN.wav (and frees the buffer when the file is there). SHIFT + REC is the input monitor. The scenario fails at the first `expect` that is wrong; the card
+# directory should be empty to start with (the takes are take_001 .. take_004). tests/sim_record_test.cpp runs it and reads the WAVs back.
+record on
+input tone 440 -12
+wait 100
+expect state card=ready
+expect state rec=idle
+expect state start=free
+expect state len=10
+expect state tap=input
+snap 00_idle
+
+# 1. A FREE take of the INPUT, one second long (SAMPLE PLAY twice: 10 s, 60 s, 1 s). The buffer fills: the take is Done with 44,100 frames, and the 60 frames of the last block that did
+# not fit are counted (over=60), nothing is written past them. SHIFT + FILE saves it; once the file is on the card the recorder is free again.
+tap sampleplay
+tap sampleplay
+expect state len=1
+tap rec
+wait 100
+expect state rec=recording
+snap 01_recording
+wait 1100
+expect state rec=done
+expect state take=44100
+expect state over=60
+snap 02_full
+press shift
+tap file
+release shift
+wait 200
+expect state files=done
+expect file Apps/hello/take_001.wav
+expect state rec=idle
+
+# 2. A take of the MASTER on a STEP (SAMPLE REC: STEP, SAMPLE EDIT: MASTER). REC arms it while the transport is stopped: it waits (there is no step to start on) until PLAY, and records from
+# the very first sample of the riff. (Armed while the riff plays, it would wait for the next sixteenth, 125 ms at 120 BPM, and start on that sample: tests/sim_record_test.cpp.)
+tap samplerec
+tap sampleedit
+expect state start=step
+expect state tap=master
+tap rec
+wait 200
+expect state rec=waiting
+expect state take=0
+snap 03_waiting
+tap play
+wait 100
+expect state rec=recording
+wait 1100
+expect state rec=done
+expect state take=44100
+press shift
+tap file
+release shift
+wait 200
+expect file Apps/hello/take_002.wav
+expect state rec=idle
+tap play
+
+# 3. A LEVEL take of the INPUT: the input is silent, so the take only listens (nothing kept); the tone is the level (-30 dBFS), and the 50 ms heard before it are the take's first frames.
+input off
+tap samplerec
+tap samplerec
+tap sampleedit
+expect state start=level
+expect state tap=input
+tap rec
+wait 300
+expect state rec=listening
+expect state take=0
+snap 04_listening
+input tone 440 -12
+wait 100
+expect state rec=recording
+snap 05_triggered
+wait 1100
+expect state rec=done
+press shift
+tap file
+release shift
+wait 200
+expect file Apps/hello/take_003.wav
+expect state rec=idle
+
+# 4. A FREE take stopped by the key (REC again), saved.
+tap samplerec
+expect state start=free
+tap rec
+wait 300
+expect state rec=recording
+tap rec
+wait 20
+expect state rec=done
+expect state over=0
+press shift
+tap file
+release shift
+wait 200
+expect file Apps/hello/take_004.wav
+expect state rec=idle
+snap 06_end
+wav hello

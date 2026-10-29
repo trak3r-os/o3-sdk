@@ -35,9 +35,9 @@ mk66_suite(mk66_input_tests platform_mk66_input
 mk66_suite(mk66_storage_tests platform_mk66_update mk66_storage_*_test.cpp)
 mk66_suite(mk66_update_tests platform_mk66_update mk66_update_*_test.cpp)
 # (M2c slice AP, ported from track3r-os: audio_kernels, audio_test_signal, audio_stem_map, audio_taps (its cases that do not drive the Graph) and mk66_si4703_test, which tests the
-# Si4703 driver of audio/ against a model of the chip. support/static_slot.h is track3r-os's tests/support one: a Cortex-M4 test stack is small.)
+# Si4703 driver of audio/ against a model of the chip. M2c slice RC adds record_service_test (the record service on a real engine's transport). support/static_slot.h is track3r-os's tests/support one: a Cortex-M4 test stack is small.)
 mk66_suite(mk66_audio_tests platform_mk66_audio
-  mk66_audio_config_test.cpp mk66_sgtl5000_test.cpp mk66_output_gate_test.cpp mk66_si4703_test.cpp audio_*_test.cpp)
+  mk66_audio_config_test.cpp mk66_sgtl5000_test.cpp mk66_output_gate_test.cpp mk66_si4703_test.cpp audio_*_test.cpp record_service_test.cpp)
 if(TARGET mk66_audio_tests)
   # The taps call the kit's usb kernels (sum_slots, interleave) and the stem map reads its profiles: platform_mk66_audio has usb's headers, not the library (audio/CMakeLists.txt).
   target_link_libraries(mk66_audio_tests PRIVATE usb)

@@ -48,6 +48,9 @@ add_subdirectory(kit/usb)  # core <- usb: the portable USB device library (descr
 # The MK66 platform: its pure parts on every platform (host tests), the firmware images with -DO3SDK_PLATFORM=mk66.
 if(O3SDK_CROSS OR O3SDK_BUILD_TESTS)
   add_subdirectory(platform/mk66)
+else()
+  # The simulator runs the unit's record service (platform_mk66_audio, M2c slice RC): only what it links is built, not the rest of the platform's pure parts.
+  add_subdirectory(platform/mk66 EXCLUDE_FROM_ALL)
 endif()
 
 # Host-only: the HAL fakes and the simulator that runs any app headless.

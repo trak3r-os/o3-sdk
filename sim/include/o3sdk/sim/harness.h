@@ -8,6 +8,7 @@
 //   * The display is the FT81x interpreter (EveRaster) behind hal::Display; the pads' LEDs are a fake hal::Leds.
 //   * panel_image() is the screen above a drawing of the 48 pads: each pad lit to its LED level, a held pad framed in blue.
 //   * The audio can be recorded and written as a 16-bit stereo WAV at the engine's rate.
+//   * Context::recorder() is the unit's record service over the fake codec (recording.h of the plan, section 6): a take here is the unit's to the sample.
 
 #include <o3sdk/app/app.h>
 #include <o3sdk/app/panel.h>
@@ -28,6 +29,10 @@
 #include <memory>
 #include <string>
 #include <vector>
+
+namespace o3sdk::platform::mk66::audio {
+class RecordService;
+}
 
 namespace o3sdk::sim {
 
@@ -115,6 +120,9 @@ class Harness {
   // The fake capture device the harness was given (null without one).
   platform::host::FakeCapture* capture() { return capture_; }
   std::uint64_t due_samples() const;
+  // The recorder of the platform (Platform::recorder, Context::recorder()): the unit's own record service (platform/mk66/audio record_service.h) wrapped around every rendered block, over
+  // the fake codec's input. A restart makes a new one.
+  platform::mk66::audio::RecordService& recorder() { return *recorder_; }
 
   app::Runtime& runtime() { return *runtime_; }
   dsp::Engine& engine() { return *engine_; }
@@ -137,6 +145,7 @@ class Harness {
   const char* app_id_;
   std::unique_ptr<platform::host::ProtectCard> protect_;
   std::unique_ptr<app::Files::Work> files_work_;
+  std::unique_ptr<platform::mk66::audio::RecordService> recorder_;
   std::unique_ptr<EveRaster> raster_;
   std::unique_ptr<RasterDisplay> display_;
   platform::host::FakeInput input_;

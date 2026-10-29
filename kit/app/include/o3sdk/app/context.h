@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// What an app and its screens may use: the engine, the panel's state, MIDI, the card's files, audio in and the FM radio, time, the screen switch and the theme. Handed to every call;
+// What an app and its screens may use: the engine, the panel's state, MIDI, the card's files, audio in and the FM radio, recording, time, the screen switch and the theme. Handed to every call;
 // owned by the runtime.
 
 #include <o3sdk/app/audio_in.h>
@@ -9,6 +9,7 @@
 #include <o3sdk/app/midi.h>
 #include <o3sdk/app/panel.h>
 #include <o3sdk/app/radio.h>
+#include <o3sdk/app/recorder.h>
 #include <o3sdk/core/tick.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/ui/theme.h>
@@ -38,6 +39,10 @@ class Context {
   // The FM radio (radio.h): power, region, tune and seek; its sound is AudioIn's Source::Radio. Main loop only.
   Radio& radio() noexcept { return radio_; }
   const Radio& radio() const noexcept { return radio_; }
+  // Recording (recorder.h): a take of the input or the master into a buffer the app owns, started on a step or a level, saved to the card as a WAV. An app that never arms one pays one load
+  // a block in the render. Main loop only.
+  Recorder& recorder() noexcept { return recorder_; }
+  const Recorder& recorder() const noexcept { return recorder_; }
 
   core::Tick now() const noexcept { return now_; }          // microseconds, wraps (core/tick.h)
   std::uint64_t uptime_ms() const noexcept { return ms_; }  // does not wrap
@@ -61,6 +66,7 @@ class Context {
   Files files_;
   AudioIn audio_in_;
   Radio radio_;
+  Recorder recorder_;
   core::Tick now_ = 0;
   std::uint64_t ms_ = 0;
   Screen* screen_ = nullptr;

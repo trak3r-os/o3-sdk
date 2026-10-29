@@ -14,7 +14,11 @@
 //   INSERT        the riff up a semitone (SHIFT: down), so that there is something to save; DELETE puts the default riff back
 //   FILE          SAVE the riff to the card, Apps/hello/riff.o3a (Context::files(): a job of the main loop, never a pause of the sound or the screen)
 //   SAMPLE LOAD   LOAD it back (a riff that is not there says so on the strip). The card, the file and the last job show on the screen.
-//   REC           the audio in through the master: the monitor on (the usual 70 %) and off. Where the input comes from (line, microphone, radio) is the Config's AUDIO
+//   REC           records a take (Context::recorder(): into a buffer of the app's own, ten seconds by default) and stops it; REC again after a take discards it and starts the next.
+//                 Where the take starts is START (SAMPLE REC cycles FREE, STEP, BAR, LEVEL: on the transport's sixteenth or bar, to the sample, or when the input reaches -30 dB, with
+//                 50 ms before it), how long it can be is LEN (SAMPLE PLAY: 1, 10, 60 s) and what it records is TAP (SAMPLE EDIT: the audio INPUT, or the MASTER).
+//   SHIFT + FILE  saves the take to the card as a WAV, Apps/hello/take_NNN.wav.
+//   SHIFT + REC   the audio in through the master: the monitor on (the usual 70 %) and off. Where the input comes from (line, microphone, radio) is the Config's AUDIO
 //                 section; the screen's IN meter shows what arrives. With no capture device (a platform without audio in) neither exists.
 //
 // One instrument (SYNTH) on slot 0, a DELAY on send A.
@@ -27,6 +31,7 @@
 #include <o3sdk/core/placement.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/formats/chunk_file.h>
+#include <o3sdk/hal/record.h>
 #include <o3sdk/ui/components.h>
 #include <o3sdk/units/delay/delay.h>
 #include <o3sdk/units/synth/synth.h>
@@ -168,6 +173,72 @@ class Riff final : public dsp::Clocked {
   std::atomic<std::uint8_t> notes_[kRiffSteps];  // written by the main loop (transpose, load), read by the render: one byte each
 };
 
+// ---- The recorder: what the REC key arms ------------------------------------------------------------------------------------
+
+constexpr std::uint32_t kRate = 44'100;
+constexpr unsigned kTakeLens = 3;
+constexpr std::uint32_t kTakeSeconds[kTakeLens] = {1, 10, 60};
+constexpr std::uint32_t kTakeCapacity = 60 * kRate;  // the longest take: one minute, mono, 5.3 MB of the SDRAM
+constexpr std::int32_t kLevelThreshold = 1036;       // -30 dBFS
+constexpr std::uint32_t kPreRoll = kRate / 20;       // 50 ms
+// The take's buffer: the app's own, in the SDRAM (the kit allocates none). 4-byte aligned for the recorder's word writes.
+struct alignas(4) TakeMem {
+  std::int16_t pcm[kTakeCapacity];
+};
+static_assert(alignof(TakeMem) >= 4, "the take's buffer is word aligned");
+O3SDK_BIG TakeMem g_take;
+static_assert(hal::record::ring_frames(kPreRoll) < kTakeSeconds[0] * kRate, "the shortest take holds a level take's ring");
+
+enum class Start : std::uint8_t { Free, Step, Bar, Level };
+constexpr unsigned kStarts = 4;
+constexpr const char* kStartNames[kStarts] = {"FREE", "STEP", "BAR", "LEVEL"};
+
+struct RecUi {
+  Start start = Start::Free;
+  std::uint8_t len = 1;  // an index of kTakeSeconds
+  hal::record::Tap tap = hal::record::Tap::Input;
+  const char* note = nullptr;  // a refusal of the last key
+};
+
+const char* rec_state_name(hal::record::State s) noexcept {
+  switch (s) {
+    case hal::record::State::Idle: return "IDLE";
+    case hal::record::State::Waiting: return "WAITING";
+    case hal::record::State::Listening: return "LISTENING";
+    case hal::record::State::Recording: return "RECORDING";
+    case hal::record::State::Done: return "DONE";
+  }
+  return "?";
+}
+
+// Appends `v` in decimal; returns the new end.
+char* put_uint(char* p, std::uint32_t v) noexcept {
+  char digits[10];
+  unsigned n = 0;
+  do {
+    digits[n++] = static_cast<char>('0' + v % 10u);
+    v /= 10u;
+  } while (v != 0u && n < sizeof digits);
+  while (n != 0u) {
+    *p++ = digits[--n];
+  }
+  return p;
+}
+char* put_str(char* p, const char* s) noexcept {
+  while (*s != '\0') {
+    *p++ = *s++;
+  }
+  return p;
+}
+// Frames as seconds with one decimal ("3.2").
+char* put_seconds(char* p, std::uint32_t frames) noexcept {
+  const std::uint32_t tenths = frames / (kRate / 10u);
+  p = put_uint(p, tenths / 10u);
+  *p++ = '.';
+  *p++ = static_cast<char>('0' + tenths % 10u);
+  return p;
+}
+
 // ---- The screen -------------------------------------------------------------------------------------------------------------
 
 constexpr bool is_natural(unsigned note) noexcept {
@@ -189,9 +260,10 @@ const char* card_name(app::Files::Card c) noexcept {
 
 class PlayScreen final : public app::Screen {
  public:
-  void init(dsp::UnitId synth, dsp::UnitId delay, const Riff* riff) noexcept {
+  void init(dsp::UnitId synth, dsp::UnitId delay, const Riff* riff, const RecUi* rec) noexcept {
     synth_ = synth;
     riff_ = riff;
+    rec_ = rec;
     pages_[0] = app::ParamPage{"SYNTH", synth, {0, 1, 2, 3, 4, 5, 6, 7}, 8};
     pages_[1] = app::ParamPage{"DELAY", delay, {0, 1, 2, 3, 0, 0, 0, 0}, 4};
     keys_.set_pages(pages_, 2);
@@ -297,6 +369,7 @@ class PlayScreen final : public app::Screen {
            Face::Label);
     r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG system", Color::TextDim, Face::Label);
     r.text(16, hy + 40, "INSERT riff +1 (SHIFT -1)   DELETE default riff   FILE save the riff   SAMPLE LOAD load it", Color::TextDim, Face::Label);
+    draw_rec(ctx, r, 16, hy + 70);
     // The card and the last job of the files service (Context::files()): polled, never waited for.
     const app::Files& files = ctx.files();
     const app::Files::Status fs = files.status();
@@ -340,6 +413,38 @@ class PlayScreen final : public app::Screen {
   }
 
  private:
+  // The recorder (Context::recorder()): its state and the take's length so far, what REC will arm next, and what the keys are. Nothing here exists without a recorder.
+  void draw_rec(app::Context& ctx, ui::Renderer& r, int x, int y) const noexcept {
+    const app::Recorder& rec = ctx.recorder();
+    if (!rec.available() || rec_ == nullptr) {
+      return;
+    }
+    const hal::record::State st = rec.state();
+    char line[96];
+    char* p = put_str(line, rec_state_name(st));
+    if (st == hal::record::State::Recording || st == hal::record::State::Done) {
+      *p++ = ' ';
+      p = put_seconds(p, rec.frames());
+      p = put_str(p, " S");
+    }
+    if (rec.overrun() != 0u) {
+      p = put_str(p, "  OVERRUN ");
+      p = put_uint(p, rec.overrun());
+    }
+    *p = '\0';
+    r.text(x, y, "REC", Color::TextDim, Face::Label);
+    r.text(x + 48, y, line, st == hal::record::State::Recording ? Color::Accent : Color::Text, Face::Label);
+    p = put_str(line, "START ");
+    p = put_str(p, kStartNames[static_cast<unsigned>(rec_->start)]);
+    p = put_str(p, "   LEN ");
+    p = put_uint(p, kTakeSeconds[rec_->len]);
+    p = put_str(p, " S   TAP ");
+    p = put_str(p, rec_->tap == hal::record::Tap::Master ? "MASTER" : "INPUT");
+    *p = '\0';
+    r.text(x + 280, y, line, Color::Text, Face::Label);
+    r.text(x, y + 20, rec_->note != nullptr ? rec_->note : "REC take/stop   SAMPLE REC start   SAMPLE PLAY length   SAMPLE EDIT tap   SHIFT+FILE save", rec_->note != nullptr ? Color::Accent : Color::TextDim, Face::Label);
+  }
+
   // Bottom row C3..B3 (+ the octave shift), one octave higher each row up.
   int note_for(unsigned pad) const noexcept {
     const int n = 48 + 12 * octave_ + 12 * (static_cast<int>(app::kPadRows) - 1 - static_cast<int>(app::pad_row(pad))) +
@@ -349,6 +454,7 @@ class PlayScreen final : public app::Screen {
 
   dsp::UnitId synth_ = dsp::kNoUnit;
   const Riff* riff_ = nullptr;
+  const RecUi* rec_ = nullptr;
   app::ParamPage pages_[2] = {};
   app::ParamKeys keys_;
   int octave_ = 0;
@@ -379,7 +485,7 @@ class HelloApp final : public app::App {
     (void)e.set_mix(0, dsp::MixField::SendA, 0.3f);
     riff_.set_unit(synth);
     (void)e.add_hook(riff_);
-    play_.init(synth, delay, &riff_);
+    play_.init(synth, delay, &riff_, &rec_);
     ctx.show(play_);
   }
 
@@ -401,6 +507,15 @@ class HelloApp final : public app::App {
     w.sint("riff", riff_.shift());
     w.num("theme", static_cast<std::uint32_t>(ctx.theme()));
     w.num("midich", ctx.midi().config().channel);
+    if (ctx.recorder().available()) {  // the recorder: its state, the frames of the take and those that did not fit, and what REC arms next
+      const hal::record::State st = ctx.recorder().state();
+      w.str("rec", st == hal::record::State::Idle ? "idle" : (st == hal::record::State::Waiting ? "waiting" : (st == hal::record::State::Listening ? "listening" : (st == hal::record::State::Recording ? "recording" : "done"))));
+      w.num("take", ctx.recorder().frames());
+      w.num("over", ctx.recorder().overrun());
+      w.str("start", rec_.start == Start::Free ? "free" : (rec_.start == Start::Step ? "step" : (rec_.start == Start::Bar ? "bar" : "level")));
+      w.num("len", kTakeSeconds[rec_.len]);
+      w.str("tap", rec_.tap == hal::record::Tap::Master ? "master" : "input");
+    }
     return w.size();
   }
 
@@ -416,6 +531,9 @@ class HelloApp final : public app::App {
     if (op_ == Op::Loading && st.phase == app::Files::Status::Done) {
       play_.set_note(riff_.read(load_buf_, ctx.files().loaded()) ? nullptr : "BAD FILE");
     }
+    if (op_ == Op::SavingTake && st.phase == app::Files::Status::Done) {
+      ctx.recorder().release();  // the take is on the card: the buffer is free for the next one (a failed save keeps the take, to save again)
+    }
     op_ = Op::None;
     ctx.redraw();
   }
@@ -427,9 +545,44 @@ class HelloApp final : public app::App {
       ctx.redraw();
       return true;
     }
-    if (in.press(Button::Rec) && ctx.audio_in().available()) {
-      app::AudioIn& a = ctx.audio_in();
-      a.monitor(a.monitor() == 0u ? app::AudioIn::kMonitorOn : 0u);
+    if (in.press(Button::Rec)) {
+      if (!in.shift) {
+        rec_key(ctx);
+        ctx.redraw();
+        return true;
+      }
+      if (ctx.audio_in().available()) {  // SHIFT + REC: the monitor
+        app::AudioIn& a = ctx.audio_in();
+        a.monitor(a.monitor() == 0u ? app::AudioIn::kMonitorOn : 0u);
+        ctx.redraw();
+        return true;
+      }
+      return false;
+    }
+    if (in.press(Button::SampleRec) || in.press(Button::SamplePlay) || in.press(Button::SampleEdit)) {
+      if (ctx.recorder().state() != hal::record::State::Idle) {
+        rec_.note = "FINISH THE TAKE FIRST (REC)";  // the settings are what the NEXT take arms
+      } else if (in.press(Button::SampleRec)) {
+        rec_.start = static_cast<Start>((static_cast<unsigned>(rec_.start) + 1u) % kStarts);
+      } else if (in.press(Button::SamplePlay)) {
+        rec_.len = static_cast<std::uint8_t>((rec_.len + 1u) % kTakeLens);
+      } else {
+        rec_.tap = rec_.tap == hal::record::Tap::Input ? hal::record::Tap::Master : hal::record::Tap::Input;
+      }
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::File) && in.shift) {  // SHIFT + FILE: the take as a WAV
+      app::Files& files = ctx.files();
+      rec_.note = nullptr;
+      if (ctx.recorder().state() != hal::record::State::Done) {
+        rec_.note = "NO TAKE YET (REC)";
+      } else if (!files.busy() && ctx.recorder().save(files, "", "take")) {
+        play_.set_note(nullptr);
+        op_ = Op::SavingTake;
+      } else if (!files.busy()) {
+        rec_.note = "TAKE NOT SAVED (NO CARD OR EMPTY)";
+      }
       ctx.redraw();
       return true;
     }
@@ -467,12 +620,53 @@ class HelloApp final : public app::App {
   }
 
  private:
-  enum class Op : std::uint8_t { None, Saving, Loading };
+  enum class Op : std::uint8_t { None, Saving, Loading, SavingTake };
+
+  // REC: arms a take as START, LEN and TAP say; stops one that is waiting or running; on a finished take, throws it away and arms the next. (A take the files service is writing stays.)
+  void rec_key(app::Context& ctx) noexcept {
+    app::Recorder& r = ctx.recorder();
+    rec_.note = nullptr;
+    if (!r.available()) {
+      rec_.note = "NO RECORDER IN THIS BUILD";
+      return;
+    }
+    const hal::record::State st = r.state();
+    if (st == hal::record::State::Waiting || st == hal::record::State::Listening || st == hal::record::State::Recording) {
+      r.disarm();
+      return;
+    }
+    if (st == hal::record::State::Done) {
+      if (op_ == Op::SavingTake) {
+        rec_.note = "THE TAKE IS BEING SAVED";
+        return;
+      }
+      r.release();
+    }
+    hal::record::Take t;
+    t.buf = g_take.pcm;
+    t.capacity_frames = kTakeSeconds[rec_.len] * kRate;
+    t.channels = hal::record::Channels::Mix;
+    switch (rec_.start) {
+      case Start::Free: t.align = hal::record::Align::Free; break;
+      case Start::Step: t.align = hal::record::Align::Step; break;
+      case Start::Bar: t.align = hal::record::Align::Bar; break;
+      case Start::Level:
+        t.align = hal::record::Align::Level;
+        t.threshold = kLevelThreshold;
+        t.preroll_frames = kPreRoll;
+        break;
+    }
+    r.set_tap(rec_.tap);
+    if (!r.arm(t)) {
+      rec_.note = "THE RECORDER REFUSED THE TAKE";
+    }
+  }
 
   units::Synth synth_;
   units::Delay delay_{g_delay_l, g_delay_r, kDelayCapacity};
   Riff riff_;
   PlayScreen play_;
+  RecUi rec_;
   Op op_ = Op::None;
   // The riff's file (formats/chunk_file.h: about 80 bytes) and the buffer a load reads into: word aligned, declared.
   alignas(4) std::uint8_t save_buf_[96] = {};

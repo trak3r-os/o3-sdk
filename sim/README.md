@@ -70,6 +70,8 @@ the app's `setup()` had a call the engine refused (a route to a slot that does n
 - **The picture** is the screen above a drawing of the 48 pads: each pad lit to its LED level (warm white, the LEDs are monochrome),
   a held pad framed in blue.
 - **The audio** is the engine's output as 16-bit stereo, written as a WAV at the engine's rate.
+- **Recording** (`Context::recorder()`) is the unit's own record service (platform/mk66/audio `record_service.h`) around every rendered block, over the fake codec's input: a take of the input
+  or the master, started on the spot, on a step or on a level, is the unit's to the sample (`apps/hello/scenarios/record.txt`; no scenario command of its own: the app's keys arm it, `expect state rec=...` reads it).
 - **The CPU figure** is not shown: the host is not the unit. Measure on the unit.
 
 ## Scenarios

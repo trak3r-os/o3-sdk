@@ -13,7 +13,7 @@
 // The order and the LED rules follow track3r-os's composition root (src/app_main.cpp there), which ran on the unit. With the console
 // (O3SDK_CONSOLE, the default image: docs/M2B-PLAN.md section 5) the same sequence also brings up, in this order:
 //
-//   log -> crash record (kept for `crash`) -> ... -> audio start with the USB audio tap around the render -> SD card (init, mount,
+//   log -> crash record (kept for `crash`) -> ... -> audio start with the record service and the USB audio tap around the render -> SD card (init, mount,
 //   watch) -> console::attach(rt) -> USB (the AUDIO set of track3r-os's default layout, unless the last run crashed in it)
 //   -> loop { wfi; console::service(); input; display; rt.poll(); audio beat; the card slot; the outputs opened once after a clean run
 //   and never during a firmware update; LED }
@@ -36,6 +36,7 @@
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/cycles.h>
 #include <o3sdk/platform/mk66/audio.h>
+#include <o3sdk/platform/mk66/audio/record_service.h>
 #include <o3sdk/platform/mk66/blink.h>
 #include <o3sdk/platform/mk66/capture.h>
 #include <o3sdk/platform/mk66/crash_record.h>
@@ -83,6 +84,7 @@ namespace display = o3sdk::platform::mk66::display::device;
 namespace input = o3sdk::platform::mk66::input::device;
 namespace midi = o3sdk::platform::mk66::midi;
 namespace midi_io = o3sdk::platform::mk66::midi_io;
+namespace record_service = o3sdk::platform::mk66::audio::record_service;
 #if O3SDK_CONSOLE
 namespace console = o3sdk::platform::mk66::console;
 namespace power = o3sdk::platform::mk66::power::device;
@@ -398,11 +400,12 @@ int main() {
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
   // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
-                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture};
+                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture,
+                                       &record_service::service()};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi,
-                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture};
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture, &record_service::service()};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   const bool app_started = rt.start();
@@ -439,10 +442,11 @@ int main() {
 #if O3SDK_AUDIO_TEST
   const o3sdk::hal::audio::BlockCallback render = mk66::audio_test_tone();
 #elif O3SDK_CONSOLE
-  // The USB audio tap after the app's block: the master the main output plays goes to the capture stream (usb_audio.h). Before start(): the callback points at static state.
-  const o3sdk::hal::audio::BlockCallback render = usb_audio::wrap(rt.block_callback());
+  // The record service after the runtime's block (record_service.h: it records the input or the master into the app's take while one is armed, and costs a load and a branch otherwise), and
+  // the USB audio tap after that: the master the main output plays goes to the capture stream (usb_audio.h). Before start(): the callbacks point at static state.
+  const o3sdk::hal::audio::BlockCallback render = usb_audio::wrap(record_service::wrap(rt.block_callback(), g_engine));
 #else
-  const o3sdk::hal::audio::BlockCallback render = rt.block_callback();
+  const o3sdk::hal::audio::BlockCallback render = record_service::wrap(rt.block_callback(), g_engine);
 #endif
   const o3sdk::hal::audio::Device::Result audio_result = mk66::audio_device().start(render);
   const bool audio_up = audio_result == o3sdk::hal::audio::Device::Result::Ok;

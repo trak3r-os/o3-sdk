@@ -5,6 +5,7 @@
 #include <o3sdk/core/audio_clock.h>
 #include <o3sdk/hal/audio.h>
 #include <o3sdk/platform/host/png.h>
+#include <o3sdk/platform/mk66/audio/record_service.h>
 #include <o3sdk/ui/boot_screen.h>
 
 #include <algorithm>
@@ -86,7 +87,9 @@ Harness::~Harness() = default;
 // The platform and the runtime over the engine in hand (the card's work memory is made afresh: a restart starts from nothing).
 void Harness::make_runtime() {
   files_work_ = protect_ != nullptr ? std::make_unique<app::Files::Work>() : nullptr;
-  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr, capture_});
+  recorder_ = std::make_unique<platform::mk66::audio::RecordService>();
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr, capture_,
+                                                           recorder_.get()});
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
 }
 
@@ -198,7 +201,7 @@ std::uint64_t Harness::due_samples() const {
 
 void Harness::render_due() {
   const std::uint64_t due = due_samples();
-  const hal::audio::BlockCallback cb = runtime_->block_callback();
+  const hal::audio::BlockCallback cb = recorder_->wrap(runtime_->block_callback(), *engine_);  // the unit's record service around the runtime's block
   std::int16_t in[hal::audio::kBlockSamples] = {};
   std::int16_t out[hal::audio::kBlockSamples];
   hal::audio::BlockReport report{};

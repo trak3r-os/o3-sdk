@@ -453,7 +453,7 @@ The integrator also writes FA's hw-session page between waves 2 and 3.
 | SE | `Engine::{set_input_gate, set_input_monitor, input_peaks, set_stem_slots, stem_block}` |
 | AI | `app::AudioIn`, `app::Radio`, `Context::{audio_in, radio}()`, `Platform::capture`; the AUDIO section; console `radio [retry]`, `mon [off\|on\|0..100]` |
 | LW | `ui::ListView`, `ui::keyboard()`; `o3install.py`, `fetch_toolchain.py` |
-| RC | `hal::record::Recorder`, `Context::recorder()`, `Platform::recorder`; `record_service::wrap()`; console `rec` |
+| RC | `hal::record::Recorder`, `Context::recorder()`, `Platform::recorder`; `record_service::service()`, `record_service::wrap(cb, engine)` (it needs the engine's `block_frame()` for the steps); console `rec` |
 | CT, TP | `crashtest.ptf` (session-only); the template's files example |
 | U | `hal::usb_audio::Device`, `Context::usb_audio()`, `Platform::usb_audio`; the CARD section; console `usb profile/return/map`, `disk [share [ro]\|eject]` |
 | CP | `App::config_pages()` with items, `App::header()`, `Midi::learn()`, `Platform::backlight`; `state` `setup_errors=`; `app::FilePicker`, `app::NameEntry` |
@@ -485,7 +485,7 @@ log, crash record, display, input, power::init
 Platform{..., storage = &storage::device::storage(), writer = &g_writer (FA), capture = capture_create(O3SDK_BIG slot) (AI),
          recorder = &record_service (RC), usb_audio = &usb_audio::device() (U), backlight = display::set_backlight (CP)}
 rt.start()                                            App::setup: the app's defaults
-render = usb_audio::wrap(record_service::wrap(rt.block_callback()))       (RC, U; the test-tone image unwrapped)
+render = usb_audio::wrap(record_service::wrap(rt.block_callback(), g_engine))       (RC, U; the test-tone image unwrapped)
 audio_device().start(render)
 MIDI start (MD)
 SD: init, mount, watch; claims: firmware_update_active, card_mount_pending, files_busy (FA)

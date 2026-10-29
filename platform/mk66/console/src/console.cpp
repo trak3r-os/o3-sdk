@@ -37,6 +37,8 @@
 //   files      slice FA (o3-sdk's own): the app file API's state and cost (console/files_command.h), and `files crc <path>`, the CRC-32 of a file of the card. A read.
 //   radio      OS-RAD1 (slice AI of M2c): the FM radio driver's state, step, last failure (step/cause), last I2C result, registers as last read and pin levels; `radio retry` runs the power-up again from the
 //              reset while the radio is the selected input. A read apart from the retry.
+//   rec        slice RC of M2c: the recorder's state (idle, waiting, listening, recording, done), the take's frames and their length, the frames that did not fit (overrun), the tap and the pattern
+//              length (Context::recorder()). A read: the app arms a take, its own keys or hooks.
 //   mon        slice AI of M2c: the audio-in monitor's level (`mon`, `mon off`, `mon on`, `mon 0..100`), Context::audio_in().monitor(). The one command that changes the sound.
 //   midi       slice MD (o3-sdk's own): the MIDI service's snapshot and the DIN and USB drivers' counters (console/midi_report.h says each word). A read.
 //   power      OS-POWER P1 (docs/M2B2-PLAN.md, slice P): the Power switch (PTC3): `power` the pin in the three pulls, the hold's state and counters, the shutdown's stages; `power press|release|pin` feed the hold
@@ -572,6 +574,37 @@ void cmd_mon(shell::Shell& sh, const shell::Args& a) {
   send(sh, t.size(), buf);
 }
 
+// `rec` (slice RC of M2c; track3r-os had none): what the app's recorder is doing, for a take made from the app's keys: its state, the frames written (and as seconds), the frames that did not
+// fit (0 for a good take), the tap and the pattern length. A Level take counts its pre-roll ring in the frames. A read.
+app::Recorder* g_recorder = nullptr;
+
+void cmd_rec(shell::Shell& sh, const shell::Args& a) {
+  if (g_recorder == nullptr || !g_recorder->available()) {
+    sh.out().text("rec: this image has no recorder\n");
+    return;
+  }
+  if (a.argc > 1) {
+    sh.out().text("usage: rec\n");
+    return;
+  }
+  const char* state = "idle";
+  switch (g_recorder->state()) {
+    case hal::record::State::Idle: break;
+    case hal::record::State::Waiting: state = "waiting"; break;
+    case hal::record::State::Listening: state = "listening"; break;
+    case hal::record::State::Recording: state = "recording"; break;
+    case hal::record::State::Done: state = "done"; break;
+  }
+  const std::uint32_t frames = g_recorder->frames();
+  const std::uint32_t rate = (hal::audio::sample_rate_mhz() + 500u) / 1000u;
+  const std::uint32_t ms = static_cast<std::uint32_t>(static_cast<std::uint64_t>(frames) * 1000u / rate);
+  char buf[160];
+  audio::diag::Text t(buf, sizeof buf);
+  t.str("rec ").str(state).str(", frames ").dec(frames).str(" (").dec(ms / 1000u).chr('.').dec(ms % 1000u / 100u).str(" s), overrun ").dec(g_recorder->overrun());
+  t.str(", tap ").str(g_recorder->tap() == hal::record::Tap::Master ? "master" : "input").nl();
+  send(sh, t.size(), buf);
+}
+
 // ---- OS-HIL: input injection (console/inject_commands.h), the screen, the pad LEDs ------------------------------------------------------------
 // The scanner's queue is the one the key chips feed, both ends in the main loop, and so is the console: the injector's pushes never race the scan.
 
@@ -917,6 +950,7 @@ void attach(app::Runtime& runtime) noexcept {
   appimg::bind_files(runtime.context().files());
   g_files = &runtime.context().files();
   g_audio_in = &runtime.context().audio_in();
+  g_recorder = &runtime.context().recorder();
   g_commands.assemble(runtime.context().app(), &log);
   shell::CommandFn kit[kKitCommandCount] = {};
   kit[static_cast<unsigned>(Cmd::Help)] = &help_command;
@@ -948,6 +982,7 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Files)] = &cmd_files;
   kit[static_cast<unsigned>(Cmd::Radio)] = &cmd_radio;
   kit[static_cast<unsigned>(Cmd::Mon)] = &cmd_mon;
+  kit[static_cast<unsigned>(Cmd::Rec)] = &cmd_rec;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));

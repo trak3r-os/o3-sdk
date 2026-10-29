@@ -35,6 +35,7 @@
 #include <o3sdk/hal/input.h>
 #include <o3sdk/hal/leds.h>
 #include <o3sdk/hal/midi.h>
+#include <o3sdk/hal/record.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -70,6 +71,9 @@ struct Platform {
   // system Config. The platform's main loop calls capture->service(uptime_ms) once a pass (the radio's state machine; it does at most one bus transfer). Null (a test rig, an image without
   // it): no AUDIO section, every call of audio_in() and radio() is refused, and the runtime and the render are as they were.
   hal::capture::CaptureHw* capture = nullptr;
+  // Recording (recorder.h, docs/M2C-PLAN.md section 6): the platform's recorder for Context::recorder(). The platform also wraps the render callback with the one that feeds it
+  // (platform/mk66/audio record_service.h); the runtime's own block does not know it. Null: no recording, every call of recorder() is refused.
+  hal::record::Recorder* recorder = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).

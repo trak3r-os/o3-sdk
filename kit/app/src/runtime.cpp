@@ -125,6 +125,7 @@ Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
   ctx_.midi_.bind(platform_.midi, &engine_);
   ctx_.audio_in_.bind(platform_.capture, &engine_);
   ctx_.radio_.bind(platform_.capture);
+  ctx_.recorder_.bind(platform_.recorder);
   ctx_.files_.bind(platform_.storage, platform_.writer, platform_.files_work, platform_.app_id != nullptr ? platform_.app_id : o3sdk_app_id(), platform_.card_claim);
 }
 

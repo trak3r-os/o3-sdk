@@ -64,7 +64,7 @@ inline constexpr Pin kFt812Miso = {Port::D, 14};
 // the codec's LINE input hears: HIGH = the line jack, LOW = the FM receiver (the polarity assumed here; this comment said the opposite until
 // OS-011c, and the unit has not confirmed it yet, README.md). This image drives it LOW at
 // boot: the receiver's position, with the receiver held in reset, so nothing is heard until a recorder source
-// is chosen (track3r-os's recorder drove it HIGH for the line and the microphone and LOW for the radio; M2 records nothing). Whether the line jack is heard at boot in this position is a hardware check.
+// is chosen (track3r-os's recorder drove it HIGH for the line and the microphone and LOW for the radio; here the kit's AudioIn drives it through capture.h when an app or the Config selects a source, and Context::recorder() records what the codec then delivers). Whether the line jack is heard at boot in this position is a hardware check.
 inline constexpr Pin kInputSourceSelect = {Port::E, 26};
 
 // Si4703 FM radio reset: Teensy pin 67 = PTE27. LOW holds the radio in reset, HIGH runs it. At boot this image stops at the

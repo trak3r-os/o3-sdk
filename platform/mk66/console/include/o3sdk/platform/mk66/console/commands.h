@@ -12,9 +12,9 @@
 
 namespace o3sdk::platform::mk66::console {
 
-// The order of the table, and of `help`: track3r-os's relative order for the commands in scope; `midi` (docs/M2B2-PLAN.md, slice MD), `files` (docs/M2C-PLAN.md, slice FA) and `radio` and `mon` (slice AI: `radio` is track3r-os's OS-RAD1 command, `mon` its line-in monitor level) are o3-sdk's own and come last.
+// The order of the table, and of `help`: track3r-os's relative order for the commands in scope; `midi` (docs/M2B2-PLAN.md, slice MD), `files` (docs/M2C-PLAN.md, slice FA) and `radio` and `mon` (slice AI: `radio` is track3r-os's OS-RAD1 command, `mon` its line-in monitor level) and `rec` (slice RC) are o3-sdk's own and come last.
 enum class Cmd : unsigned {
-  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard, Midi, Files, Radio, Mon,
+  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard, Midi, Files, Radio, Mon, Rec,
   Count
 };
 
@@ -53,6 +53,7 @@ inline constexpr CommandInfo kCommandInfo[] = {
     {"files", "files [crc <path>]: app files on the card: last job, cost, CRC-32"},
     {"radio", "radio [retry]: FM radio state, last failure, registers, pins"},
     {"mon", "mon [off|on|0..100]: audio-in monitor level (0 = off, on = 70)"},
+    {"rec", "rec: the recorder's state, frames, overrun, tap"},
 };
 static_assert(sizeof(kCommandInfo) / sizeof(kCommandInfo[0]) == static_cast<std::size_t>(Cmd::Count), "one row per Cmd");
 
