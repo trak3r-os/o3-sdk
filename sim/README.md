@@ -9,6 +9,8 @@ build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole r
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out /tmp/hello
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out /tmp/hello    # notes and a master clock in (a fake MIDI device)
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/files.txt --card /tmp/hello-card --out /tmp/hello   # the file API on a card directory
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config_pages.txt --card /tmp/hello-card --audio-in --out /tmp/hello   # HELLO's own Config page, brightness, MIDI learn, kept across a reboot
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/picker.txt --card /tmp/hello-card --out /tmp/hello   # the kit's file picker and name entry
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/audio_in.txt --out /tmp/hello --wav /tmp/hello.wav  # a tone in, the monitor, the radio (a fake codec input and radio)
 ```
 
@@ -25,6 +27,10 @@ In a test, `sim::Harness(app, firmware, &fake_midi)` takes any `hal::midi::Devic
 The fake is also the reference model of what a real device promises the kit (`hal/midi.h`): input stamped with a frame, an ideal master clock (`clock_start`,
 `clock_continue`, `clock_stop`, `clock_tempo`, `clock_off`: Start at the next block, a quiet master flywheeled for 48 clocks), and the clock and transport
 the app sends captured with their sample (`FakeMidi::sent`).
+
+`--backlight` gives the platform a backlight (`Platform::backlight`; a scenario with an `expect backlight` line gets one without the option): the DISPLAY section of the system Config then has BRIGHTNESS and PAD LIGHTS too, and
+`expect backlight <duty>` checks the duty the runtime last told it (20, 50 or 128; 0 until it was told: the setting is high, the hardware's own). Without one (the default) DISPLAY is the theme alone. In a test `Harness::set_backlight(true)` before `start()` and `Harness::backlight_duty()`.
+The simulator has no power switch: Shift + Power (the screenshot to the card) is the unit's.
 
 `--audio-in` gives the app a fake codec input and FM radio (`platform/host/fake_capture.h`, `hal::capture::CaptureHw`): the AUDIO section of the system Config,
 `Context::audio_in()` and `radio()`. A scenario that has an `input` or `radio` line gets one without the option. Without one (the default) the app has no audio in: no AUDIO section, every call
@@ -105,6 +111,7 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 | `usbwav <name>` | `<out>/<name>.wav`: what the computer captured since its stream opened, one channel per channel of the profile (16 bit, 44.1 kHz) |
 | `reboot` | the unit restarted on the same card: the engine and the runtime made again, `App::setup`, the kit's settings read from the card |
 | `expect file <path>` / `expect nofile <path>` | the card holds (does not hold) the file `path`, relative to its root: `expect file Apps/hello/riff.o3a`. A wrong expectation fails the scenario with its line |
+| `expect backlight <duty>` | the backlight was last told this duty (needs the platform's backlight: `--backlight`, or this line) |
 | `expect state <text>` | the console's `state` line contains `text`: `expect state files=done`, `expect state card=none`, `expect state riff=3` (an app's pair) |
 
 `card` and `expect file` need a card (`--card`); `reboot` works without one. `usb`, `usbwav` and `card disk` need a USB audio device (`platform/host/fake_usb_audio.h`: the unit's own `UsbAudioService` over a fake port and computer; `--usb` or a scenario that uses one makes it; in a test `sim::Harness(..., &fake_usb)`, `Harness::usb()`, `card_disk(bool)`), and `card disk` a card too.

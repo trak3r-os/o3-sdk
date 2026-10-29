@@ -10,7 +10,7 @@ constexpr float kPickupReach = 1.0f;
 
 bool bindable_kind(ParamKind kind) noexcept {
   return kind == ParamKind::Instrument || kind == ParamKind::Track || kind == ParamKind::Master ||
-         kind == ParamKind::Project || kind == ParamKind::Device;
+         kind == ParamKind::Project || kind == ParamKind::Device || kind == ParamKind::Unit;  // (Unit: o3sdk, a DSP unit parameter)
 }
 
 }  // namespace

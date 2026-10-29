@@ -1092,7 +1092,7 @@ TEST_CASE("files: the settings read at boot apply over the app's defaults; a mis
     CHECK(v.theme == ui::ThemeId::Black);
     CHECK(v.midi.channel == 5);
     CHECK(v.midi.out_channel == 1);  // the file wins
-    CHECK(rig.files.settings_report().applied == 30);
+    CHECK(rig.files.settings_report().applied == 32);
     rig.values = v;
     rig.idle_ms(3000);
     CHECK(card.ops == 0);  // what was read is what is saved
@@ -1217,6 +1217,43 @@ TEST_CASE("files: the scoped writer refuses, with no card call, every change out
   CHECK(scope.finish() == hst::WriteStatus::Ok);
   CHECK(scope.remove("Apps/test/_o3save.tmp") == hst::WriteStatus::Ok);
   CHECK(scope.refused() == 13);
+}
+
+TEST_CASE("files: the screenshot scope admits Screenshots/ and nothing else, and the app's scope never admits it") {
+  MemCard card;
+  seed(card);
+  // The writer's guard takes track3r-os's Screenshots rows (hal/save_guard.h): Shift + Power writes Screenshots/_o3save.tmp and renames it to SHOT_nnnn.bmp.
+  CHECK(hst::app_guard::may_make_dir("Screenshots"));
+  CHECK(hst::app_guard::may_create("Screenshots/_o3save.tmp"));
+  CHECK(hst::app_guard::may_rename("Screenshots/_o3save.tmp", "Screenshots/SHOT_0001.bmp"));
+  app::ScopedWriter shots;
+  shots.bind(&card, "test", app::ScopedWriter::Scope::Screenshots);
+  CHECK(shots.in_scope("Screenshots"));
+  CHECK(shots.in_scope("screenshots/SHOT_0001.bmp"));
+  CHECK_FALSE(shots.in_scope("Screenshotsx"));
+  CHECK_FALSE(shots.in_scope("Apps/test/a.o3a"));
+  CHECK_FALSE(shots.in_scope("Samples/a.wav"));
+  CHECK(shots.make_dir("Apps") == hst::WriteStatus::BadPath);
+  CHECK(shots.make_dir("Apps/test") == hst::WriteStatus::BadPath);
+  CHECK(shots.create("Settings/_o3save.tmp") == hst::WriteStatus::BadPath);
+  CHECK(shots.rename("Screenshots/_o3save.tmp", "Apps/test/a.o3a") == hst::WriteStatus::BadPath);
+  CHECK(shots.refused() == 4);
+  CHECK(card.ops == 0);
+  CHECK(shots.make_dir("Screenshots") == hst::WriteStatus::Ok);
+  CHECK(shots.create("Screenshots/_o3save.tmp") == hst::WriteStatus::Ok);
+  CHECK(shots.finish() == hst::WriteStatus::Ok);
+  CHECK(shots.rename("Screenshots/_o3save.tmp", "Screenshots/SHOT_0001.bmp") == hst::WriteStatus::Ok);
+  CHECK(shots.refused() == 4);
+  CHECK(card.violations == 0u);
+  // The app's own scope (what Files::bind makes) refuses the same folder.
+  app::ScopedWriter mine;
+  mine.bind(&card, "test");
+  CHECK_FALSE(mine.in_scope("Screenshots"));
+  CHECK(mine.make_dir("Screenshots") == hst::WriteStatus::BadPath);
+  CHECK(mine.create("Screenshots/_o3save.tmp") == hst::WriteStatus::BadPath);
+  CHECK(mine.rename("Screenshots/_o3save.tmp", "Screenshots/SHOT_0002.bmp") == hst::WriteStatus::BadPath);
+  CHECK(mine.remove("Screenshots/SHOT_0001.bmp") == hst::WriteStatus::BadPath);
+  CHECK(mine.refused() == 4);
 }
 
 TEST_CASE("files: every operation of the service, run on a recording card, changes only Apps/<id>/ and Samples/") {

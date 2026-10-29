@@ -464,7 +464,7 @@ TEST_CASE("state: the kit's pairs, then the app's, on one line") {
   Capture c;
   app::DiagOut out(app::DiagSink{&capture_write, &c});
   console::write_state(runtime, out);
-  CHECK(c.text == "app=FAKE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle steps=16 pattern=A_1\n");
+  CHECK(c.text == "app=FAKE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle setup_errors=0 steps=16 pattern=A_1\n");
 
   // The same text as the runtime gives, one line.
   char buf[console::kStateBuffer];
@@ -485,7 +485,7 @@ TEST_CASE("state: an app with no pairs adds nothing") {
   Capture c;
   app::DiagOut out(app::DiagSink{&capture_write, &c});
   console::write_state(runtime, out);
-  CHECK(c.text == "app=BARE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle\n");
+  CHECK(c.text == "app=BARE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle setup_errors=0\n");
 }
 
 TEST_CASE("key: a button by name in either case, or by decimal code 0..32; anything else is -1") {

@@ -193,7 +193,7 @@ no pressure), one encoder (no push). Pads are numbered 0..47 from the top left, 
 - `app::Input` is raw: a press arrives at the press, so pads and keys play at once. `in.press(Button::Play)`, `in.pad_press()` / `in.pad()`,
   `in.turn()` / `in.delta()`, `in.shift`. What is held now is `ctx.panel()`. For holds and chords use `ctx.panel()` or `core/gesture.h`.
 - **Global keys** (Play, the screen buttons) go in `App::input()`: it sees every input first, and `true` consumes it. A screen's own keys go in
-  `Screen::input()`. **The Config button belongs to the kit** (the system Config screen is planned, `docs/FRAMEWORK.md` section 5): do not give it
+  `Screen::input()`. **The Config button belongs to the kit** (the system Config screen, `docs/FRAMEWORK.md` section 5): do not give it
   a meaning in a new app, so that nothing breaks when it lands. HELLO and o3-303 use it for a theme toggle today.
 - **Editing values**: `app::ParamKeys` (`app/param_keys.h`) is the kit's convention: tap F1..F8 latches the encoder on that key's parameter, hold an F
   key and turn for a moment, hold two to move both, Shift for coarse steps, a page button for the next page of eight. A `ParamPage` is a name,
@@ -396,7 +396,8 @@ matter for an instrument today:
 | The on-screen firmware switcher's final INSTALL | the FIRMWARE section opened and worked on a unit (2026-10-26, reported); the final F1 INSTALL needs a finger and is not verified | install over USB (section 11) |
 | Power switch shutdown on the unit | the shutdown is built and host-tested; it has not run on a unit (the pin's pull and polarity, the VLPR wake are open) | `power off dry` over USB (the stages, then a restart) |
 | Audio in (line, microphone), FM radio | units receive `in_l`/`in_r` planes but input select, gain and recording are contract-only | none |
-| Header and transport are fixed | an app with no sequencer shows a tempo and a transport badge | none |
+| Header and transport | built (M2c slice CP): `App::header()` returns a `HeaderStyle`; an app with no sequencer sets `tempo` and `transport` false | override `header()` |
+| Your own Config pages | built (M2c slice CP): `App::config_pages()`, `config_page()`, `config_get/set/run` (`app/config_page.h`; HELLO has one: `apps/hello/src/hello_app.cpp`, `scenarios/config_pages.txt`) | add a page of values and actions after the kit's sections; the kit keeps the values |
 
 **MIDI and the Power switch, for an app.** MIDI is `Context::midi()` and `App::midi()` (section 5, "MIDI"). An app that sets none of it
 gets the kit's defaults (notes in on any channel, out on channel 1, clock and transport out on both ports while playing, FOLLOW off) and the

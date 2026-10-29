@@ -79,6 +79,13 @@ struct Platform {
   // CARD section of the system Config. The platform also wraps the render callback with the service's (platform/mk66/audio usb_audio_service.h); the runtime's own block does not know it. Null: none of
   // it, every call of usb_audio() is refused, and the runtime and the render are as they were.
   hal::usb_audio::Device* usb_audio = nullptr;
+  // The display's backlight (brightness.h, docs/M2C-PLAN.md section 4): called from the main loop with the duty 0..128 the DISPLAY row of the system Config chose (20, 50 or 128; never 0: the
+  // screen cannot be set dark), when it changes. It is not called while the setting is its default (high), so an image that never touches it is as it was. Null (the simulator, a test rig):
+  // no BRIGHTNESS row, and none of PAD LIGHTS either: that row comes with the backlight (the platform that tells the backlight is the unit, with its lit pads) and needs `leds` too. The kit scales the levels it hands to the pads.
+  void (*backlight)(std::uint8_t duty) noexcept = nullptr;
+  // INFO's "LAST CRASH" line: the platform's text for the record the previous run left (upper case, static, at most 72 characters), "NONE" when there is not one. Null (no crash record on
+  // this platform, the simulator): no such line.
+  const char* crash = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).
@@ -122,8 +129,9 @@ class Runtime {
   // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase, `card` the
   // files service's view of the card (files.h Card; `none` also without a card capability) and `files` the phase of its last job (Files::Status).
   // `tempo` and `playing` are the master's while the engine follows a MIDI clock (Engine::tempo).
-  //   ... files=<...> [in=<line|lineleft|lineright|miclow|michigh|radio|usb> gain=<0..100> mon=<0..100> gate=0|1 radio=<off|starting|ready|tuning|seeking|absent|failed> freq=<10 kHz units>]
+  //   ... files=<...> setup_errors=<n> [in=<line|lineleft|lineright|miclow|michigh|radio|usb> gain=<0..100> mon=<0..100> gate=0|1 radio=<off|starting|ready|tuning|seeking|absent|failed> freq=<10 kHz units>]
   //       [<the app's pairs>]
+  // `setup_errors` is Engine::setup_errors(): the setup calls the engine refused (0 for an app whose setup went through).
   // The audio pairs (the choice of Context::audio_in() and radio(); `gate` is 0 while the source settles) are there only when the platform has a capture device.
   //       [usb=<STD|P2|P8|P10|P11> dup=0|1 ret=<0..100> strm=0|1 disk=<idle|working|out>]
   // The USB pairs (Context::usb_audio(): the set presented, the return stream in it, the return's level, the computer has the capture stream open, the card as a disk) are there only when the platform has a USB audio device.
@@ -140,6 +148,10 @@ class Runtime {
   // platform locks it for the power-off and the like.
   void lock_input(bool on) noexcept { locked_ = on; }
   bool input_locked() const noexcept { return locked_; }
+  // While held, poll() still runs the input, the app, the card and the LEDs but draws no frame: the platform's screenshot (Shift + Power) takes the picture of the one on screen, in bands,
+  // across several passes. The flag is the platform's, set each pass from the service.
+  void hold_frames(bool on) noexcept { held_ = on; }
+  bool frames_held() const noexcept { return held_; }
   // The card was taken out or put in (the platform's card watch): a firmware list that is not past INSTALL is closed and cancelled.
   void card_changed() noexcept {
     sys_.card_changed(ctx_);
@@ -161,6 +173,9 @@ class Runtime {
   void update_leds() noexcept;
   KitValues kit_values() const noexcept;
   void apply_kit_audio(const KitValues& v) noexcept;
+  void apply_kit_app(const KitValues& v) noexcept;  // the display, the app's page values and the learn bindings
+  void apply_display() noexcept;
+  void learn_notice(Midi::Learned took) noexcept;
 
   App& app_;
   dsp::Engine& engine_;
@@ -168,6 +183,8 @@ class Runtime {
   Context ctx_;
   SystemConfig sys_;
   bool locked_ = false;
+  bool held_ = false;
+  std::uint8_t backlight_applied_ = 2;  // the brightness index the backlight was last told (2: high, the hardware's own)
   // What the system layer took: a press it swallowed is released to nobody (bit n = button n, pad n).
   std::uint64_t taken_buttons_ = 0;
   std::uint64_t taken_pads_ = 0;

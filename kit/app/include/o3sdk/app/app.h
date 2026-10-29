@@ -9,6 +9,7 @@
 // which the platform's main (platform/mk66) and the simulator (sim/) call. Nothing else in the image names the app. The Config button
 // belongs to the runtime (the system Config screen): an app's input() never sees it.
 
+#include <o3sdk/app/config_page.h>
 #include <o3sdk/app/diag.h>
 #include <o3sdk/app/input.h>
 #include <o3sdk/core/midi_types.h>
@@ -22,6 +23,13 @@ class Context;
 struct AppInfo {
   const char* name;     // shown in the header strip and on the boot screen, upper case ("HELLO", "O3-303")
   const char* version;  // "0.1.0"
+};
+
+// What the kit's header strip shows of the app's engine (App::header()): the defaults are the strip as it has always been. An app without a sequencer drops the tempo and the transport
+// badge (they would only ever say 120.0 and a stopped transport); the app's name, the screen's title and the render's load stay.
+struct HeaderStyle {
+  bool tempo = true;      // the tempo and its "BPM"
+  bool transport = true;  // the transport badge
 };
 
 class App {
@@ -45,9 +53,17 @@ class App {
   // What stops a firmware update right now (a recording, an export, unsaved work), as the strip says it in upper case, or nullptr (the
   // default). Asked when the FIRMWARE list opens and again at INSTALL; the update is refused with that text while it is not null.
   virtual const char* update_blocker(const Context&) const noexcept { return nullptr; }
-  // The pages the app adds to the Config screen. Declared for the apps to come: the kit draws none yet, and 0 (the default) is the only
-  // value that means something.
+  // The pages the app adds to the Config screen (config_page.h): the number of them (at most kMaxConfigPages; 0, the default, adds none and the screen is the kit's alone), then page `index`'s
+  // table (constexpr data that lives as long as the app). A value item (a ParamDesc) is read with config_get(), changed with config_set() and kept by the kit in the settings file; an action
+  // runs with config_run() after a confirming second F1. All three are asked in the main loop only; config_get() must be cheap (it is read every pass, to notice a change).
   virtual unsigned config_pages() const noexcept { return 0; }
+  virtual bool config_page(unsigned /*index*/, ConfigPage& /*out*/) const noexcept { return false; }
+  virtual float config_get(const Context&, std::uint16_t /*key*/) const noexcept { return 0.0f; }
+  virtual void config_set(Context&, std::uint16_t /*key*/, float /*value*/) noexcept {}
+  virtual void config_run(Context&, std::uint16_t /*key*/) noexcept {}
+
+  // The header strip's content (see HeaderStyle). Asked every frame; default: everything.
+  virtual HeaderStyle header() const noexcept { return {}; }
 
   // ---- Diagnostics (diag.h; the platform's console, docs/FRAMEWORK.md section 5). Both default to nothing. -----------------------
   // Extra console commands: points `rows` at a table that lives as long as the app (a constexpr array) and returns its length. Asked

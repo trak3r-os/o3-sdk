@@ -251,19 +251,29 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   RADIO also FREQ, REGION and SEEK, with F5 / F6 seeking down and up; the radio's rows are greyed and INPUT skips the radio when the receiver does not answer, F5 then tries it again; see "Audio in and the radio"
   below; then, with a USB audio device, USB AUDIO, PROFILE, RETURN and RETURN LEVEL, and INPUT also offers USB, the computer's return; a change of the USB set asks F1 twice and the port reconnects; see "USB audio and the card as a disk"
   below), MIDI (hidden when `Platform::midi` is null: the user's
-  `hal::midi::Config` and the device's status; see "MIDI" below), CARD (with a card capability: the card as the files service sees it, the volume, the job, and with a USB audio device CARD AS DISK and READ ONLY), DISPLAY (the theme), INFO (the app's name and version, the
-  build id, the uptime). Keys: LEFT / RIGHT change section, F8 is BACK (one level up; the last closes the screen), CONFIG closes it.
+  `hal::midi::Config` and the device's status; see "MIDI" below), CARD (with a card capability: the card as the files service sees it, the volume, the job, and with a USB audio device CARD AS DISK and READ ONLY), DISPLAY (the theme and, with `Platform::backlight`, BRIGHTNESS and PAD LIGHTS: LOW, MEDIUM, HIGH, `app/brightness.h`: the backlight duty is 20, 50 or 128, never dark, and a lit pad never drops below the
+  driver's first visible step), INFO (the app's name and version, the
+  build id, the uptime and, with `Platform::crash`, the last crash record), then one tab for each page the app adds (below). Keys: LEFT / RIGHT change section, F8 is BACK (one level up; the last closes the screen), CONFIG closes it.
   FIRMWARE: the `Firmware/*.ptf` list is read in one pass when the section opens (UP / DOWN or the encoder choose), F1 asks "UPDATE
   TO name?", F1 again starts the sliced check, F1 once more at "IMAGE OK, length, CRC" installs; any other control takes a question back, F8
   cancels a check, and nothing is written before INSTALL. Past INSTALL no key acts. The list stops at 12 files (track3r-os's OS-BUG-FWLIST,
   ported as it is). The path is `hal::firmware::FirmwareSink`: on the unit `update::device::sink()`, the same service `fw` uses, with its
   guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`).
 - An app can refuse for a moment with `App::update_blocker(ctx)` (a text, or null: asked when the list opens and at INSTALL), for
-  example while it records. `App::config_pages()` (default 0) is declared for the pages an app will add; the kit draws none yet.
-- The remaining plan (the maintainer, 2026-10-25): (the USB rows of AUDIO and the CARD section are built, slice U of M2c, below; the MIDI section and AUDIO's input rows too),
-  brightness and the last crash record in INFO; a section whose driver does not exist yet is not shown. An app adds its own pages after
-  the kit's: up to eight items each, a value (a parameter descriptor with get and set on the main loop) or an action (run after a
-  confirming hold), and it reads the kit's settings (the theme, the MIDI channel) through `Context`.
+  example while it records.
+- **The app's own pages** (`app/config_page.h`, M2c slice CP): `App::config_pages()` is how many (at most 4, default 0: the screen is the kit's alone) and `App::config_page(i, out)` page `i`'s constexpr
+  table of up to eight items, each a key (1 .. 65535, never reused), a caption and either a `core::ParamDesc` (a value: the app's `config_get(ctx, key)` and `config_set(ctx, key, v)`, main loop; the encoder and F1 change it,
+  SHIFT is coarse, F1 goes round at the top) or none (an action: F1 asks, the next F1 within 5 s runs `config_run(ctx, key)`; the kit has no hold timer, so the confirmation is a second press). The kit keeps the values in the
+  settings file (`APPV`, keyed by the item's key) and gives them back after `setup()` has set the defaults, clamped into the descriptor; an item with a zero or repeated key, no caption or a descriptor
+  `param_desc_valid` refuses is left out. The pages are tabs after INFO, with the kit's look and keys. `App::header()` returns a `HeaderStyle` (tempo, transport): an app without a sequencer drops them from the header strip.
+- **MIDI learn** (`Midi::learn(unit, param)`, `midi.h`): arms the next control change (controllers 0 .. 119, any port); it is bound to that parameter of that unit and moves it from then on (`core/learn.h`: PICKUP by default, so a
+  knob never makes a value jump; JUMP and RELATIVE by argument). A bound controller no longer reaches `App::midi()`; one parameter has one controller and a controller one parameter; at most 16 bindings, kept with the kit's
+  settings (`LRNB`: they are about the user's controller, not the app's patterns) and given back at boot; the strip says LEARNED CC n CHANNEL c.
+- **Screenshot to the card**: Shift then Power saves the screen as `Screenshots/SHOT_nnnn.bmp` (800 x 480, RGB565 as the FT812 gives it; track3r-os's `screenshot_service`, `hal/screenshot_file.h`), by the kit through a
+  `ScopedWriter` of `Scope::Screenshots`, which admits `Screenshots/` and nothing else (the app's `files()` is still confined to `Apps/<id>/` and `Samples/`). While it runs the runtime draws no frame and the console tap drops the presses (`Runtime::hold_frames`), the card is claimed, and the console's `shot` is refused. The simulator has no power switch and takes none.
+- **Widgets for an app's screen** (`app/file_picker.h`, `app/name_entry.h`): `app::FilePicker` (`BasicFilePicker<N>`) lists a folder of the card with `Files::list` over `ui::ListView`, keeps an extension, answers Chosen or Cancelled;
+  `app::NameEntry` is `ui::keyboard` over `TextEntry`. HELLO uses them on PATTERN and COPY (`scenarios/picker.txt`).
+- The maintainer's plan (2026-10-25) also lets an app add or change items in the kit's sections and hide one; that is not built.
 - An app can also extend or change the kit's sections ("engine puede añadir o cambiar también salidas usb", the maintainer): add items
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
@@ -399,7 +409,7 @@ files.remove_folder("Song 1");                         // DELETE: a `.deleted` m
   `Samples/`). The writer's guard (`hal/app_guard.h`) is a superset of track3r-os's (it also admits `Projects/`, `Settings/`, `instruments/`, `AppExport/`), so the service goes through a `ScopedWriter` that refuses any change outside `Apps/<id>/` and `Samples/` (`system.o3s` of the app's folder is the kit's: an app's save of it is RESERVED NAME). `platform/mk66/tools/check_writers.py` keeps the list of who may name the write calls and include the write contract. The service refuses while the
   update path holds the card (`Platform::card_claim`), and the update path refuses while the service has a job (`appimg::storage_in_use`).
 - **Console**: `files` prints the card, the last job, the jobs' cost (`max-step`, the write speed of the last save) and what the settings read found; `files crc <path>` is the CRC-32 of
-  a card file, to compare with the simulator's; `state` has `card=<state> files=<phase>`.
+  a card file, to compare with the simulator's; `state` has `card=<state> files=<phase> setup_errors=<n>`.
 
 ### Pad LEDs (`pad_leds.h`)
 

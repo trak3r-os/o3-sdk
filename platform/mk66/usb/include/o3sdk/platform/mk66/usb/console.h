@@ -63,6 +63,8 @@ void note_usb_layout_requested() noexcept;
 class ShotPort;
 bool shot_active() noexcept;
 ShotPort& screenshot_port() noexcept;
+// The image's screenshot service, to refuse `shot` meanwhile ("a screenshot is being saved"): called from the console's command, main loop only. Once, at boot; null (the default): none.
+void bind_screenshot(bool (*active)() noexcept) noexcept;
 
 // OS-SCREENSHOT, spec Q4: once a pass, `held` = a capture holds the app. While it does, the presses of keys and pads and the encoder turns are dropped, and the releases of keys that were down
 // before are kept and handed to the app after (usb/input_hold.h). A no-op before tap_input() was called.

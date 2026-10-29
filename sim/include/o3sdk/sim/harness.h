@@ -127,6 +127,14 @@ class Harness {
   // The fake USB port the harness was given (null without one), and the card as a disk (`card disk on|off`): the app layer's share_disk() / eject_disk(); nullptr when the request went
   // through, else why it did not (hal::usb_audio::disk_refusal_text).
   platform::host::FakeUsbAudio* usb() { return usb_; }
+
+  // The platform's backlight (Platform::backlight; the unit's is the FT812's PWM): off by default, as the simulator has no panel to dim, and then the DISPLAY section has the theme alone. With it
+  // on (`--backlight`; `expect backlight` in a scenario implies it) the DISPLAY section has BRIGHTNESS and PAD LIGHTS too, and the duty the runtime last told the backlight is backlight_duty()
+  // (0 until it was told: the setting is high, the hardware's own, which costs no call). Set it before start(); the duty is kept by the process, so one harness at a time.
+  void set_backlight(bool on);
+  unsigned backlight_duty() const;
+  // INFO's LAST CRASH line (Platform::crash; null: none, the default, as the simulator has no crash record). A literal that outlives the harness. Set it before start().
+  void set_crash_line(const char* text);
   const char* card_disk(bool on);
   std::uint64_t due_samples() const;
   // The recorder of the platform (Platform::recorder, Context::recorder()): the unit's own record service (platform/mk66/audio record_service.h) wrapped around every rendered block, over
@@ -166,6 +174,8 @@ class Harness {
   std::unique_ptr<app::Runtime> runtime_;
   std::uint64_t samples_ = 0;
   bool recording_ = false;
+  bool backlight_ = false;
+  const char* crash_ = nullptr;
   std::vector<std::int16_t> audio_;
 };
 

@@ -21,12 +21,71 @@ const char* result_name(Result r) noexcept {
 
 namespace {
 
-static_assert(kUsbStem11 == kKeyCount && kUsbStem1 + hal::usb_audio::kMaxChannels - 1u == kUsbStem11, "the keys are 1 .. kKeyCount, in order");
+static_assert(kPadLights == kKeyCount && kBrightness == kUsbStem11 + 1u && kUsbStem1 + hal::usb_audio::kMaxChannels - 1u == kUsbStem11, "the keys are 1 .. kKeyCount, in order");
+
+constexpr std::uint16_t kChunkVersion = 0x0100;  // APPV and LRNB, major 1
 
 struct Entry {
   std::uint16_t key;
   float value;
 };
+
+// APPV into `next`: false when this version cannot read it (a newer major, or a shape that does not fit): the chunk is then counted as unknown. Out-of-range values are the runtime's to refuse
+// (it knows the descriptors); a count past the slots keeps the first kAppValueSlots.
+bool read_appv(const chunk::Chunk& c, KitValues& next) noexcept {
+  chunk::Fields f(c);
+  const std::uint16_t version = f.u16();
+  const std::uint16_t count = f.u16();
+  if (!f.ok() || (version >> 8) != (kChunkVersion >> 8) || f.left() < static_cast<std::size_t>(count) * 6u) {
+    return false;
+  }
+  next.app_count = 0;
+  for (unsigned i = 0; i < count; ++i) {
+    const std::uint16_t key = f.u16();
+    const float value = f.f32();
+    if (next.app_count < kAppValueSlots && key != 0u && value == value) {  // (a NaN is no value)
+      next.app_key[next.app_count] = key;
+      next.app_value[next.app_count] = value;
+      ++next.app_count;
+    }
+  }
+  return true;
+}
+
+// LRNB into `next`: the bindings that are valid for a unit's parameter, kept in order while the store has room; false as read_appv. A binding that is not valid, or that listens to a message another
+// one has, or that names a parameter another one has, is dropped (core::learn_plan decides).
+bool read_lrnb(const chunk::Chunk& c, KitValues& next, Report& rep) noexcept {
+  chunk::Fields f(c);
+  const std::uint16_t version = f.u16();
+  const std::uint16_t count = f.u16();
+  if (!f.ok() || (version >> 8) != (kChunkVersion >> 8) || f.left() < static_cast<std::size_t>(count) * 8u) {
+    return false;
+  }
+  core::LearnBinding fresh[kLearnStoreSlots] = {};
+  for (unsigned i = 0; i < count; ++i) {
+    core::LearnBinding b;
+    b.param = static_cast<core::ParamId>(f.u32());
+    b.cc = f.u8();
+    b.channel = f.u8();
+    b.mode = f.u8();
+    b.flags = f.u8();
+    core::LearnPlan plan;
+    if (!core::learn_valid(b) || core::param_kind(b.param) != core::ParamKind::Unit || (b.flags & core::kLearnFollow) != 0u || !core::learn_plan(fresh, kLearnStoreSlots, b, plan)) {
+      ++rep.skipped_values;
+      continue;
+    }
+    for (unsigned s = 0; s < kLearnStoreSlots; ++s) {
+      if ((plan.clear >> s) & 1u) {
+        fresh[s] = core::LearnBinding{};
+      }
+    }
+    fresh[plan.write] = b;
+  }
+  for (unsigned s = 0; s < kLearnStoreSlots; ++s) {
+    next.learn[s] = fresh[s];
+  }
+  return true;
+}
 
 // The settings as (key, value) in key order: the file's SETS entries.
 void gather(const KitValues& v, Entry (&out)[kKeyCount]) noexcept {
@@ -53,11 +112,13 @@ void gather(const KitValues& v, Entry (&out)[kKeyCount]) noexcept {
   for (unsigned i = 0; i < hal::usb_audio::kMaxChannels; ++i) {
     out[19 + i] = {static_cast<std::uint16_t>(kUsbStem1 + i), static_cast<float>(v.usb_stem[i])};
   }
+  out[30] = {kBrightness, static_cast<float>(v.brightness)};
+  out[31] = {kPadLights, static_cast<float>(v.pad_lights)};
 }
 
 // Applies one entry to `v`: 1 applied, 0 the key is not known, -1 the value is not one this key takes.
 int apply(KitValues& v, std::uint16_t key, float value) noexcept {
-  if (key < kTheme || key > kUsbStem11) {
+  if (key < kTheme || key > kPadLights) {
     return 0;
   }
   // Every setting is a small whole number (a NaN fails the first test); the station and the stem masks are the ones that do not fit a byte.
@@ -152,6 +213,13 @@ int apply(KitValues& v, std::uint16_t key, float value) noexcept {
       }
       v.usb_level = static_cast<std::uint8_t>(n);
       return 1;
+    case kBrightness:
+    case kPadLights:
+      if (n > 2u) {
+        return -1;
+      }
+      (key == kBrightness ? v.brightness : v.pad_lights) = static_cast<std::uint8_t>(n);
+      return 1;
     default:
       if (key >= kUsbStem1 && key <= kUsbStem11) {
         v.usb_stem[key - kUsbStem1] = static_cast<std::uint16_t>(n);
@@ -175,7 +243,40 @@ std::size_t write(const KitValues& v, std::uint8_t* out, std::size_t cap) noexce
       return 0;
     }
   }
-  return w.end() ? w.finish() : 0u;
+  if (!w.end()) {
+    return 0;
+  }
+  if (v.app_count != 0u) {
+    if (!w.begin("APPV") || !w.u16(kChunkVersion) || !w.u16(v.app_count)) {
+      return 0;
+    }
+    for (unsigned i = 0; i < v.app_count && i < kAppValueSlots; ++i) {
+      if (!w.u16(v.app_key[i]) || !w.f32(v.app_value[i])) {
+        return 0;
+      }
+    }
+    if (!w.end()) {
+      return 0;
+    }
+  }
+  std::uint16_t bound = 0;
+  for (const core::LearnBinding& b : v.learn) {
+    bound = static_cast<std::uint16_t>(bound + (core::learn_empty(b) ? 0u : 1u));
+  }
+  if (bound != 0u) {
+    if (!w.begin("LRNB") || !w.u16(kChunkVersion) || !w.u16(bound)) {
+      return 0;
+    }
+    for (const core::LearnBinding& b : v.learn) {
+      if (!core::learn_empty(b) && (!w.u32(static_cast<std::uint32_t>(b.param)) || !w.u8(b.cc) || !w.u8(b.channel) || !w.u8(b.mode) || !w.u8(b.flags))) {
+        return 0;
+      }
+    }
+    if (!w.end()) {
+      return 0;
+    }
+  }
+  return w.finish();
 }
 
 Result read(const std::uint8_t* data, std::size_t n, KitValues& v, Report& report) noexcept {
@@ -191,8 +292,19 @@ Result read(const std::uint8_t* data, std::size_t n, KitValues& v, Report& repor
   KitValues next = v;  // nothing of a file that fails is applied
   Report rep;
   bool sets_seen = false;
+  bool appv_seen = false;
+  bool lrnb_seen = false;
   chunk::Chunk c{};
   while (r.next(c)) {
+    if (chunk::id_is(c, "APPV") || chunk::id_is(c, "LRNB")) {
+      const bool app = chunk::id_is(c, "APPV");
+      bool& seen = app ? appv_seen : lrnb_seen;
+      if (seen || !(app ? read_appv(c, next) : read_lrnb(c, next, rep))) {  // (a second one, or one this version cannot read, is skipped like any other it does not know)
+        ++rep.unknown_chunks;
+      }
+      seen = true;
+      continue;
+    }
     if (!chunk::id_is(c, "SETS")) {
       ++rep.unknown_chunks;
       continue;

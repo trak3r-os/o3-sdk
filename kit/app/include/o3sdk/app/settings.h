@@ -5,14 +5,17 @@
 // screen lets the user change and the app did not ask for. They live in `Apps/<app>/system.o3s`, a chunk file (formats/chunk_file.h) of type `O3SK`:
 //
 //   SETS   u16 version (0x0100), u16 count, then `count` entries of u16 key and f32 value (6 bytes each)
+//   APPV   the values of the app's own Config pages (App::config_pages): u16 version (0x0100), u16 count, then `count` entries of u16 key (the item's) and f32 value; written only when there are some
+//   LRNB   the MIDI learn bindings (Midi::learn): u16 version (0x0100), u16 count, then `count` entries of 8 bytes: u32 core::ParamId, u8 controller, u8 channel (0: every), u8 mode, u8 flags
 //
 // A key is never reused and a new one is appended (the table below), like a unit's parameter id: an older firmware that meets a key it does not know skips it and counts it,
-// a newer one that finds a key missing keeps the default. Chunks this version does not know (APPV, the app's page values, and LRNB, the MIDI learn bindings, are reserved for
-// the Config pages and learn that come later) are skipped and counted too; saving over such a file drops them. A newer major version of SETS is refused whole and the defaults
+// a newer one that finds a key missing keeps the default. Chunks this version does not know, and an APPV or LRNB
+// of a newer major version or of a shape it cannot read, are skipped and counted too (`unknown_chunks`); saving over such a file drops them. A newer major version of SETS is refused whole and the defaults
 // are kept.
 //
 // This header is the codec only (pure, no card): app/files.h reads and writes the file, the runtime hands it the values.
 
+#include <o3sdk/core/learn.h>
 #include <o3sdk/hal/capture.h>
 #include <o3sdk/hal/midi.h>
 #include <o3sdk/hal/usb_audio.h>
@@ -22,6 +25,10 @@
 #include <cstdint>
 
 namespace o3sdk::app {
+
+// How many values of the app's Config pages and how many MIDI learn bindings a settings file holds (App pages: at most kMaxConfigPages x kMaxConfigItems values in all).
+inline constexpr unsigned kAppValueSlots = 32;
+inline constexpr unsigned kLearnStoreSlots = 16;
 
 // What the kit keeps. A plain value: the runtime builds it from the live state and compares it with the one last saved.
 struct KitValues {
@@ -40,16 +47,47 @@ struct KitValues {
   std::uint8_t usb_level = 100;  // 0 .. 100
   bool usb_map_set = false;      // usb_stem holds the edited slots of the profile
   std::uint16_t usb_stem[hal::usb_audio::kMaxChannels] = {};
+  // DISPLAY and PAD LIGHTS (brightness.h): 0 low, 1 medium, 2 high; high is what the hardware does without them.
+  std::uint8_t brightness = 2;
+  std::uint8_t pad_lights = 2;
+  // The values of the app's Config pages, as (item key, value), in page order (the runtime builds them from App::config_get, clamped into their descriptor), and the MIDI learn
+  // bindings, slot by slot (an empty slot has param None).
+  std::uint8_t app_count = 0;
+  std::uint16_t app_key[kAppValueSlots] = {};
+  float app_value[kAppValueSlots] = {};
+  core::LearnBinding learn[kLearnStoreSlots] = {};
 
   friend bool operator==(const KitValues& a, const KitValues& b) noexcept {
     return a.in_source == b.in_source && a.in_gain == b.in_gain && a.in_monitor == b.in_monitor && a.radio_region == b.radio_region && a.radio_freq == b.radio_freq && a.usb_audio == b.usb_audio && a.usb_profile == b.usb_profile &&
            a.usb_duplex == b.usb_duplex && a.usb_level == b.usb_level && a.usb_map_set == b.usb_map_set && same_stems(a, b) && a.theme == b.theme && a.midi.channel == b.midi.channel && a.midi.out_channel == b.midi.out_channel && a.midi.out_ports == b.midi.out_ports &&
            a.midi.clock_out == b.midi.clock_out && a.midi.follow == b.midi.follow && a.midi.follow_port == b.midi.follow_port &&
-           a.midi.transport_in == b.midi.transport_in && a.midi.transport_out == b.midi.transport_out;
+           a.midi.transport_in == b.midi.transport_in && a.midi.transport_out == b.midi.transport_out && a.brightness == b.brightness && a.pad_lights == b.pad_lights &&
+           same_app(a, b) && same_learn(a, b);
   }
   friend bool operator!=(const KitValues& a, const KitValues& b) noexcept { return !(a == b); }
 
  private:
+  static bool same_app(const KitValues& a, const KitValues& b) noexcept {
+    if (a.app_count != b.app_count) {
+      return false;
+    }
+    for (unsigned i = 0; i < a.app_count && i < kAppValueSlots; ++i) {
+      if (a.app_key[i] != b.app_key[i] || a.app_value[i] != b.app_value[i]) {
+        return false;
+      }
+    }
+    return true;
+  }
+  static bool same_learn(const KitValues& a, const KitValues& b) noexcept {
+    for (unsigned i = 0; i < kLearnStoreSlots; ++i) {
+      const core::LearnBinding& x = a.learn[i];
+      const core::LearnBinding& y = b.learn[i];
+      if (x.param != y.param || x.cc != y.cc || x.channel != y.channel || x.mode != y.mode || x.flags != y.flags) {
+        return false;
+      }
+    }
+    return true;
+  }
   // The slots only count while the map is set (an unset map keeps whatever the array held).
   static bool same_stems(const KitValues& a, const KitValues& b) noexcept {
     if (!a.usb_map_set) {
@@ -93,8 +131,10 @@ enum Key : std::uint16_t {
   kUsbMapSet = 19,     // 1: the edited slots below apply (else the profile's factory slots)
   kUsbStem1 = 20,      // slot 1 of the profile as a mask of the 16 stem sources, 0 .. 65535; kUsbStem1 + n is slot n + 1, up to kUsbStem11
   kUsbStem11 = 30,
+  kBrightness = 31,    // DISPLAY: 0 low, 1 medium, 2 high (M2c slice CP)
+  kPadLights = 32,     // PAD LIGHTS: 0 low, 1 medium, 2 high
 };
-inline constexpr unsigned kKeyCount = 30;  // the keys of this version
+inline constexpr unsigned kKeyCount = 32;  // the keys of this version
 
 enum class Result : std::uint8_t {
   Ok,

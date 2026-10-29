@@ -369,6 +369,11 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
         if (there != (w[1] == "file")) {
           return fail("expect " + w[1] + " " + w[2] + ": " + (there ? "it is there" : "it is not there"));
         }
+      } else if (w.size() == 3 && w[1] == "backlight") {
+        // expect backlight <duty>: the duty the runtime last told the platform's backlight (the harness needs set_backlight / `--backlight`)
+        if (h.backlight_duty() != static_cast<unsigned>(std::strtoul(w[2].c_str(), nullptr, 10))) {
+          return fail("expect backlight " + w[2] + ": the backlight was told " + std::to_string(h.backlight_duty()));
+        }
       } else if (w.size() >= 3 && w[1] == "state") {
         std::string want = w[2];
         for (std::size_t i = 3; i < w.size(); ++i) {
@@ -380,7 +385,7 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
           return fail("expect state " + want + ": the state line is '" + line + "'");
         }
       } else {
-        return fail("expect file <card path> | expect nofile <card path> | expect state <text>");
+        return fail("expect file <card path> | expect nofile <card path> | expect state <text> | expect backlight <duty>");
       }
     } else {
       return fail("unknown command '" + cmd + "'");

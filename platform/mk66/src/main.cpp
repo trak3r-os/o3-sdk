@@ -50,6 +50,9 @@
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/ui/assets.h>
 #include <o3sdk/ui/boot_screen.h>
+#include <o3sdk/ui/plot/ram_g_map.h>
+
+#include <new>
 
 #if O3SDK_CONSOLE
 #include <o3sdk/platform/mk66/audio/diag.h>
@@ -58,6 +61,7 @@
 #include <o3sdk/platform/mk66/power/power_device.h>
 #include <o3sdk/platform/mk66/save/fat_storage_writer.h>
 #include <o3sdk/platform/mk66/storage/device.h>
+#include <o3sdk/platform/mk66/usb/screenshot_service.h>
 #include <o3sdk/platform/mk66/update/fw_device.h>
 #include <o3sdk/platform/mk66/usb/boot_layout.h>
 #include <o3sdk/platform/mk66/usb/console.h>
@@ -172,6 +176,65 @@ static_assert(mk66::kCaptureStorageAlign <= 8u, "O3SDK_BIG places an object on 8
 // constructed in its own unit, and uses them only from the main loop, long after).
 O3SDK_BIG o3sdk::platform::mk66::save::FatStorageWriter g_writer(storage::device::fat(), storage::device::block());
 O3SDK_BIG o3sdk::app::Files::Work g_files_work;
+#endif
+
+// DISPLAY's BRIGHTNESS (app/brightness.h, Platform::backlight): the rest level the FT812's backlight ramp is given. A display that is not up ignores it.
+void set_backlight(std::uint8_t duty) noexcept { display::display().set_backlight_target(duty); }
+
+// INFO's "LAST CRASH" (Platform::crash): the record the previous run left, as one line, or NONE. Built once at boot, before the record is erased.
+char g_crash_line[o3sdk::app::SystemConfig::kStripChars] = "NONE";
+#if O3SDK_CONSOLE
+void format_crash_line(const mk66::crash::CrashRecord& r) noexcept {
+  char name[24];
+  const char* const e = console::exception_name(r.exception, name);
+  mk66::audio::diag::Text text(g_crash_line, sizeof g_crash_line);
+  for (const char* c = e; *c != '\0'; ++c) {
+    text.chr(*c >= 'a' && *c <= 'z' ? static_cast<char>(*c - 'a' + 'A') : *c);
+  }
+  text.str(" AT ").dec(r.uptime_ms / 1000u).str(" S, PC ").hex32(r.pc).str(" LR ").hex32(r.lr);
+}
+#endif
+
+#if O3SDK_CONSOLE && !O3SDK_AUDIO_TEST
+// OS-SCREENSHOT (docs/M2C-PLAN.md section 9, ported from track3r-os app_main.cpp ShotHostImpl): Shift then Power saves the screen as Screenshots/SHOT_nnnn.bmp. The service (usb/screenshot_service.h), its 2 KiB
+// piece buffer and the writer it writes through (a ScopedWriter of Scope::Screenshots over g_writer: the one folder the kit writes outside the app's own) live in the SDRAM, built in place by main (a
+// zero static cannot take the service's initial values). The card is claimed while a file is open. Main loop only.
+class ShotHost final : public mk66::console::ScreenshotHost {
+ public:
+  o3sdk::app::Runtime* rt = nullptr;
+  o3sdk::hal::storage::shot::Refusal card_refusal() noexcept override {
+    using R = o3sdk::hal::storage::shot::Refusal;
+    switch (storage::device::owner()) {
+      case storage::CardOwner::Host: return R::OnComputer;
+      case storage::CardOwner::NoCard: return R::NoCard;
+      case storage::CardOwner::Tracker: break;
+    }
+    switch (g_writer.gate()) {
+      case o3sdk::hal::storage::WriteStatus::Ok: break;
+      case o3sdk::hal::storage::WriteStatus::NoCard: return R::NoCard;
+      default: return R::Unwritable;
+    }
+    return storage::device::card_busy() ? R::Busy : R::None;  // (the files service's job and the update path are claims)
+  }
+  bool console_shot_active() noexcept override { return console::shot_active(); }
+  void notice(const char* text, bool) noexcept override {
+    if (rt != nullptr) {
+      rt->system_strip(text, -1, 3000);
+    }
+  }
+};
+struct ShotStore {
+  alignas(4) std::uint8_t buffer[mk66::console::ScreenshotService::kBufferBytes];
+  o3sdk::app::ScopedWriter scope;
+  ShotHost host;
+  mk66::console::ScreenshotService service;
+};
+static_assert(alignof(ShotStore) >= 4 && mk66::console::ScreenshotService::kBufferBytes % 4 == 0, "the screenshot's piece buffer is word aligned (alignas(4), and the store sits at its own alignment)");
+alignas(8) O3SDK_BIG unsigned char g_shot_storage[sizeof(ShotStore)];
+static_assert(alignof(ShotStore) <= 8u, "O3SDK_BIG places an object on 8 bytes");
+ShotStore* g_shot = nullptr;  // built in main
+bool screenshot_has_card() noexcept { return g_shot != nullptr && g_shot->service.capturing(); }
+bool screenshot_active() noexcept { return g_shot != nullptr && g_shot->service.active(); }
 #endif
 
 // OS-POWER P1: the power-off latch (stage A of the shutdown, never cleared) and the end of its stage E (the display dark and held, the chip in power-down), from appimg (console/src/appimg.cpp).
@@ -329,6 +392,31 @@ void power_pass(o3sdk::app::Runtime& rt, std::uint32_t now_ms, bool ready) noexc
     g_power_strip = false;
   }
 }
+
+#if !O3SDK_AUDIO_TEST
+// OS-SCREENSHOT: the Power switch's Shift-then-Power event arms the service and the service is stepped every pass (track3r-os app_main.cpp shot_pass). While a capture runs the runtime draws no frame and
+// the console's tap drops the presses (spec Q4). Once the shutdown has begun nothing is taken and one in flight is dropped, its temporary file removed.
+void shot_pass(o3sdk::app::Runtime& rt, std::uint32_t now_ms) noexcept {
+  const bool requested = power::take_screenshot_request();  // (a one-shot: read every pass)
+  if (g_shot == nullptr) {
+    return;
+  }
+  mk66::console::ScreenshotService& service = g_shot->service;
+  if (powering_off()) {
+    service.cancel(console::screenshot_port());
+    rt.hold_frames(false);
+    console::hold_input(false);
+    return;
+  }
+  if (requested) {
+    (void)service.request(now_ms);
+  }
+  const bool keys = input::scanner().button_held(static_cast<unsigned>(o3sdk::app::Button::Shift)) || power::pressed();
+  const bool held = service.step(now_ms, keys, console::screenshot_port());
+  rt.hold_frames(held);
+  console::hold_input(held);
+}
+#endif
 #endif
 
 // Which blink pattern the audio counters call for: the heartbeat (0) while everything is clean, else a sticky code.
@@ -364,6 +452,7 @@ int main() {
   if (const mk66::crash::CrashRecord* const record = mk66::boot_crash_record()) {
 #if O3SDK_CONSOLE
     console::note_boot_crash(record);  // `crash` keeps it for this run; the noinit copy is erased below
+    format_crash_line(*record);        // INFO's LAST CRASH (the line is built here: the record is erased below)
     console::log_hex("boot: previous run crashed, exception", record->exception);
     usb_crashed = console::crash_blames_usb(record);
 #endif
@@ -414,11 +503,11 @@ int main() {
   // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
                                        &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture,
-                                       recorder, usb_device};
+                                       recorder, usb_device, &set_backlight, g_crash_line};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi,
-                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture, recorder};
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture, recorder, nullptr, &set_backlight, nullptr};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   const bool app_started = rt.start();
@@ -506,6 +595,19 @@ int main() {
     console::log("boot: sd claim table full");
   }
   g_writer.attach_owner(storage::device::swap());  // while the computer has the card (the disk mode) the writer's gate says Host
+#if !O3SDK_AUDIO_TEST
+  {
+    // Shift + Power: the screenshot service, in the SDRAM, writing through a scope that admits Screenshots/ only; the console's `shot` is refused while it runs (the two share a RAM_G region).
+    g_shot = new (g_shot_storage) ShotStore;
+    g_shot->scope.bind(&g_writer, o3sdk_app_id(), o3sdk::app::ScopedWriter::Scope::Screenshots);
+    g_shot->host.rt = &rt;
+    g_shot->service.attach(g_shot->host, storage::device::storage(), g_shot->scope, g_shot->buffer, o3sdk::ui::plot::kRamGShot, o3sdk::ui::plot::kRamGShotBytes);
+    if (!storage::device::claim(&screenshot_has_card)) {
+      console::log("boot: sd claim table full (screenshot)");
+    }
+    console::bind_screenshot(&screenshot_active);
+  }
+#endif
   mk66::set_module(0);
 
   // ---- The kit's settings (docs/formats/o3sdk-settings.md): the theme and the MIDI settings the user chose, read once from Apps/<app>/system.o3s over what App::setup set, now that the card is mounted
@@ -603,6 +705,9 @@ int main() {
     // OS-POWER P1: the Power switch, after the key scan (Shift is read from it) and before the display and the runtime, which it tells the strip. The app has the screen once it started and drew a frame
     // (the boot screen is up until then), or when there is no display to wait for; an app that did not start never arms the hold (track3r-os: !g_start_failed).
     power_pass(rt, static_cast<std::uint32_t>(clock.uptime_ms()), app_started && (rt.frames() != 0u || !shown.up));
+#if !O3SDK_AUDIO_TEST
+    shot_pass(rt, static_cast<std::uint32_t>(clock.uptime_ms()));
+#endif
 #endif
     if (!display_dark()) {  // OS-POWER P1, the end of stage E: the display is dark and held and the chip is in power-down: nothing below touches it, nor the runtime (it draws, and flushes the pad LEDs, which are parked)
       switch (display::service()) {

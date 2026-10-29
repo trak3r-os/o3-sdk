@@ -37,6 +37,7 @@
 //   usbwav <name>             <out>/<name>.wav: what the computer captured since its stream opened, one channel per channel of the profile (16 bit, 44.1 kHz)
 //   reboot                    the unit restarted on the same card: the runtime and the engine made again, App::setup, the kit's settings read from the card
 //   expect file <path>        the card holds the file `path` (relative to its root, "Apps/hello/riff.o3a"); `expect nofile <path>` it does not
+//   expect backlight <duty>   the platform's backlight was last told this duty (0: never; `--backlight` or this line gives the harness one)
 //   expect state <text>       the console's `state` line holds `text` ("files=done", "card=none", "section=display"); a scenario that fails an expect fails with its line
 // `card` and `expect file` need a card (<app>_sim --card DIR, or a Harness given one); `reboot` works without one (and keeps nothing).
 //

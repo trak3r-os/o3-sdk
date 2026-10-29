@@ -8,7 +8,7 @@ What the system Config screen lets the user change, and the app did not ask for,
 "FORM" u32 length "O3SK"  SETS  [unknown chunks]  "CRC "
 ```
 
-At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 218 bytes (30 keys: 4 + 30 x 6 bytes in `SETS`).
+At most 2,048 bytes (`settings::kMaxBytes`); the file of this version with only `SETS` is 230 bytes (32 keys: 4 + 32 x 6 bytes in `SETS`); `APPV` and `LRNB` add to it only when there is something in them (at most 32 values and 16 bindings: about 600 bytes in all).
 
 ## 1. `SETS`
 
@@ -35,13 +35,18 @@ At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 218 byt
 | 17 | USB audio: the return stream is part of the set | 0, 1 (the boot set has it) |
 | 18 | RETURN LEVEL, per cent | 0 .. 100 (100) |
 | 19 | the edited stem slots below apply (else the profile's factory slots) | 0, 1 |
+| 31 | DISPLAY brightness (slice CP, `app/brightness.h`) | 0 low (backlight duty 20), 1 medium (50), 2 high (128, the hardware's own and the default) |
+| 32 | PAD LIGHTS | 0 low (a third of every pad level), 1 medium (two thirds), 2 high (as drawn); a lit pad never drops below level 16 |
 | 20 .. 30 | stem slot 1 .. 11 of the profile, a mask of the 16 stem sources (bit 0 T1 .. bit 11 T12, 12 Master L, 13 Master R, 14 Send A, 15 Send B; the second value that is not a byte) | 0 .. 65535 |
 
-**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 31. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The settings of later slices (the USB layout and stem map, brightness and pad lights) take the next keys. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.
+**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 33. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.
 
-## 2. Other chunks
+## 2. `APPV` and `LRNB`
 
-`APPV` (the app's page values) and `LRNB` (the MIDI learn bindings) are reserved for the Config pages and the learn that come later (`docs/M2C-PLAN.md` sections 4 and 8). This version skips and counts them; **saving over a file that has them drops them**, as track3r-os's settings file does with the chunks it does not know.
+Both are written only when they have something to say, and both start `u16 version` (`0x0100`) and `u16 count`. A chunk of a newer major version, one whose count does not fit its length, a second one of the same id, or any other chunk, is skipped and counted (`unknown_chunks`); **saving over a file that has such a chunk drops it**, as track3r-os's settings file does with the chunks it does not know.
+
+- **`APPV`**, the values of the app's own Config pages (`App::config_pages`, `kit/app/config_page.h`): `count` entries of `u16 key` (the item's own, never reused) and `f32 value`, in page order, at most 32. The runtime hands each back to `App::config_set` after `App::setup()`, clamped into the item's `ParamDesc` and only where it differs from what the app has; a key the running app has no item for is dropped at the next save; a NaN or a zero key is not a value.
+- **`LRNB`**, the MIDI learn bindings (`Midi::learn`, `core/learn.h`): `count` entries of 8 bytes, `u32 core::ParamId` (kind Unit, the unit's id as `index`, its parameter id as `field`), `u8` controller 0 .. 127, `u8` channel (0: every, else 1 .. 16), `u8` mode (0 pickup, 1 jump, 2 relative), `u8` flags (0), at most 16. They are in the kit's file and not in the app's pattern files because they are about the user's controller, not the music; a binding is a unit slot and a parameter id, so it follows the build. An entry that is not valid, names a kind other than Unit, or listens to a message or names a parameter that an earlier one has, is dropped (counted in `skipped_values`); a binding whose unit the running build does not have is kept in the file and ignored.
 
 ## 3. Reading is tolerant and says so
 

@@ -2,7 +2,7 @@
 //
 // <app>_sim: runs the app this executable is linked with (o3sdk_app(), cmake/O3sdkTargets.cmake) headless on the host.
 //
-//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--card DIR]
+//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--backlight] [--card DIR]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
@@ -10,7 +10,7 @@
 // gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
 // read or written, no flash exists); without it the screen has no FIRMWARE section. --midi gives the app a fake MIDI device
 // (platform/host/fake_midi.h: the MIDI section of the system Config, the routes, the clock); a scenario that has a `midi` or `clock` line gets
-// one without the option, and an app run without one sees the platform it had before MIDI existed. --usb gives it a fake USB port and computer (platform/host/fake_usb_audio.h; a scenario with a usb, usbwav or card disk line makes one too). --audio-in gives it a fake codec input and FM radio (platform/host/fake_capture.h: the
+// one without the option, and an app run without one sees the platform it had before MIDI existed. --backlight (or an `expect backlight` line) gives it a backlight for the Config's BRIGHTNESS and PAD LIGHTS rows. --usb gives it a fake USB port and computer (platform/host/fake_usb_audio.h; a scenario with a usb, usbwav or card disk line makes one too). --audio-in gives it a fake codec input and FM radio (platform/host/fake_capture.h: the
 // AUDIO section of the system Config, Context::audio_in() and radio()); a scenario that has an `input` or `radio` line gets one without the option, and an app run without one has no
 // audio in and a silent input. --card DIR makes the directory (created when it is not there) the app's SD card
 // (platform/host/dir_card.h): Context::files() saves and loads there, under DIR/Apps/<app>/, the kit keeps the theme and the MIDI settings in DIR/Apps/<app>/system.o3s, and a scenario may
@@ -33,7 +33,7 @@
 namespace {
 
 void usage(const char* argv0) {
-  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--card DIR]\n", argv0);
+  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--backlight] [--card DIR]\n", argv0);
 }
 
 // Does the scenario text have a `midi` or `clock` command (the first word of a line)?
@@ -44,6 +44,21 @@ bool uses_midi(const std::string& text) {
     std::istringstream words(line.substr(0, line.find('#')));
     std::string first;
     if ((words >> first) && (first == "midi" || first == "clock")) {
+      return true;
+    }
+  }
+  return false;
+}
+
+// Does the scenario text have an `expect backlight` line?
+bool uses_backlight(const std::string& text) {
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream words(line.substr(0, line.find('#')));
+    std::string first;
+    std::string second;
+    if ((words >> first >> second) && first == "expect" && second == "backlight") {
       return true;
     }
   }
@@ -102,6 +117,7 @@ int main(int argc, char** argv) {
   bool midi = false;
   bool audio_in = false;
   bool usb = false;
+  bool backlight = false;
   long ms = 500;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -116,6 +132,8 @@ int main(int argc, char** argv) {
       firmware_dir = argv[++i];
     } else if (std::strcmp(a, "--card") == 0 && has_value) {
       card_dir = argv[++i];
+    } else if (std::strcmp(a, "--backlight") == 0) {
+      backlight = true;
     } else if (std::strcmp(a, "--midi") == 0) {
       midi = true;
     } else if (std::strcmp(a, "--audio-in") == 0) {
@@ -165,6 +183,7 @@ int main(int argc, char** argv) {
   }
   o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware, (midi || uses_midi(scenario_text)) ? &fake_midi : nullptr, card.get(), nullptr,
                     (audio_in || uses_capture(scenario_text)) ? &fake_capture : nullptr, (usb || uses_usb(scenario_text)) ? &fake_usb : nullptr);
+  h.set_backlight(backlight || uses_backlight(scenario_text));
   if (!h.start()) {
     // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
     if (h.engine().setup_errors() != 0u) {

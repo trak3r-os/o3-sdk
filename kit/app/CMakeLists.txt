@@ -6,5 +6,5 @@
 # kit's own settings kept on the card), and recording (recorder.h: Context::recorder(), slice RC). Depends on ui (and through it eve, hal, core), dsp and formats. See docs/FRAMEWORK.md.
 o3sdk_library(app SOURCES src/panel.cpp src/param_keys.cpp src/widgets.cpp src/runtime.cpp src/firmware_flow.cpp src/system_config.cpp
   src/system_firmware_page.cpp src/system_midi_page.cpp src/system_audio_page.cpp src/system_card_page.cpp src/usb_audio.cpp src/midi.cpp src/audio_in.cpp src/radio.cpp
-  src/atomic_save.cpp src/og_timing.cpp src/dir_index.cpp src/dir_scan.cpp src/text_entry.cpp
+  src/config_page.cpp src/file_picker.cpp src/name_entry.cpp src/atomic_save.cpp src/og_timing.cpp src/dir_index.cpp src/dir_scan.cpp src/text_entry.cpp
   src/settings.cpp src/save_sources.cpp src/files.cpp src/recorder.cpp DEPENDS ui dsp formats)

@@ -62,6 +62,10 @@ void put_u16(std::FILE* f, std::uint16_t v) {
   std::fwrite(b, 1, 2, f);
 }
 
+// What the platform's backlight was last told (Platform::backlight is a plain function, so the duty is the process's: one harness at a time).
+std::uint8_t g_backlight_duty = 0;
+void record_backlight(std::uint8_t duty) noexcept { g_backlight_duty = duty; }
+
 }  // namespace
 
 Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi, platform::host::HostCard* card, const char* app_id,
@@ -95,12 +99,27 @@ Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform:
 
 Harness::~Harness() = default;
 
+void Harness::set_backlight(bool on) {
+  if (backlight_ != on) {
+    backlight_ = on;
+    make_runtime();  // (before start(): the platform is what the section list was made from)
+  }
+}
+
+unsigned Harness::backlight_duty() const { return g_backlight_duty; }
+
+void Harness::set_crash_line(const char* text) {
+  crash_ = text;
+  make_runtime();
+}
+
 // The platform and the runtime over the engine in hand (the card's work memory is made afresh: a restart starts from nothing).
 void Harness::make_runtime() {
   files_work_ = protect_ != nullptr ? std::make_unique<app::Files::Work>() : nullptr;
   recorder_ = std::make_unique<platform::mk66::audio::RecordService>();
   platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr, capture_,
-                                                           recorder_.get(), usb_ != nullptr ? &usb_->device() : nullptr});
+                                                           recorder_.get(), usb_ != nullptr ? &usb_->device() : nullptr, backlight_ ? &record_backlight : nullptr, crash_});
+  g_backlight_duty = 0;
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
 }
 

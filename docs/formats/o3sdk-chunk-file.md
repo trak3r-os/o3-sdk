@@ -38,5 +38,5 @@ The shape of track3r-os's settings and project files (`docs/formats/o3-project.m
 
 | File | Type | Chunks |
 |---|---|---|
-| `Apps/<app>/system.o3s` | `O3SK` | `SETS`, reserved `APPV`, `LRNB` (`o3sdk-settings.md`) |
+| `Apps/<app>/system.o3s` | `O3SK` | `SETS`, `APPV`, `LRNB` (`o3sdk-settings.md`) |
 | HELLO's `riff.o3a` | `HRIF` | `RIFF` (`apps/hello/src/hello_app.cpp`) |

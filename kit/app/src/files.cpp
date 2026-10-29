@@ -100,6 +100,9 @@ bool ScopedWriter::in_scope(const char* path) const noexcept {
     }
     return path[n] == '\0' || path[n] == '/';
   };
+  if (scope_ == Scope::Screenshots) {  // the kit's screenshot: the one folder (hal/screenshot_file.h names its files)
+    return under(hal::storage::save::kScreenshotsDir, sizeof hal::storage::save::kScreenshotsDir - 1u);
+  }
   if (under(guard::kSamplesDir, sizeof guard::kSamplesDir - 1u)) {
     return true;
   }

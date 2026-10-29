@@ -17,9 +17,16 @@
 //   follows with no change; Play and Stop then ask the master's device instead (Engine::play). With the engine playing, the clock and the
 //   transport go out on the ports the user chose, and a hook may send its own messages with BlockContext::send_midi.
 //
+//   Learn. learn(unit, param) arms the next control change (controllers 0 .. 119, any port): it is bound to that parameter of the unit, and from then on moves it (core/learn.h; PICKUP by
+//   default: a knob does nothing until it has reached the parameter, so a value never jumps). A bound controller no longer reaches App::midi(). One controller moves one parameter and a
+//   parameter has one controller: a new binding takes the old one's place. At most kMaxBindings bindings, kept in the kit's settings (`LRNB` of Apps/<app>/system.o3s: they are about the
+//   user's controller, not about the app's patterns, so they follow the unit and not a pattern file) and given back at boot. Main loop only.
+//
 //   Settings. config() and set_config() are the user's (hal::midi::Config); the MIDI section of the system Config edits them, so an app that
 //   sets them in setup() sets the defaults. Main loop only, except the route table, which the render reads (single writer, one word an entry).
 
+#include <o3sdk/app/settings.h>
+#include <o3sdk/core/learn.h>
 #include <o3sdk/core/midi_types.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/midi.h>
@@ -34,6 +41,7 @@ class Runtime;
 class Midi {
  public:
   static constexpr unsigned kMaxRoutes = 4;
+  static constexpr unsigned kMaxBindings = kLearnStoreSlots;
 
   Midi() noexcept;
 
@@ -47,6 +55,23 @@ class Midi {
   // Takes `unit` off the routes. false: it was not routed.
   bool unroute(dsp::UnitId unit) noexcept;
   unsigned routes() const noexcept;
+
+  // ---- Learn ----------------------------------------------------------------------------------------------------------------------------
+  // Arms learn for parameter `param` (the unit's parameter id) of `unit`: the next control change binds. false, nothing armed: no engine, `unit` or `param` unknown, or the parameter is one
+  // that applies on a confirmation (kParamApply: never learnable). Arming again re-aims it; an unbound parameter that is armed and then bound takes a free slot (false at the store's
+  // limit, reported when the controller arrives: Learned::Full).
+  bool learn(dsp::UnitId unit, std::uint16_t param, core::LearnMode mode = core::LearnMode::Pickup) noexcept;
+  void learn_cancel() noexcept { armed_ = false; }
+  bool learning() const noexcept { return armed_; }
+  // Takes the binding of `param` off. false: it had none.
+  bool unlearn(dsp::UnitId unit, std::uint16_t param) noexcept;
+  void unlearn_all() noexcept;
+  unsigned bindings() const noexcept;
+  // The controller (0 .. 119) and channel (0: every) bound to `param`, or false.
+  bool bound(dsp::UnitId unit, std::uint16_t param, std::uint8_t& cc, std::uint8_t& channel) const noexcept;
+  // What the last controller that learn took was (for the screen's feedback); valid after Learned::Bound.
+  std::uint8_t learned_cc() const noexcept { return learned_cc_; }
+  std::uint8_t learned_channel() const noexcept { return learned_channel_; }
 
   // ---- Settings and traffic ------------------------------------------------------------------------------------------------------------
   const hal::midi::Config& config() const noexcept { return cfg_; }
@@ -63,7 +88,13 @@ class Midi {
 
  private:
   friend class Runtime;
-  void bind(hal::midi::Device* dev, const dsp::Engine* engine) noexcept {
+  // What the runtime does with a control change before the app sees it.
+  enum class Learned : std::uint8_t { No, Bound, Full, Moved };  // No: not for learn; Bound: the armed parameter now has it; Full: armed and the store is full (nothing bound); Moved: a binding took it
+  Learned take_cc(const core::MidiMessage& m) noexcept;
+  void fill(KitValues& v) const noexcept;
+  void restore(const KitValues& v) noexcept;
+
+  void bind(hal::midi::Device* dev, dsp::Engine* engine) noexcept {
     dev_ = dev;
     engine_ = engine;
   }
@@ -76,11 +107,20 @@ class Midi {
   static constexpr std::uint16_t kFree = 0xFFFFu;  // unit kNoUnit: no route has it
 
   hal::midi::Device* dev_ = nullptr;
-  const dsp::Engine* engine_ = nullptr;
+  dsp::Engine* engine_ = nullptr;
   hal::midi::Config cfg_;  // main loop
   // The render reads these: the route entries are (unit << 8 | channel) words, written one at a time by the main loop; the user's channel is a byte.
   std::atomic<std::uint16_t> route_[kMaxRoutes];
   std::atomic<std::uint8_t> user_channel_{0};
+  // Learn: main loop only (the render never reads it; a CC moves a parameter through the engine's own main-side calls).
+  core::LearnBinding slot_[kMaxBindings] = {};
+  core::LearnRuntime state_[kMaxBindings] = {};
+  bool armed_ = false;
+  dsp::UnitId armed_unit_ = dsp::kNoUnit;
+  std::uint16_t armed_param_ = 0;
+  core::LearnMode armed_mode_ = core::LearnMode::Pickup;
+  std::uint8_t learned_cc_ = 0;
+  std::uint8_t learned_channel_ = 0;
 };
 
 }  // namespace o3sdk::app

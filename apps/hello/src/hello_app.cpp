@@ -8,7 +8,12 @@
 //   PARAMS        next page of values (SYNTH, DELAY); SHIFT + PARAMS: the previous one
 //   PLAY          the demo riff on and off (a clocked hook of the engine plays it, sample-accurate)
 //   UP / DOWN     tempo +-1 BPM (SHIFT: +-10)
-//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, AUDIO (the input's source, gain and monitor; the radio), MIDI, DISPLAY (the theme), INFO
+//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, AUDIO (the input's source, gain and monitor; the radio), MIDI, CARD, DISPLAY (the theme, BRIGHTNESS and PAD LIGHTS),
+//                 INFO, and HELLO's own page after them: TEMPO and RIFF SHIFT (values the kit keeps in the settings file) and DEFAULT RIFF (an action: F1 asks, F1 again runs it)
+//   PATTERN       a list of the riffs on the card (Apps/hello/*.o3a, app::FilePicker): the encoder or UP / DOWN choose, F1 loads it, F8 leaves
+//   MASTER        MIDI LEARN (Context::midi().learn()): the next control change moves the value the encoder points at, from then on and after a restart (the kit keeps the binding); MASTER
+//                 again, before one arrives, leaves learn. The LEARN line on the screen says what it waits for or which controller moves the value.
+//   COPY          SAVE AS: the on-screen keyboard (app::NameEntry) asks for a name and saves the riff as Apps/hello/<name>.o3a (F1 types, DELETE erases, F7 OK, F8 cancels)
 //   MIDI          notes on the channel the user chose in the Config's MIDI section (any, by default) play SYNTH, frame-accurate; with FOLLOW on
 //                 there, the riff and the tempo follow a MIDI clock on DIN or USB (the riff is a clocked hook; it needs nothing to do so)
 //   INSERT        the riff up a semitone (SHIFT: down), so that there is something to save; DELETE puts the default riff back
@@ -25,6 +30,8 @@
 
 #include <o3sdk/app/app.h>
 #include <o3sdk/app/context.h>
+#include <o3sdk/app/file_picker.h>
+#include <o3sdk/app/name_entry.h>
 #include <o3sdk/app/param_keys.h>
 #include <o3sdk/app/screen.h>
 #include <o3sdk/app/widgets.h>
@@ -275,6 +282,12 @@ class PlayScreen final : public app::Screen {
 
   const char* title() const noexcept override { return "PLAY"; }
 
+  // The file picker and the name entry the app opens over this screen (drawn last, with their own soft keys).
+  void set_overlays(app::FilePicker* picker, app::NameEntry* names) noexcept {
+    picker_ = picker;
+    names_ = names;
+  }
+
   // For the console's `state` (HelloApp::describe_state).
   int octave() const noexcept { return octave_; }
   // A line of the app's own about the last file job, shown in place of the files service's text ("BAD FILE": the load worked and the file was not a riff). nullptr: none.
@@ -371,7 +384,8 @@ class PlayScreen final : public app::Screen {
            Face::Label);
     r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG system", Color::TextDim, Face::Label);
     r.text(16, hy + 40, "INSERT riff +1 (SHIFT -1)   DELETE default riff   FILE save the riff   SAMPLE LOAD load it", Color::TextDim, Face::Label);
-    draw_rec(ctx, r, 16, hy + 70);
+    r.text(16, hy + 60, "PATTERN pick a riff   COPY save it as...   MASTER learn the CC that moves the value (then turn a knob)", Color::TextDim, Face::Label);
+    draw_rec(ctx, r, 16, hy + 90);
     // The card and the last job of the files service (Context::files()): polled, never waited for.
     const app::Files& files = ctx.files();
     const app::Files::Status fs = files.status();
@@ -381,10 +395,44 @@ class PlayScreen final : public app::Screen {
     r.text(rx + 48, area.y + 120, note_ != nullptr ? note_ : (fs.phase == app::Files::Status::Idle ? "-" : fs.text),
            note_ != nullptr || fs.phase == app::Files::Status::Failed ? Color::Accent : Color::Text, Face::Label);
 
+    {
+      // MIDI LEARN (MASTER): what it waits for, or the controller that moves the value the encoder points at.
+      const app::ParamPage* page = keys_.page();
+      std::uint8_t cc = 0;
+      std::uint8_t ch = 0;
+      char line[40];
+      char* p = line;
+      if (ctx.midi().learning()) {
+        p = put_str(line, "MOVE A KNOB");
+      } else if (page != nullptr && keys_.focus() < page->count && ctx.midi().bound(page->unit, page->ids[keys_.focus()], cc, ch)) {
+        p = put_str(line, "CC ");
+        p = put_uint(p, cc);
+      } else {
+        p = put_str(line, "MASTER binds");
+      }
+      *p = '\0';
+      r.text(rx, area.y + 140, "LEARN", Color::TextDim, Face::Label);
+      r.text(rx + 48, area.y + 140, line, ctx.midi().learning() ? Color::Accent : Color::Text, Face::Label);
+    }
     app::knob_strip(r, Rect{0, area.y + area.h - app::kKnobStripH, ui::kScreenW, app::kKnobStripH}, ctx.engine(), keys_);
+    if (picker_ != nullptr && picker_->active()) {
+      r.panel(area, Color::Pane);
+      picker_->draw(r, area);
+    }
+    if (names_ != nullptr && names_->active()) {
+      names_->draw(r, area);
+    }
   }
 
   void soft_keys(app::Context& ctx, app::SoftKeys& out) noexcept override {
+    if (picker_ != nullptr && picker_->active()) {
+      picker_->soft_keys(out);
+      return;
+    }
+    if (names_ != nullptr && names_->active()) {
+      names_->soft_keys(out);
+      return;
+    }
     const app::ParamPage* p = keys_.page();
     if (p == nullptr) {
       return;
@@ -461,6 +509,8 @@ class PlayScreen final : public app::Screen {
   app::ParamKeys keys_;
   int octave_ = 0;
   const char* note_ = nullptr;
+  app::FilePicker* picker_ = nullptr;
+  app::NameEntry* names_ = nullptr;
   int held_[app::kPadCount] = {};
 };
 
@@ -469,6 +519,14 @@ class PlayScreen final : public app::Screen {
 constexpr std::uint32_t kDelayCapacity = 88'200;  // 2 s at 44.1 kHz, each side
 O3SDK_BIG float g_delay_l[kDelayCapacity];
 O3SDK_BIG float g_delay_r[kDelayCapacity];
+
+// HELLO's page of the system Config screen (app/config_page.h): two values the kit keeps for it and one action. A key is never reused (a settings file keeps meaning what it meant).
+constexpr std::uint16_t kCfgTempo = 1;
+constexpr std::uint16_t kCfgShift = 2;
+constexpr std::uint16_t kCfgReset = 3;
+constexpr core::ParamDesc kTempoDesc = {"TEMPO", "BPM", nullptr, nullptr, 40.0f, 240.0f, 120.0f, 200, 10, 0, core::ParamUnit::Int, core::ParamCurve::Linear, 0, 0};
+constexpr core::ParamDesc kShiftDesc = {"RIFF SHIFT", "st", nullptr, nullptr, -12.0f, 12.0f, 0.0f, 24, 12, 0, core::ParamUnit::Int, core::ParamCurve::Linear, 0, 0};
+constexpr app::ConfigItem kCfgItems[] = {{kCfgTempo, "TEMPO", &kTempoDesc}, {kCfgShift, "RIFF SHIFT", &kShiftDesc}, {kCfgReset, "DEFAULT RIFF", nullptr}};
 
 class HelloApp final : public app::App {
  public:
@@ -488,7 +546,33 @@ class HelloApp final : public app::App {
     riff_.set_unit(synth);
     (void)e.add_hook(riff_);
     play_.init(synth, delay, &riff_, &rec_);
+    play_.set_overlays(&picker_, &names_);
     ctx.show(play_);
+  }
+
+  unsigned config_pages() const noexcept override { return 1; }
+  bool config_page(unsigned index, app::ConfigPage& out) const noexcept override {
+    out = app::ConfigPage{"HELLO", kCfgItems, sizeof kCfgItems / sizeof kCfgItems[0]};
+    return index == 0;
+  }
+  float config_get(const app::Context& ctx, std::uint16_t key) const noexcept override {
+    if (key == kCfgTempo) {
+      return static_cast<float>(ctx.engine().own_tempo()) / 1000.0f;
+    }
+    return key == kCfgShift ? static_cast<float>(riff_.shift()) : 0.0f;
+  }
+  void config_set(app::Context& ctx, std::uint16_t key, float value) noexcept override {
+    if (key == kCfgTempo) {
+      (void)ctx.engine().set_tempo(static_cast<std::uint32_t>(value * 1000.0f + 0.5f));
+    } else if (key == kCfgShift) {
+      riff_.transpose(static_cast<int>(value) - riff_.shift());
+    }
+  }
+  void config_run(app::Context& ctx, std::uint16_t key) noexcept override {
+    if (key == kCfgReset) {
+      riff_.reset();
+      ctx.redraw();
+    }
   }
 
   // The console's `state` after the kit's pairs (docs/FRAMEWORK.md section 5): the keyboard octave, the page of values and the one the
@@ -509,6 +593,14 @@ class HelloApp final : public app::App {
     w.sint("riff", riff_.shift());
     w.num("theme", static_cast<std::uint32_t>(ctx.theme()));
     w.num("midich", ctx.midi().config().channel);
+    w.str("learn", ctx.midi().learning() ? "armed" : "idle");
+    w.num("bound", ctx.midi().bindings());
+    {
+      std::uint8_t cc = 0;
+      std::uint8_t ch = 0;
+      const bool has = page != nullptr && focus < page->count && ctx.midi().bound(page->unit, page->ids[focus], cc, ch);
+      w.sint("cc", has ? static_cast<int>(cc) : -1);  // the controller bound to the value the encoder points at
+    }
     if (ctx.recorder().available()) {  // the recorder: its state, the frames of the take and those that did not fit, and what REC arms next
       const hal::record::State st = ctx.recorder().state();
       w.str("rec", st == hal::record::State::Idle ? "idle" : (st == hal::record::State::Waiting ? "waiting" : (st == hal::record::State::Listening ? "listening" : (st == hal::record::State::Recording ? "recording" : "done"))));
@@ -523,6 +615,7 @@ class HelloApp final : public app::App {
 
   // The riff's file jobs end here: a load that is Done puts the riff in place (the file is checked first: a damaged or foreign one changes nothing and says so).
   void update(app::Context& ctx) noexcept override {
+    picker_.update(ctx);
     if (op_ == Op::None) {
       return;
     }
@@ -542,6 +635,45 @@ class HelloApp final : public app::App {
 
   bool input(app::Context& ctx, const app::Input& in) noexcept override {
     dsp::Engine& e = ctx.engine();
+    if (picker_.active() || names_.active()) {  // a list or the keyboard is up: it takes every control (a release goes by: nothing here waits for one)
+      if (picker_.active() && picker_.input(ctx, in) == app::FilePicker::Result::Chosen && !ctx.files().busy()) {
+        op_ = ctx.files().load("", picker_.chosen().name, load_buf_, sizeof load_buf_) ? Op::Loading : Op::None;
+        play_.set_note(nullptr);
+      } else if (names_.active() && names_.input(in) == app::NameEntry::Result::Done && !ctx.files().busy()) {
+        char file[40];
+        std::size_t n = 0;
+        for (const char* c = names_.text(); *c != '\0' && n + 5u < sizeof file; ++c) {
+          file[n++] = *c;
+        }
+        std::memcpy(file + n, ".o3a", 5);
+        const std::size_t size = riff_.write(save_buf_, sizeof save_buf_);
+        play_.set_note(nullptr);
+        op_ = size != 0u && ctx.files().save("", file, save_buf_, size) ? Op::Saving : Op::None;
+      }
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::Master) && !in.shift) {  // MIDI LEARN on the value the encoder points at
+      app::Midi& midi = ctx.midi();
+      const app::ParamPage* page = play_.keys().page();
+      if (midi.learning()) {
+        midi.learn_cancel();
+      } else if (page != nullptr && play_.keys().focus() < page->count) {
+        (void)midi.learn(page->unit, page->ids[play_.keys().focus()]);
+      }
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::Pattern) && !in.shift) {
+      (void)picker_.open(ctx, "LOAD A RIFF (Apps/hello)", "", "o3a");
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::Copy) && !in.shift) {
+      names_.open("SAVE THE RIFF AS", "riff");
+      ctx.redraw();
+      return true;
+    }
     if (in.press(Button::Play)) {
       (void)(e.playing() ? e.stop() : e.play());
       ctx.redraw();
@@ -664,6 +796,8 @@ class HelloApp final : public app::App {
     }
   }
 
+  app::BasicFilePicker<16> picker_;
+  app::NameEntry names_;
   units::Synth synth_;
   units::Delay delay_{g_delay_l, g_delay_r, kDelayCapacity};
   Riff riff_;

@@ -1,9 +1,12 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <o3sdk/app/runtime.h>
 
+#include <o3sdk/app/brightness.h>
 #include <o3sdk/app/firmware_flow.h>
 #include <o3sdk/ui/assets.h>
 #include <o3sdk/ui/components.h>
+
+#include "sys_text.h"
 
 namespace o3sdk::app {
 
@@ -120,7 +123,7 @@ std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
 
 Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
     : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr, platform.capture != nullptr, platform.usb_audio != nullptr,
-           platform.storage != nullptr && platform.writer != nullptr && platform.files_work != nullptr) {
+           platform.storage != nullptr && platform.writer != nullptr && platform.files_work != nullptr, platform.backlight != nullptr, platform.backlight != nullptr && platform.leds != nullptr, platform.crash) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
   ctx_.midi_.bind(platform_.midi, &engine_);
@@ -143,7 +146,49 @@ KitValues Runtime::kit_values() const noexcept {
   v.radio_region = static_cast<std::uint8_t>(ctx_.radio_.region());
   v.radio_freq = static_cast<std::uint16_t>(ctx_.radio_.freq());
   ctx_.usb_audio_.fill(v);
+  v.brightness = ctx_.brightness_;
+  v.pad_lights = ctx_.pad_lights_;
+  ctx_.midi_.fill(v);
+  // The values of the app's pages, clamped into their descriptors: what config_get() gives now.
+  const ConfigView& cv = ctx_.config_;
+  for (unsigned p = 0; p < cv.pages; ++p) {
+    for (unsigned i = 0; i < cv.page[p].count; ++i) {
+      const ConfigItem* it = ((cv.page[p].mask >> i) & 1u) != 0u ? &cv.page[p].items[i] : nullptr;
+      if (it != nullptr && it->value != nullptr && v.app_count < kAppValueSlots) {
+        v.app_key[v.app_count] = it->key;
+        v.app_value[v.app_count] = core::param_clamp(*it->value, app_.config_get(ctx_, it->key));
+        ++v.app_count;
+      }
+    }
+  }
   return v;
+}
+
+// The loaded settings over the app's: the display, the learn bindings, and the values of the app's pages (set only where they differ from what the app has, so a card that holds what setup()
+// set costs the app nothing; a value of an item the app no longer has is dropped, one outside its descriptor is clamped).
+void Runtime::apply_kit_app(const KitValues& v) noexcept {
+  ctx_.brightness_ = v.brightness > 2u ? 2u : v.brightness;
+  ctx_.pad_lights_ = v.pad_lights > 2u ? 2u : v.pad_lights;
+  ctx_.midi_.restore(v);
+  for (unsigned i = 0; i < v.app_count && i < kAppValueSlots; ++i) {
+    const ConfigItem* it = ctx_.config_.find_value(v.app_key[i]);
+    if (it == nullptr) {
+      continue;
+    }
+    const float value = core::param_clamp(*it->value, v.app_value[i]);
+    if (app_.config_get(ctx_, it->key) != value) {
+      app_.config_set(ctx_, it->key, value);
+    }
+  }
+  apply_display();
+}
+
+// The backlight is told only what it was not: a setting that is high (the default) is the hardware's own and costs nothing.
+void Runtime::apply_display() noexcept {
+  if (platform_.backlight != nullptr && ctx_.brightness_ != backlight_applied_) {
+    backlight_applied_ = ctx_.brightness_;
+    platform_.backlight(backlight_duty(ctx_.brightness_));
+  }
 }
 
 // The loaded audio choice over the app's: only what differs from what is in place is applied, so that a card that holds the defaults (an app that never used audio in) costs the codec nothing
@@ -166,6 +211,7 @@ Files::SettingsLoad Runtime::load_settings() noexcept {
     ctx_.theme_ = v.theme;
     ctx_.midi_.set_config(v.midi);
     apply_kit_audio(v);
+    apply_kit_app(v);
     ctx_.redraw_ = true;
   }
   return result;
@@ -177,6 +223,7 @@ bool Runtime::start() noexcept {
   const bool assets = ui::upload_assets(platform_.display) == hal::UploadResult::Ok;
   ctx_.midi_.push_config();  // (the device starts from the kit's defaults; App::setup may change them)
   app_.setup(ctx_);
+  ctx_.config_.build(app_);  // (the app's Config pages: constexpr tables, read once)
   engine_.start();
   switch_screen();
   started_ = true;
@@ -269,6 +316,7 @@ void Runtime::poll() noexcept {
     ctx_.theme_ = loaded.theme;
     ctx_.midi_.set_config(loaded.midi);
     apply_kit_audio(loaded);
+    apply_kit_app(loaded);
     ctx_.redraw_ = true;
   }
   Files::Strip line;
@@ -276,8 +324,9 @@ void Runtime::poll() noexcept {
     system_strip(line.text, line.progress, line.result ? SystemConfig::kNoticeMs : SystemConfig::kStripMs);
   }
 
+  apply_display();
   const std::uint32_t since = core::tick_elapsed(ctx_.now_, next_frame_ - kFrameUs);
-  if (core::tick_reached(ctx_.now_, next_frame_) || (ctx_.redraw_ && since >= kMinFrameUs)) {
+  if (!held_ && (core::tick_reached(ctx_.now_, next_frame_) || (ctx_.redraw_ && since >= kMinFrameUs))) {
     // A frame the display was too busy to take (its last swap still pending, up to about 18.5 ms on the FT812) is tried again on
     // the next pass, the request kept; any other outcome waits for the next period.
     if (draw() || !busy_) {
@@ -331,12 +380,17 @@ void Runtime::draw_header(ui::Renderer& r) noexcept {
   }
 
   const dsp::EngineStats s = engine_.stats();
-  char tempo[12];
-  format_tempo(engine_.tempo(), tempo);
-  const int tempo_x = 500;
-  r.text(tempo_x, data_y, tempo, Color::ChromeText, Face::Data);
-  r.text(tempo_x + r.text_width(tempo, Face::Data) + 4, label_y, "BPM", Color::ChromeDim, Face::Label);
-  (void)ui::transport_badge(r, 610, 5, kHeaderH - 10, s.playing);
+  const HeaderStyle style = app_.header();
+  if (style.tempo) {
+    char tempo[12];
+    format_tempo(engine_.tempo(), tempo);
+    const int tempo_x = 500;
+    r.text(tempo_x, data_y, tempo, Color::ChromeText, Face::Data);
+    r.text(tempo_x + r.text_width(tempo, Face::Data) + 4, label_y, "BPM", Color::ChromeDim, Face::Label);
+  }
+  if (style.transport) {
+    (void)ui::transport_badge(r, 610, 5, kHeaderH - 10, s.playing);
+  }
   if (platform_.cpu_meter) {
     char cpu[12];
     format_percent(cpu_percent(s), cpu);
@@ -366,8 +420,9 @@ void Runtime::update_leds() noexcept {
     ctx_.screen_->leds(ctx_, leds_);
   }
   if (platform_.leds != nullptr) {
+    const unsigned lights = ctx_.pad_lights_;
     for (unsigned i = 0; i < kPadCount; ++i) {
-      platform_.leds->set(i, leds_.get(i));
+      platform_.leds->set(i, lights >= 2u ? leds_.get(i) : scale_pad_level(leds_.get(i), lights));
     }
   }
 }
@@ -392,6 +447,7 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
   w.str("fw", firmware_phase_name(sys_.firmware().phase));
   w.str("card", card_name(ctx_.files_.card()));
   w.str("files", files_phase_name(ctx_.files_.status().phase));
+  w.num("setup_errors", engine_.setup_errors());
   if (ctx_.audio_in_.available()) {
     w.str("in", source_name(ctx_.audio_in_.source()));
     w.num("gain", ctx_.audio_in_.gain());
@@ -448,9 +504,29 @@ void Runtime::poll_midi() noexcept {
   dsp::UnitId units[Midi::kMaxRoutes];
   for (unsigned n = 0; n < kMidiPerPass && dev->poll(m); ++n) {
     if (!deaf && ctx_.midi_.match(m, units) == 0u) {  // (a routed note went to its unit in the render)
-      (void)app_.midi(ctx_, m);
+      const Midi::Learned took = ctx_.midi_.take_cc(m);  // a controller that learn is waiting for, or one that is bound, is the kit's
+      if (took == Midi::Learned::No) {
+        (void)app_.midi(ctx_, m);
+      } else if (took != Midi::Learned::Moved) {
+        learn_notice(took);
+      }
     }
   }
+}
+
+// The strip's word for the end of a learn: which controller was bound, or that there is no room.
+void Runtime::learn_notice(Midi::Learned took) noexcept {
+  core::FixedString<40> text;
+  if (took == Midi::Learned::Bound) {
+    text.assign("LEARNED CC ");
+    append_uint(text, ctx_.midi_.learned_cc());
+    text.append(" CHANNEL ");
+    append_uint(text, ctx_.midi_.learned_channel());
+  } else {
+    text.assign("LEARN: NO ROOM FOR ANOTHER BINDING");
+  }
+  system_strip(text.c_str(), -1, SystemConfig::kNoticeMs);
+  ctx_.redraw_ = true;
 }
 
 // Render context, before the engine: the notes of this block for the routes, at their frames, and the block's transport.

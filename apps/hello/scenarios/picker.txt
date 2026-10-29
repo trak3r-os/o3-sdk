@@ -1,0 +1,45 @@
+# The kit's file picker and name entry on HELLO (kit/app/file_picker.h, name_entry.h; docs/M2C-PLAN.md section 9): COPY asks for a name on the on-screen keyboard (pads type the key under
+# them, F7 is OK) and saves the riff under it; PATTERN lists the riffs of Apps/hello/ and loads the one chosen.
+#
+#   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/picker.txt --card <card> --out <dir>
+wait 100
+expect state card=ready
+# (the app object keeps its riff in memory from one run to the next: start from the default one)
+tap delete
+expect state riff=0
+tap insert
+tap insert
+expect state riff=2
+
+# COPY: the name starts as "riff", all selected; the first key replaces it. Pads 24 and 25 are the keys A and S.
+tap copy
+snap 00_name_entry
+pad 24
+pad 25
+snap 01_typed
+tap f7
+wait 80
+expect state files=done
+expect file Apps/hello/as.o3a
+
+# An empty name is refused (the keyboard says so); then the default riff goes back (DELETE) and AS is loaded back through the picker.
+tap copy
+tap delete
+tap delete
+tap delete
+tap delete
+tap delete
+snap 02_name_empty_refused
+tap f7
+snap 03_refused
+tap f8
+tap delete
+expect state riff=0
+tap pattern
+wait 50
+snap 04_picker
+tap f1
+wait 80
+expect state files=done
+expect state riff=2
+snap 05_loaded

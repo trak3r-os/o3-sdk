@@ -21,11 +21,16 @@ namespace o3sdk::app {
 // the writer's own guard admits Projects/, Settings/, instruments/, AppExport/ as well: the ported tests walk those rows), and the service narrows it here: every change it makes (a
 // folder, a temporary file, a rename, a marker, a removal) is refused with BadPath unless the path is `Apps`, `Apps/<id>` or below it, or `Samples` or below it. Nothing reaches the card
 // from the service otherwise, whatever a bug above builds. Reads, the gate and the card's identity are the writer's. Main loop only.
+//
+// The kit's screenshot (Shift + Power; platform main, the simulator) writes through a second ScopedWriter of Scope::Screenshots, which admits `Screenshots` and below and nothing else: the one
+// folder the kit writes outside the app's own, and never one the app's files() can reach (Files::bind binds Scope::App).
 class ScopedWriter final : public hal::storage::StorageWriter {
  public:
-  void bind(hal::storage::StorageWriter* inner, const char* app_id) noexcept {
+  enum class Scope : std::uint8_t { App, Screenshots };
+  void bind(hal::storage::StorageWriter* inner, const char* app_id, Scope scope = Scope::App) noexcept {
     inner_ = inner;
     id_ = app_id;
+    scope_ = scope;
   }
   // Is `path` one the service may change?
   bool in_scope(const char* path) const noexcept;
@@ -55,6 +60,7 @@ class ScopedWriter final : public hal::storage::StorageWriter {
   }
   hal::storage::StorageWriter* inner_ = nullptr;
   const char* id_ = "";
+  Scope scope_ = Scope::App;
   unsigned refused_ = 0;
 };
 

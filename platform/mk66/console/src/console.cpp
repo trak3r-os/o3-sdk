@@ -797,12 +797,15 @@ class ChipShotPort final : public ShotPort {
 };
 ChipShotPort g_shot_port;
 ShotStream g_shot;
+bool (*g_screenshot_active)() noexcept = nullptr;  // the image's screenshot service says it is running (bind_screenshot)
 
 bool shot_stream(shell::Shell& sh, void*) { return g_shot.step(sh.out(), g_shot_port); }
 
 }  // namespace
 
 bool shot_active() noexcept { return g_shot.active(); }
+
+void bind_screenshot(bool (*active)() noexcept) noexcept { g_screenshot_active = active; }
 
 ShotPort& screenshot_port() noexcept { return g_shot_port; }  // (a getter: the screenshot service, when there is one, clears `pclk0` itself when it starts a capture)
 
@@ -811,7 +814,7 @@ namespace {
 // `shot [565|8888 [w]]`: 565 (default) takes two bands of 240 rows, 8888 (32-bit pixels) six of 80; `w` is what CMD_SNAPSHOT2 is given as its width
 // (default default_width_param: 800 for 565, 1600 for 8888; the chip counts w in 16-bit units), for a hardware session that finds the picture sheared: a larger w
 // makes the bands shorter (ShotStream::start sizes them by what the chip may write, so the region is never overrun). A key press ends the stream and drops a snapshot that is still queued.
-// (The region is ui::plot's kRamGShot, the spare RAM_G up to the app's; there is no screenshot service to share it with, so the "being saved" refusal is cut.)
+// (The region is ui::plot's kRamGShot, the spare RAM_G up to the app's; the image's screenshot service (Shift + Power) shares it, so `shot` is refused while one is being saved.)
 void cmd_shot(shell::Shell& sh, const shell::Args& a) {
   ShotParams params;
   std::uint32_t w = 0;
@@ -823,6 +826,10 @@ void cmd_shot(shell::Shell& sh, const shell::Args& a) {
   }
   if (argc > 3 || (argc >= 2 && !same(a.argv[1], "565") && !same(a.argv[1], "8888")) || (argc == 3 && (!parse_dec(a.argv[2], 4095u, w) || w == 0u))) {
     sh.out().text("usage: shot [565|8888 [w]] [pclk0]\n");
+    return;
+  }
+  if (g_screenshot_active != nullptr && g_screenshot_active()) {  // OS-SCREENSHOT: the same RAM_G region
+    sh.out().text("ERR shot: a screenshot is being saved\n");
     return;
   }
   g_shot_port.stop_clock(pclk0);

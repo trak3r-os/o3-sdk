@@ -7,6 +7,7 @@
 #include <o3sdk/app/settings.h>
 #include <o3sdk/formats/chunk_file.h>
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -105,23 +106,25 @@ TEST_CASE("settings: the keys are the documented ones, in order, and never move"
   CHECK(st::kUsbMapSet == 19);
   CHECK(st::kUsbStem1 == 20);
   CHECK(st::kUsbStem11 == 30);
-  CHECK(st::kKeyCount == 30);
+  CHECK(st::kBrightness == 31);  // slice CP
+  CHECK(st::kPadLights == 32);
+  CHECK(st::kKeyCount == 32);
   CHECK(st::kSetsVersion == 0x0100);
 }
 
 TEST_CASE("settings: the file of the defaults is the documented bytes") {
   const std::vector<std::uint8_t> f = file_of(KitValues{});
-  // FORM, length, O3SK, SETS 4 + 30 * 6 = 184 bytes (even: no pad), CRC.
-  REQUIRE(f.size() == 12 + 8 + 184 + 14);
+  // FORM, length, O3SK, SETS 4 + 32 * 6 = 196 bytes (even: no pad), CRC. No APPV or LRNB: nothing to say.
+  REQUIRE(f.size() == 12 + 8 + 196 + 14);
   CHECK(std::memcmp(f.data(), "FORM", 4) == 0);
   CHECK(std::memcmp(f.data() + 8, "O3SK", 4) == 0);
   CHECK(std::memcmp(f.data() + 12, "SETS", 4) == 0);
   CHECK(f[16] == 0);
-  CHECK(f[19] == 184);
+  CHECK(f[19] == 196);
   CHECK(f[20] == 0x01);  // version 1.0
   CHECK(f[21] == 0x00);
-  CHECK(f[22] == 0x00);  // thirty entries
-  CHECK(f[23] == 0x1E);
+  CHECK(f[22] == 0x00);  // thirty-two entries
+  CHECK(f[23] == 0x20);
   // Entry 1: key 1 (theme), the value 0.0f; entry 2: key 2 (channel, omni 0); entry 3: key 3, out channel 1.0f = 0x3F800000.
   CHECK(f[24] == 0);
   CHECK(f[25] == 1);
@@ -141,7 +144,7 @@ TEST_CASE("settings: every setting round trips, the defaults and a file of chang
     st::Report rep;
     REQUIRE(st::read(f.data(), f.size(), back, rep) == st::Result::Ok);
     CHECK(back == v);
-    CHECK(rep.applied == 30);
+    CHECK(rep.applied == 32);
     CHECK(rep.skipped_keys == 0);
     CHECK(rep.skipped_values == 0);
     CHECK(rep.unknown_chunks == 0);
@@ -164,19 +167,19 @@ TEST_CASE("settings: a key the file lacks keeps the value the app set, one it ha
 
 TEST_CASE("settings: a key this version does not know is skipped and counted, the rest is read") {
   KitValues v;
-  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {31, 0.0f}, {0, 1.0f}});
+  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {33, 0.0f}, {0, 1.0f}});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(v.midi.channel == 5);
   CHECK(v.theme == ui::ThemeId::White);
   CHECK(rep.applied == 2);
-  CHECK(rep.skipped_keys == 3);  // 99, 31 (the next key of a newer firmware) and 0
+  CHECK(rep.skipped_keys == 3);  // 99, 33 (the next key of a newer firmware) and 0
 }
 
 TEST_CASE("settings: a newer minor version is read as far as this version knows it") {
   KitValues v;
-  // Version 1.3 with entries a later firmware appended (key 31, 32) and two extra bytes at the end of the chunk.
-  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {31, 4.0f}, {32, 1.0f}}, 2, [](chunk::Writer&) {});
+  // Version 1.3 with entries a later firmware appended (key 33, 34) and two extra bytes at the end of the chunk.
+  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {33, 4.0f}, {34, 1.0f}}, 2, [](chunk::Writer&) {});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(rep.newer_minor);
@@ -302,7 +305,159 @@ TEST_CASE("settings: a damaged file is refused at every byte and every cut, and 
 TEST_CASE("settings: a buffer that is too small writes nothing") {
   std::uint8_t tiny[40];
   CHECK(st::write(non_default(), tiny, sizeof tiny) == 0);
-  std::uint8_t exact[12 + 8 + 184 + 14];
+  std::uint8_t exact[12 + 8 + 196 + 14];
   CHECK(st::write(non_default(), exact, sizeof exact) == sizeof exact);
   CHECK(st::write(non_default(), nullptr, 0) == 0);
+}
+
+// ---- M2c slice CP: brightness and pad lights (keys 31 and 32), the app's page values (APPV) and the learn bindings (LRNB) -----------------------------------------------------------------
+
+namespace {
+
+core::LearnBinding binding(unsigned unit, unsigned field, unsigned cc, unsigned channel, core::LearnMode mode) {
+  core::LearnBinding b;
+  b.param = core::param_id(core::ParamKind::Unit, unit, field);
+  b.cc = static_cast<std::uint8_t>(cc);
+  b.channel = static_cast<std::uint8_t>(channel);
+  b.mode = static_cast<std::uint8_t>(mode);
+  b.flags = 0;
+  return b;
+}
+
+KitValues with_extras() {
+  KitValues v = non_default();
+  v.brightness = 0;
+  v.pad_lights = 1;
+  v.app_count = 3;
+  v.app_key[0] = 1;
+  v.app_value[0] = 122.0f;
+  v.app_key[1] = 40000;
+  v.app_value[1] = -7.5f;
+  v.app_key[2] = 3;
+  v.app_value[2] = 0.0f;
+  v.learn[0] = binding(0, 1, 74, 1, core::LearnMode::Pickup);
+  v.learn[1] = binding(1, 300, 11, 0, core::LearnMode::Relative);  // (a read gives the bindings back in order, with no gaps)
+  return v;
+}
+
+}  // namespace
+
+TEST_CASE("settings: brightness and pad lights are keys 31 and 32, 0 to 2, and a value past that is skipped") {
+  KitValues v;
+  CHECK(v.brightness == 2);  // high, the hardware's own, is the default
+  CHECK(v.pad_lights == 2);
+  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kBrightness, 0.0f}, {st::kPadLights, 1.0f}});
+  st::Report rep;
+  REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
+  CHECK(v.brightness == 0);
+  CHECK(v.pad_lights == 1);
+  const std::vector<std::uint8_t> bad = sets_file(0x0100, {{st::kBrightness, 3.0f}, {st::kPadLights, -1.0f}});
+  KitValues w;
+  REQUIRE(st::read(bad.data(), bad.size(), w, rep) == st::Result::Ok);
+  CHECK(rep.skipped_values == 2);
+  CHECK(w.brightness == 2);
+  CHECK(w.pad_lights == 2);
+}
+
+TEST_CASE("settings: the page values and the learn bindings are written as APPV and LRNB and read back, and a file of the defaults has neither") {
+  const std::vector<std::uint8_t> plain = file_of(KitValues{});
+  CHECK(std::search(plain.begin(), plain.end(), "APPV", "APPV" + 4) == plain.end());
+  CHECK(std::search(plain.begin(), plain.end(), "LRNB", "LRNB" + 4) == plain.end());
+  const KitValues v = with_extras();
+  const std::vector<std::uint8_t> f = file_of(v);
+  CHECK(std::search(f.begin(), f.end(), "APPV", "APPV" + 4) != f.end());
+  CHECK(std::search(f.begin(), f.end(), "LRNB", "LRNB" + 4) != f.end());
+  CHECK(f.size() <= st::kMaxBytes);
+  KitValues back;
+  st::Report rep;
+  REQUIRE(st::read(f.data(), f.size(), back, rep) == st::Result::Ok);
+  CHECK(back == v);
+  CHECK(back.app_count == 3);
+  CHECK(back.app_key[1] == 40000);
+  CHECK(back.app_value[1] == -7.5f);
+  CHECK(core::param_index(back.learn[1].param) == 1u);
+  CHECK(core::param_field(back.learn[1].param) == 300u);
+  CHECK(back.learn[1].mode == static_cast<std::uint8_t>(core::LearnMode::Relative));
+  CHECK(rep.unknown_chunks == 0);
+  CHECK(rep.skipped_values == 0);
+  // The values are part of the comparison that decides whether the settings are due: a change of one is a change.
+  KitValues other = v;
+  other.app_value[2] = 1.0f;
+  CHECK(other != v);
+  other = v;
+  other.learn[0].cc = 75;
+  CHECK(other != v);
+  other = v;
+  other.brightness = 1;
+  CHECK(other != v);
+}
+
+TEST_CASE("settings: a binding that is not valid for a unit's parameter, or listens to a message another has, is dropped; a chunk this version cannot read is counted") {
+  KitValues v;
+  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kTheme, 1.0f}}, 0, [](chunk::Writer& w) {
+    REQUIRE(w.begin("LRNB"));
+    REQUIRE(w.u16(0x0100));
+    REQUIRE(w.u16(5));
+    const auto put = [&](core::ParamId id, unsigned cc, unsigned channel, unsigned mode, unsigned flags) {
+      REQUIRE(w.u32(static_cast<std::uint32_t>(id)));
+      REQUIRE(w.u8(static_cast<std::uint8_t>(cc)));
+      REQUIRE(w.u8(static_cast<std::uint8_t>(channel)));
+      REQUIRE(w.u8(static_cast<std::uint8_t>(mode)));
+      REQUIRE(w.u8(static_cast<std::uint8_t>(flags)));
+    };
+    put(core::param_id(core::ParamKind::Unit, 0, 2), 74, 1, 0, 0);        // good
+    put(core::param_id(core::ParamKind::Instrument, 0, 2), 80, 1, 0, 0);  // a kind that is not a unit's: dropped
+    put(core::param_id(core::ParamKind::Unit, 0, 3), 200, 1, 0, 0);       // a controller past 127
+    put(core::param_id(core::ParamKind::Unit, 0, 4), 74, 1, 1, 0);        // the same controller on the same channel: takes it from the first
+    put(core::param_id(core::ParamKind::Unit, 0, 5), 12, 0, 9, 0);        // an unknown mode
+    REQUIRE(w.end());
+    REQUIRE(w.begin("APPV"));
+    REQUIRE(w.u16(0x0200));  // a newer major version
+    REQUIRE(w.u16(0));
+    REQUIRE(w.end());
+  });
+  st::Report rep;
+  REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
+  unsigned bound = 0;
+  for (const core::LearnBinding& b : v.learn) {
+    bound += core::learn_empty(b) ? 0u : 1u;
+  }
+  CHECK(bound == 1u);  // only the fourth survives: it displaced the first
+  CHECK(core::param_field(v.learn[0].param) == 4u);
+  CHECK(rep.skipped_values == 3);
+  CHECK(rep.unknown_chunks == 1);  // the APPV of major 2
+  CHECK(v.app_count == 0);
+  // A second APPV is skipped like any other it does not expect.
+  const std::vector<std::uint8_t> twice = sets_file(0x0100, {{st::kTheme, 1.0f}}, 0, [](chunk::Writer& w) {
+    for (unsigned i = 0; i < 2; ++i) {
+      REQUIRE(w.begin("APPV"));
+      REQUIRE(w.u16(0x0100));
+      REQUIRE(w.u16(1));
+      REQUIRE(w.u16(static_cast<std::uint16_t>(7 + i)));
+      REQUIRE(w.f32(1.0f));
+      REQUIRE(w.end());
+    }
+  });
+  KitValues t;
+  REQUIRE(st::read(twice.data(), twice.size(), t, rep) == st::Result::Ok);
+  CHECK(t.app_count == 1);
+  CHECK(t.app_key[0] == 7);
+  CHECK(rep.unknown_chunks == 1);
+  // A NaN or a key of 0 is no value of an item.
+  const std::vector<std::uint8_t> nan = sets_file(0x0100, {{st::kTheme, 1.0f}}, 0, [](chunk::Writer& w) {
+    REQUIRE(w.begin("APPV"));
+    REQUIRE(w.u16(0x0100));
+    REQUIRE(w.u16(3));
+    REQUIRE(w.u16(5));
+    REQUIRE(w.f32(std::numeric_limits<float>::quiet_NaN()));
+    REQUIRE(w.u16(0));
+    REQUIRE(w.f32(1.0f));
+    REQUIRE(w.u16(6));
+    REQUIRE(w.f32(2.0f));
+    REQUIRE(w.end());
+  });
+  KitValues n;
+  REQUIRE(st::read(nan.data(), nan.size(), n, rep) == st::Result::Ok);
+  CHECK(n.app_count == 1);
+  CHECK(n.app_key[0] == 6);
 }

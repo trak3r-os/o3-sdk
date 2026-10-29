@@ -1,0 +1,97 @@
+# The system Config screen as an app completes it (docs/M2C-PLAN.md section 4, slice CP): HELLO's own page after the kit's (two values the kit keeps, one action), DISPLAY's
+# BRIGHTNESS and PAD LIGHTS, an AUDIO row, MIDI learn (MASTER arms it: the next control change moves the value the encoder points at), and all of it kept across a reboot.
+#
+#   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config_pages.txt --card <card> --audio-in --out <dir>
+#
+# The simulator makes a card of <card> (a fresh directory), a MIDI device (the `midi` lines), a codec input (the AUDIO section, from --audio-in) and, because of the `expect backlight` lines (or with --backlight), the
+# platform's backlight, which the DISPLAY section needs for its BRIGHTNESS and PAD LIGHTS rows. Sections here: AUDIO, MIDI, CARD, DISPLAY, INFO, HELLO.
+wait 100
+expect state card=ready
+tap delete
+expect state riff=0
+snap 00_app
+
+# AUDIO is where the screen opens (no firmware path here). Its rows are the input's: INPUT, GAIN, MONITOR.
+tap config
+wait 50
+expect state section=audio
+tap down
+turn 20
+expect state gain=20
+snap 01_audio_gain
+
+# DISPLAY: BRIGHTNESS (UP / DOWN choose a row) LOW is a fifth of the full light, never dark; PAD LIGHTS a third of the pads' levels.
+tap right
+tap right
+tap right
+expect state section=display
+snap 02_display
+tap down
+turn -2
+expect backlight 20
+snap 03_brightness_low
+tap down
+turn -1
+snap 04_pad_lights_medium
+
+# INFO, then HELLO's own page: TEMPO and RIFF SHIFT are values (the encoder; SHIFT is coarse), DEFAULT RIFF an action that asks twice.
+tap right
+snap 05_info
+tap right
+expect state section=app
+snap 06_hello_page
+turn 2
+tap down
+turn 3
+expect state riff=3
+expect state tempo=122000
+snap 07_values_changed
+tap down
+tap f1
+snap 08_action_asks
+tap down
+snap 09_action_taken_back
+expect state riff=3
+tap f1
+tap f1
+expect state riff=0
+tap up
+turn 2
+expect state riff=2
+
+# The kit keeps the values 1.5 s after the last change: the settings file now has them, and a restart gives them back.
+tap config
+wait 2000
+expect file Apps/hello/system.o3s
+reboot
+wait 100
+expect state riff=2
+expect state tempo=122000
+expect backlight 20
+tap config
+tap right
+tap right
+tap right
+snap 10_display_kept
+tap config
+
+# MIDI learn: MASTER arms it on the value F1 points at; the next control change (channel 1, controller 74) is bound. The knob does nothing until it reaches the value (PICKUP),
+# so a sweep from 0 up crosses it. The binding is kept too.
+tap master
+expect state learn=armed
+snap 11_learn_waiting
+midi usb b0 4a 40
+wait 30
+expect state learn=idle
+expect state bound=1
+expect state cc=74
+midi usb b0 4a 00
+midi usb b0 4a 7f
+wait 30
+snap 12_learn_bound
+wait 2000
+reboot
+wait 100
+expect state bound=1
+expect state cc=74
+snap 13_learn_kept

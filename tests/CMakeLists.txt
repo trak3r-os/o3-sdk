@@ -12,11 +12,11 @@ target_link_libraries(o3sdk_tests PRIVATE app sim platform_host unit_synth unit_
 # (the tests build only with O3SDK_BUILD_TESTS, which also configures platform/mk66 and so platform_host_fat)
 target_link_libraries(o3sdk_tests PRIVATE formats platform_host_fat platform_mk66_save platform_mk66_storage)
 # The hello app end to end (sim_hello_test.cpp, sim_midi_test.cpp, sim_files_test.cpp, sim_record_test.cpp, sim_usb_test.cpp): its library defines o3sdk_app(), which only the tests name. The second
-# to the fourth run apps/hello/scenarios/midi.txt, files.txt and record.txt, which they find through O3SDK_HELLO_SCENARIOS.
+# to the fourth run apps/hello/scenarios/midi.txt, files.txt and record.txt, which they find through O3SDK_HELLO_SCENARIOS (app_config_pages_test.cpp runs config_pages.txt and picker.txt).
 if(TARGET app_hello)
   target_link_libraries(o3sdk_tests PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_hello>")
   get_filename_component(hello_scenarios "${CMAKE_CURRENT_SOURCE_DIR}/../apps/hello/scenarios" ABSOLUTE)
-  set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/sim_midi_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_files_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_record_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_usb_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/app_audio_in_test.cpp PROPERTIES COMPILE_DEFINITIONS "O3SDK_HELLO_SCENARIOS=\"${hello_scenarios}\"")
+  set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/sim_midi_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_files_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_record_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_usb_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/app_audio_in_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/app_config_pages_test.cpp PROPERTIES COMPILE_DEFINITIONS "O3SDK_HELLO_SCENARIOS=\"${hello_scenarios}\"")
 endif()
 o3sdk_strict_warnings(o3sdk_tests)
 # The tree builds without exceptions: REQUIRE then ends the run with std::terminate on a failure, which ctest reports.

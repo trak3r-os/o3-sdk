@@ -2,6 +2,7 @@
 #include <o3sdk/app/system_config.h>
 
 #include <o3sdk/app/app.h>
+#include <o3sdk/app/brightness.h>
 #include <o3sdk/app/context.h>
 #include <o3sdk/app/firmware_flow.h>
 #include <o3sdk/ui/components.h>
@@ -31,6 +32,7 @@ const char* tab_label(Section s) noexcept {
     case Section::Card: return "CARD";
     case Section::Display: return "DISPLAY";
     case Section::Info: return "INFO";
+    case Section::App: return "";
   }
   return "";
 }
@@ -67,15 +69,59 @@ const char* card_state_text(Files::Card c) noexcept {
   return "";
 }
 
+// The three levels of DISPLAY and PAD LIGHTS.
+constexpr const char* kLevelNames[kBrightnessLevels] = {"LOW", "MEDIUM", "HIGH"};
+
+// One row of an app's page: the caption, and the value (or what an action does) at `value_x`.
+void draw_app_rows(ui::Renderer& r, const PageGrid& grid, const Context& ctx, const ConfigView::Page& page, unsigned row, bool asking, std::uint16_t ask_key) noexcept {
+  const ui::Theme& t = r.theme();
+  const ui::Metrics& m = t.metrics;
+  const int value_x = grid.x + 260;
+  const unsigned rows = page.valid();
+  for (unsigned i = 0; i < rows; ++i) {
+    const ConfigItem* it = page.nth(i);
+    if (it == nullptr) {
+      continue;
+    }
+    const int y = grid.y0 + static_cast<int>(i) * grid.pitch;
+    const bool on = i == row;
+    if (on) {
+      r.highlight_row({grid.x - m.pad, y, grid.w + 2 * m.pad, grid.pitch});
+    }
+    char label[kConfigLabelChars + 1];
+    upper_copy(label, sizeof label, it->label);
+    r.text(grid.x + m.pad, ui::caps_y(t, Face::Label, y, grid.pitch), label, on ? Color::SelText : Color::TextDim, Face::Label);
+    core::FixedString<40> text;
+    if (it->value != nullptr) {
+      char num[core::kParamTextChars + 1];
+      const float v = core::param_clamp(*it->value, ctx.app().config_get(ctx, it->key));
+      core::param_format(*it->value, v, num, sizeof num);
+      text.assign(num);
+      if (it->value->unit_text != nullptr && it->value->unit_text[0] != '\0') {
+        text.append(" ");
+        text.append(it->value->unit_text);
+      }
+    } else {
+      text.assign(asking && ask_key == it->key ? "F1 AGAIN TO RUN" : "RUN");
+    }
+    r.text(value_x, ui::caps_y(t, Face::Data, y, grid.pitch), text.c_str(), on ? Color::SelText : Color::Text, Face::Data);
+  }
+  r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0 + static_cast<int>(rows + 1u) * grid.pitch, grid.pitch),
+         "UP / DOWN choose a row.  The encoder and F1 change a value.  An action: F1, then F1 again.", Color::TextDim, Face::Label);
+}
+
 }  // namespace
 
-SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi, bool audio, bool usb, bool card) noexcept
+SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi, bool audio, bool usb, bool card, bool backlight, bool pads, const char* crash) noexcept
     : sink_(firmware),
       build_(build),
       midi_(midi),
       audio_(audio),
       usb_(usb),
       card_(card),
+      backlight_(backlight),
+      pads_(pads),
+      crash_(crash),
       section_(firmware != nullptr && firmware->available() ? Section::Firmware : (audio || usb ? Section::Audio : (midi ? Section::Midi : (card ? Section::Card : Section::Display)))) {}
 
 bool SystemConfig::has(Section s) const noexcept {
@@ -85,7 +131,8 @@ bool SystemConfig::has(Section s) const noexcept {
     case Section::Midi: return midi_;
     case Section::Card: return card_;
     case Section::Display:
-    case Section::Info: break;
+    case Section::Info:
+    case Section::App: break;
   }
   return true;
 }
@@ -98,6 +145,7 @@ const char* SystemConfig::section_name() const noexcept {
     case Section::Card: return "card";
     case Section::Display: return "display";
     case Section::Info: return "info";
+    case Section::App: return "app";
   }
   return "-";
 }
@@ -148,22 +196,41 @@ void SystemConfig::open_list(Context& ctx) noexcept {
   }
 }
 
+// LEFT / RIGHT: the kit's sections in their order, then one tab for each page of the app's, round and round.
 void SystemConfig::move_section(Context& ctx, int dir) noexcept {
+  const unsigned pages = ctx.config_view().pages;
+  const unsigned total = kSectionCount + pages;
   unsigned at = 0;
-  while (at < kSectionCount && kOrder[at] != section_) {
-    ++at;
+  if (section_ == Section::App) {
+    at = kSectionCount + app_page_;
+  } else {
+    while (at < kSectionCount && kOrder[at] != section_) {
+      ++at;
+    }
   }
-  for (unsigned n = 0; n < kSectionCount; ++n) {
-    at = (at + static_cast<unsigned>(dir > 0 ? 1 : kSectionCount - 1u)) % kSectionCount;
+  Section to = section_;
+  unsigned to_page = app_page_;
+  for (unsigned n = 0; n < total; ++n) {
+    at = (at + static_cast<unsigned>(dir > 0 ? 1 : total - 1u)) % total;
+    if (at >= kSectionCount) {
+      to = Section::App;
+      to_page = at - kSectionCount;
+      break;
+    }
     if (has(kOrder[at])) {
+      to = kOrder[at];
       break;
     }
   }
-  if (kOrder[at] == section_) {
+  if (to == section_ && (to != Section::App || to_page == app_page_)) {
     return;
   }
   leave_section(ctx);
-  section_ = kOrder[at];
+  section_ = to;
+  if (to == Section::App) {
+    app_page_ = static_cast<std::uint8_t>(to_page);
+    app_row_ = 0;
+  }
   enter(ctx);
 }
 
@@ -211,6 +278,8 @@ void SystemConfig::input(Context& ctx, const Input& in) noexcept {
     taken = card_input(ctx, in);
   } else if (section_ == Section::Display) {
     taken = display_input(ctx, in);
+  } else if (section_ == Section::App) {
+    taken = app_input(ctx, in);
   }
   if (taken) {
     return;
@@ -481,19 +550,120 @@ bool SystemConfig::card_input(Context& ctx, const Input& in) noexcept {
   return false;
 }
 
+// With the theme alone (no backlight, no pad LEDs) the encoder, UP / DOWN and F1 change it, as they always did; with BRIGHTNESS or PAD LIGHTS UP / DOWN choose a row and the encoder and F1 change it.
 bool SystemConfig::display_input(Context& ctx, const Input& in) noexcept {
-  int dir = 0;
-  if (in.turn()) {
-    dir = in.delta() > 0 ? 1 : -1;
-  } else if (in.press(Button::Down) || (in.press(Button::F1) && !in.shift)) {
-    dir = 1;
-  } else if (in.press(Button::Up)) {
-    dir = -1;
+  const unsigned rows = display_rows();
+  if (display_row_ >= rows) {
+    display_row_ = static_cast<std::uint8_t>(rows - 1u);
   }
-  if (dir == 0) {
+  if (rows > 1u && (in.press(Button::Up) || in.press(Button::Down))) {
+    const int row = static_cast<int>(display_row_) + (in.press(Button::Down) ? 1 : -1);
+    display_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row >= static_cast<int>(rows) ? static_cast<int>(rows) - 1 : row));
+    return true;
+  }
+  int steps = 0;
+  bool wrap = false;
+  if (in.turn()) {
+    steps = in.delta();
+  } else if (in.press(Button::F1) && !in.shift) {
+    steps = 1;
+    wrap = true;
+  } else if (rows == 1u && in.press(Button::Down)) {
+    steps = 1;
+  } else if (rows == 1u && in.press(Button::Up)) {
+    steps = -1;
+  }
+  if (steps == 0) {
     return false;
   }
-  step_theme(ctx, dir);
+  step_display(ctx, rows == 1u ? 0u : display_row_, steps, wrap);
+  return true;
+}
+
+// Row 0 is the theme, then BRIGHTNESS (with a backlight), then PAD LIGHTS (with pad LEDs). A level moves by the encoder's detents, clamped, or by one and round with F1.
+void SystemConfig::step_display(Context& ctx, unsigned row, int steps, bool wrap) noexcept {
+  if (row == 0u) {
+    step_theme(ctx, steps > 0 ? 1 : -1);
+    return;
+  }
+  const bool brightness = backlight_ && row == 1u;
+  const int now = static_cast<int>(brightness ? ctx.brightness() : ctx.pad_lights());
+  int next = now + steps;
+  if (wrap) {
+    next = (next + static_cast<int>(kBrightnessLevels)) % static_cast<int>(kBrightnessLevels);
+  } else {
+    next = next < 0 ? 0 : (next >= static_cast<int>(kBrightnessLevels) ? static_cast<int>(kBrightnessLevels) - 1 : next);
+  }
+  if (brightness) {
+    ctx.set_brightness(static_cast<unsigned>(next));
+  } else {
+    ctx.set_pad_lights(static_cast<unsigned>(next));
+  }
+}
+
+// An app's page: UP / DOWN choose a row; the encoder and F1 change a value (SHIFT: coarse; F1 goes round at the top); F1 on an action asks, the next F1 runs it. Anything else takes the question back.
+bool SystemConfig::app_input(Context& ctx, const Input& in) noexcept {
+  const ConfigView& view = ctx.config_view();
+  if (app_page_ >= view.pages) {
+    return false;
+  }
+  const ConfigView::Page& page = view.page[app_page_];
+  const unsigned rows = page.valid();
+  if (rows == 0u) {
+    return false;
+  }
+  if (app_row_ >= rows) {
+    app_row_ = static_cast<std::uint8_t>(rows - 1u);
+  }
+  if (in.press(Button::Up) || in.press(Button::Down)) {
+    const int row = static_cast<int>(app_row_) + (in.press(Button::Down) ? 1 : -1);
+    app_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row >= static_cast<int>(rows) ? static_cast<int>(rows) - 1 : row));
+    disarm();
+    return true;
+  }
+  const ConfigItem* item = page.nth(app_row_);
+  if (item == nullptr) {
+    return false;
+  }
+  const bool f1 = in.press(Button::F1) && !in.shift;
+  if (item->value == nullptr) {  // an action
+    if (in.turn()) {
+      disarm();
+      return true;
+    }
+    if (!f1) {
+      return false;
+    }
+    if (ask_ == Ask::Action && ask_key_ == item->key) {  // the second F1
+      disarm();
+      ctx.app().config_run(ctx, item->key);
+      strip("DONE", -1, kNoticeMs, ctx.now());
+    } else {
+      ask_ = Ask::Action;
+      ask_key_ = item->key;
+      ask_until_ = ctx.now() + core::ticks_from_ms(kAskMs);
+    }
+    return true;
+  }
+  int steps = 0;
+  if (in.turn()) {
+    steps = in.delta();
+  } else if (f1) {
+    steps = 1;
+  }
+  if (steps == 0) {
+    return false;
+  }
+  const core::ParamDesc& d = *item->value;
+  const float now = core::param_clamp(d, ctx.app().config_get(ctx, item->key));
+  const int mult = in.turn() && in.shift && d.coarse > 1u ? static_cast<int>(d.coarse) : 1;
+  float next = core::param_step(d, now, steps * mult);
+  if (f1 && next == now) {
+    next = d.min;  // F1 at the top goes round
+  }
+  if (next != now) {
+    ctx.app().config_set(ctx, item->key, next);
+  }
   return true;
 }
 
@@ -579,6 +749,21 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
     r.text(x + 2 * m.pad, ui::caps_y(t, Face::Data, tab_y, kTabH), label, on ? Color::SelText : Color::TextDim, Face::Data);
     x += w + kTabGap;
   }
+  const ConfigView& cv = ctx.config_view();
+  for (unsigned p = 0; p < cv.pages; ++p) {  // the app's pages, one tab each
+    char label[kConfigLabelChars + 1];
+    upper_copy(label, sizeof label, cv.page[p].title);
+    const int w = r.text_width(label, Face::Data) + 4 * m.pad;
+    if (x + w > area.w - kMargin) {
+      break;
+    }
+    const bool on = section_ == Section::App && app_page_ == p;
+    if (on) {
+      r.panel({x, tab_y, w, kTabH}, Color::Sel);
+    }
+    r.text(x + 2 * m.pad, ui::caps_y(t, Face::Data, tab_y, kTabH), label, on ? Color::SelText : Color::TextDim, Face::Data);
+    x += w + kTabGap;
+  }
   const int rule_y = tab_y + kTabH + 4;
   r.rule(kMargin, rule_y, area.w - 2 * kMargin, ui::Axis::Horizontal, Color::Empty);
 
@@ -618,25 +803,59 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
       draw_midi_page(r, grid, ctx.midi().config(), ctx.midi().status(), midi_row_);
       break;
     case Section::Display: {
-      r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0, grid.pitch), "THEME", Color::TextDim, Face::Label);
+      const unsigned rows = display_rows();
+      const unsigned cursor = display_row_ < rows ? display_row_ : rows - 1u;
+      const int block = 2 * grid.pitch + 12;  // a row: its caption line, a line of chips and a gap
+      // Each row is a caption line and a line of chips: THEME, then BRIGHTNESS and PAD LIGHTS where there is something to set.
+      const auto caption = [&](unsigned row, const char* text) {
+        const int y = grid.y0 + static_cast<int>(row) * block;
+        const bool on = rows > 1u && row == cursor;
+        if (on) {
+          r.highlight_row({grid.x - m.pad, y, grid.w + 2 * m.pad, grid.pitch});
+        }
+        r.text(grid.x + (on ? m.pad : 0), ui::caps_y(t, Face::Label, y, grid.pitch), text, on ? Color::SelText : Color::TextDim, Face::Label);
+      };
+      const auto chip = [&](unsigned row, int& cx, const char* name, bool on) {
+        const int w = r.text_width(name, Face::Data) + 4 * m.pad;
+        const Rect box{cx, grid.y0 + static_cast<int>(row) * block + grid.pitch, w, kTabH};
+        if (on) {
+          r.panel(box, Color::Sel);
+        } else {
+          r.frame(box, Color::Empty);
+        }
+        r.text(cx + 2 * m.pad, ui::caps_y(t, Face::Data, box.y, box.h), name, on ? Color::SelText : Color::Text, Face::Data);
+        cx += w + kTabGap;
+      };
+      caption(0, "THEME");
       int cx = grid.x;
       for (unsigned i = 0; i < ui::kThemeCount; ++i) {
         char name[16];
         upper_copy(name, sizeof name, ui::theme(ui::theme_id_at(i)).name);
-        const int w = r.text_width(name, Face::Data) + 4 * m.pad;
-        const bool on = i == static_cast<unsigned>(ctx.theme());
-        const Rect chip{cx, grid.y0 + grid.pitch, w, kTabH};
-        if (on) {
-          r.panel(chip, Color::Sel);
-        } else {
-          r.frame(chip, Color::Empty);
-        }
-        r.text(cx + 2 * m.pad, ui::caps_y(t, Face::Data, chip.y, chip.h), name, on ? Color::SelText : Color::Text, Face::Data);
-        cx += w + kTabGap;
+        chip(0, cx, name, i == static_cast<unsigned>(ctx.theme()));
       }
-      r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0 + 3 * grid.pitch, grid.pitch), "The encoder, UP / DOWN and F1 change the theme. It shows at once.", Color::TextDim, Face::Label);
+      unsigned row = 1;
+      for (unsigned which = 0; which < 2u; ++which) {
+        if (which == 0u ? !backlight_ : !pads_) {
+          continue;
+        }
+        caption(row, which == 0u ? "BRIGHTNESS" : "PAD LIGHTS");
+        cx = grid.x;
+        const unsigned level = which == 0u ? ctx.brightness() : ctx.pad_lights();
+        for (unsigned i = 0; i < kBrightnessLevels; ++i) {
+          chip(row, cx, kLevelNames[i], i == level);
+        }
+        ++row;
+      }
+      r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0 + static_cast<int>(rows) * block + 4, grid.pitch),
+             rows > 1u ? "UP / DOWN choose a row. The encoder and F1 change it. It shows at once." : "The encoder, UP / DOWN and F1 change the theme. It shows at once.", Color::TextDim,
+             Face::Label);
       break;
     }
+    case Section::App:
+      if (app_page_ < cv.pages) {
+        draw_app_rows(r, grid, ctx, cv.page[app_page_], app_row_, ask_ == Ask::Action, ask_key_);
+      }
+      break;
     case Section::Info: {
       const int value_x = grid.x + 120;
       int row = 0;
@@ -655,6 +874,9 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
       format_uptime(ctx.uptime_ms() / 1000u, up, sizeof up);
       line("UPTIME", up);
       line("FIRMWARE", has(Section::Firmware) ? "SWITCH FROM THE CARD" : "NO UPDATE PATH IN THIS IMAGE");
+      if (crash_ != nullptr) {
+        line("LAST CRASH", crash_);
+      }
       break;
     }
   }
@@ -712,6 +934,15 @@ void SystemConfig::soft_keys(const Context& ctx, SoftKeys& keys) const noexcept 
       keys.label[0] = "NEXT";
       keys.label[7] = "CLOSE";
       break;
+    case Section::App: {
+      const ConfigView& view = ctx.config_view();
+      const ConfigItem* item = app_page_ < view.pages ? view.page[app_page_].nth(app_row_) : nullptr;
+      const bool action = item != nullptr && item->value == nullptr;
+      keys.label[0] = action ? (ask_ == Ask::Action ? "CONFIRM" : "RUN") : "NEXT";
+      keys.hot = ask_ == Ask::Action ? 1u : 0u;
+      keys.label[7] = "CLOSE";
+      break;
+    }
     case Section::Info:
       keys.label[7] = "CLOSE";
       break;
