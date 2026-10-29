@@ -53,12 +53,13 @@ if(O3SDK_BUILD_TESTS)
   add_test(NAME mk66_dma_owner COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_dma_owner.py check --root ${CMAKE_CURRENT_SOURCE_DIR})
   # The host tools of the USB console (tools/README.md), copied from track3r-os and identical but for the names: each one's self-test, with no
   # hardware. o3console talks to a pseudo-terminal that plays the unit; o3shot decodes and compares screens; o3audio stands in for arecord;
-  # o3hil runs scenarios against a mock unit; o3disk finds the unit's disk in a fake /sys (the disk set itself is not in o3sdk yet).
+  # o3hil runs scenarios against a mock unit; o3disk finds the unit's disk in a fake /sys (the disk set is CARD AS DISK, M2c slice U); o3tone plays the return tone (a fake player).
   add_test(NAME mk66_o3console_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3console.py --self-test)
   add_test(NAME mk66_o3shot_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3shot.py --self-test)
   add_test(NAME mk66_o3audio_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3audio.py --self-test)
   add_test(NAME mk66_o3hil_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3hil.py --self-test)
   add_test(NAME mk66_o3disk_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3disk.py --self-test)
+  add_test(NAME mk66_o3tone_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/o3tone.py --self-test)
   # Only the update path writes the card and only it drives the bootloader request pin: a source check over o3sdk's whole tree (it passes
   # while a file is absent and fails when a writer turns up anywhere else). The root is o3sdk's own directory, not the top-level project's.
   add_test(NAME mk66_writers_selftest COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/check_writers.py --self-test)
@@ -70,7 +71,7 @@ if(O3SDK_BUILD_TESTS)
            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/build_info_test -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/gen_build_info_test.cmake)
   set_tests_properties(mk66_gen_ld_selftest mk66_image_selftest mk66_ramfunc_selftest mk66_dma_owner_selftest mk66_dma_owner
                        mk66_build_info mk66_writers_selftest mk66_writers mk66_usb_image_selftest PROPERTIES TIMEOUT 60 LABELS mk66)
-  set_tests_properties(mk66_o3console_selftest mk66_o3shot_selftest mk66_o3audio_selftest mk66_o3hil_selftest mk66_o3disk_selftest
+  set_tests_properties(mk66_o3console_selftest mk66_o3shot_selftest mk66_o3audio_selftest mk66_o3hil_selftest mk66_o3disk_selftest mk66_o3tone_selftest
                        PROPERTIES TIMEOUT 180 LABELS mk66)  # (a pseudo-terminal and a few seconds of mock unit: 16 s idle, slower on a busy host)
   if(NOT O3SDK_PLATFORM STREQUAL "mk66")
     add_test(NAME mk66_ld COMMAND ${Python3_EXECUTABLE} -I ${_mk66_tools}/gen_ld.py check --header ${_mk66_header} --template ${_mk66_template})

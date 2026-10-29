@@ -54,6 +54,9 @@ void lock_input() noexcept;
 // One pass of the main loop: feeds what the host typed to the shell, announces the banner when a terminal opens the port (DTR), runs a
 // stream and publishes the output. Bounded: it reads at most the receive ring's depth and a stream says a bounded amount per call.
 void service() noexcept;
+// A change of the USB set was asked for from outside the console (the app's Config screen, the card's hand-over: usb_audio_device.cpp) and is on its way: the mode guard watches the set it ends in
+// (usb_mode_guard.h), as it does for the console's own `usb mode`. Main thread.
+void note_usb_layout_requested() noexcept;
 
 // OS-SCREENSHOT: the console's `shot` stream is running (the screenshot service refuses meanwhile: the two share the RAM_G region), and the chip port `shot` reads through (a getter: it
 // changes nothing; the service clears a `pclk0` the console left set when it starts a capture). Main loop only.

@@ -10,7 +10,7 @@
  *           images of .ramfunc_l and .data, each starting where the one before ends. The image is one contiguous run from 0 to its
  *           end with no hole (whether the SD bootloader tolerates one is unknown; asserted at the end of this script; the HEX check
  *           and the objcopy gap fill back it up).
- *   SRAM_L  64 KiB (code bus): hot code (`.ramfunc_l`) at the base, within kRamfuncLBudget; the rest is free (nothing is placed
+ *   SRAM_L  64 KiB (code bus): hot code (`.ramfunc_l`) at the base, within kRamfuncLBudget; the rest is free (but for `.tapmem_l`, the USB stems' pool; nothing else is placed
  *           there yet).
  *   SRAM_U  192 KiB: .noinit (the crash record first), the fault stack, the DMA rings, .data, .bss; the main stack grows down from
  *           the top.
@@ -93,6 +93,16 @@ SECTIONS
   } > SRAM_L AT > FLASH :ramfunc
   __ramfunc_l_load = LOADADDR(.ramfunc_l);
 
+  /* The USB stems' pool and ring (M2c slice U, audio/taps.h StemPool): at the start of the free half of SRAM_L, behind the hot code's budget. NOLOAD and not cleared here: the StemTap's constructor
+     zeroes it before main. Input sections `.bss.tap_mem_l` are NOBITS (a non-zero initialiser is a compile error, see sections.h). */
+  .tapmem_l @kSramLFreeBase@ (NOLOAD) : ALIGN(8)
+  {
+    __tapmem_l_start = .;
+    *(.bss.tap_mem_l .bss.tap_mem_l.*)
+    . = ALIGN(8);
+    __tapmem_l_end = .;
+  } > SRAM_L :NONE
+
   /* Bottom of SRAM_U: what survives a reset. The crash record block is first, at the very base of SRAM_U. These input
      sections are NOBITS (see the header): nothing here has a load image or an initialiser. */
   .noinit (NOLOAD) : ALIGN(8)
@@ -169,6 +179,7 @@ SECTIONS
   ASSERT(__dma_rings_start % @kDmaRingAlign@ == 0, "the DMA rings must start on their alignment (the eDMA address modulo)")
   ASSERT(__ramfunc_l_end - __ramfunc_l_start <= @kRamfuncLBudget@, "hot code exceeds its SRAM_L budget (mem_map.h kRamfuncLBudget)")
   ASSERT(__ramfunc_l_end <= @kSramLFreeBase@, "hot code overruns the free part of SRAM_L")
+  ASSERT(__tapmem_l_end - __tapmem_l_start <= @kSramLDataBudget@, "the tap data exceeds its SRAM_L budget (mem_map.h kSramLDataBudget)")
   ASSERT(__stack_limit - __bss_end >= @kSramUMinFree@, "SRAM_U: less than 32 KiB free between .bss and the stack (ADR 0013 D7 budget)")
   ASSERT(__ramfunc_l_load % 4 == 0 && __data_load % 4 == 0, "the load images are copied a word at a time: 4-byte aligned")
   ASSERT(__sdram_bss_start == ORIGIN(SDRAM), ".sdram_bss must start at the base of the SDRAM")

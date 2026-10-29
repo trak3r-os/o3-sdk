@@ -1,0 +1,132 @@
+# USB audio on HELLO (kit/app usb_audio.h, docs/M2C-PLAN.md section 7): the capture stream the computer reads (the master on the last two channels, one stem per slot), the return it plays
+# back (mixed into the output, and as the audio in's source) and the card as a disk, on the unit's own USB audio service over a fake port and a fake computer.
+#
+#   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/usb.txt --card <card> --out <dir> --wav <dir>/hello.wav
+#
+# The scenario fails at the first `expect` that is wrong. Start from an empty card directory. It writes <dir>/01_p8.wav (the capture stream of the boot profile: 8 channels, the master on 7 and 8,
+# silence on 1..6), 02_p10.wav (P10 chosen in the Config, F1 twice: T1 is HELLO's instrument, the master on 9 and 10) and 03_return.wav (P10 duplex, the computer plays 1 kHz: the stems do
+# not hear it); <dir>/hello.wav (the main output) holds the 1 kHz mixed in at RETURN LEVEL. Then INPUT is USB and a take of the input is saved: the same return, 440 Hz, as Apps/hello/take_001.wav.
+# The Config's CARD section gives the card to the computer (F1 twice): a save is refused until the eject. tests/sim_usb_test.cpp runs it and reads everything back.
+record on
+input off
+wait 100
+expect state card=ready
+expect state usb=P8
+expect state dup=1
+expect state ret=100
+expect state strm=0
+expect state disk=idle
+snap 00_boot
+
+# 1. The boot profile. The computer opens the capture stream while HELLO plays its riff: eight channels, the master on 7 and 8, 1..6 silent.
+usb listen on
+tap play
+wait 600
+expect state strm=1
+usbwav 01_p8
+snap 01_p8_playing
+
+# 2. PROFILE in the Config (AUDIO section, row 5 of 7: INPUT GAIN MONITOR USB AUDIO PROFILE ...): F1 proposes the next profile, P10, and says so; nothing changes until the second F1.
+tap config
+expect state section=audio
+tap down
+tap down
+tap down
+tap down
+tap f1
+expect state usb=P8
+snap 02_profile_proposed
+tap f1
+wait 1500
+expect state usb=P10
+snap 03_profile_p10
+tap config
+
+# The computer opens the stream again on the new set: ten channels, T1 is HELLO's instrument, 2..8 are silent (one instrument), the master is on 9 and 10.
+usb listen on
+wait 600
+expect state strm=1
+usbwav 02_p10
+
+# 3. The return. The computer plays a 1 kHz tone to the unit: it is added to the output at RETURN LEVEL (100 per cent), and no stem hears it.
+usb return tone 1000 -12
+wait 700
+usbwav 03_return
+snap 04_return
+usb level 0
+wait 300
+usb return off
+tap play
+wait 100
+
+# 4. The return as the audio in's source: INPUT -> USB (the 7th choice) in the Config, RETURN LEVEL to 0 so that only the engine hears the 440 Hz, and a take of the input
+# (SAMPLE PLAY twice: 1 s) saved as Apps/hello/take_001.wav.
+tap config
+tap up
+tap up
+tap up
+tap up
+tap up
+tap up
+turn 6
+expect state in=usb
+tap down
+tap down
+tap down
+tap down
+tap down
+tap down
+turn 5
+expect state ret=5
+turn -5
+expect state ret=0
+snap 05_input_usb
+tap config
+usb return tone 440 -12
+tap sampleplay
+tap sampleplay
+expect state len=1
+tap rec
+wait 1300
+expect state rec=done
+press shift
+tap file
+release shift
+wait 300
+expect file Apps/hello/take_001.wav
+usb return off
+
+# 5. The card as a disk: the Config's CARD section, CARD AS DISK, F1 twice. The port re-enumerates and the card is the computer's: a save is refused until the eject.
+tap config
+tap right
+expect state section=card
+tap down
+tap down
+tap down
+tap f1
+snap 06_disk_ask
+tap f1
+wait 3000
+expect state card=computer
+expect state disk=out
+snap 07_disk_out
+tap config
+tap insert
+tap file
+wait 100
+expect state files=failed
+snap 08_save_refused
+expect nofile Apps/hello/riff.o3a
+tap config
+tap f1
+tap f1
+wait 800
+expect state card=ready
+expect state disk=idle
+snap 09_disk_ejected
+tap config
+tap file
+wait 200
+expect state files=done
+expect file Apps/hello/riff.o3a
+snap 10_saved

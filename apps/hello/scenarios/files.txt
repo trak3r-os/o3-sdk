@@ -70,6 +70,7 @@ tap config
 wait 50
 turn 3
 tap right
+tap right
 turn 1
 snap 06_config_black
 tap config

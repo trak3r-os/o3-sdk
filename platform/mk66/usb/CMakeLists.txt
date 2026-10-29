@@ -9,7 +9,7 @@
 # Dependencies: platform_mk66_audio (audio.h's AudioClockFault, audio_config.h, audio::diag::Text), platform_mk66_display (ft812_regs.h, for the `shot` bands),
 # platform_mk66_update (crc32.h, the `shot` stream's checksum), platform_mk66_midi (usb0.h's MIDI binding, slice MD) and usb. The update path's hardware half (update/src/fw_host_mk66.cpp) names usb0.h and console.h, so it links this.
 o3sdk_library(platform_mk66_usb
-  SOURCES src/diag_text.cpp src/log_command.cpp src/mem_access.cpp src/hil_inject.cpp src/shot_stream.cpp src/usb_audio.cpp
+  SOURCES src/diag_text.cpp src/log_command.cpp src/mem_access.cpp src/hil_inject.cpp src/shot_stream.cpp src/usb_audio.cpp src/msc_bridge.cpp
   DEPENDS platform_mk66_base platform_mk66_audio platform_mk66_display platform_mk66_midi platform_mk66_update usb)
 # The single-precision rule (cmake/O3sdkTargets.cmake): no double in an image; the kit's usb library is built this way too.
 target_compile_options(platform_mk66_usb PRIVATE -fsingle-precision-constant)
@@ -17,7 +17,7 @@ target_compile_options(platform_mk66_usb PRIVATE -fsingle-precision-constant)
 if(O3SDK_PLATFORM STREQUAL "mk66")
   # The USB0 register policy, the descriptors, the streams and USB0_IRQHandler. src/internal.h (boot::, appimg::) and src/regs.h are private to the platform's sources: the file
   # names them relative to itself. It runs from flash (the interrupt is at priority 64, not in the hot SRAM_L path).
-  add_library(platform_mk66_usb_hw OBJECT src/usb0.cpp)
+  add_library(platform_mk66_usb_hw OBJECT src/usb0.cpp src/usb_audio_device.cpp)
   target_link_libraries(platform_mk66_usb_hw PUBLIC platform_mk66_usb)
   target_compile_options(platform_mk66_usb_hw PRIVATE -fsingle-precision-constant)
   o3sdk_strict_warnings(platform_mk66_usb_hw)

@@ -119,11 +119,14 @@ std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
 }  // namespace
 
 Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
-    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr, platform.capture != nullptr) {
+    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr, platform.capture != nullptr, platform.usb_audio != nullptr,
+           platform.storage != nullptr && platform.writer != nullptr && platform.files_work != nullptr) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
   ctx_.midi_.bind(platform_.midi, &engine_);
   ctx_.audio_in_.bind(platform_.capture, &engine_);
+  ctx_.audio_in_.bind_usb(platform_.usb_audio);
+  ctx_.usb_audio_.bind(platform_.usb_audio, &ctx_.files_);
   ctx_.radio_.bind(platform_.capture);
   ctx_.recorder_.bind(platform_.recorder);
   ctx_.files_.bind(platform_.storage, platform_.writer, platform_.files_work, platform_.app_id != nullptr ? platform_.app_id : o3sdk_app_id(), platform_.card_claim);
@@ -139,12 +142,14 @@ KitValues Runtime::kit_values() const noexcept {
   v.in_monitor = static_cast<std::uint8_t>(ctx_.audio_in_.monitor());
   v.radio_region = static_cast<std::uint8_t>(ctx_.radio_.region());
   v.radio_freq = static_cast<std::uint16_t>(ctx_.radio_.freq());
+  ctx_.usb_audio_.fill(v);
   return v;
 }
 
 // The loaded audio choice over the app's: only what differs from what is in place is applied, so that a card that holds the defaults (an app that never used audio in) costs the codec nothing
 // and the gate nothing. The radio's region and station go first: selecting the radio powers the chip up on them.
 void Runtime::apply_kit_audio(const KitValues& v) noexcept {
+  ctx_.usb_audio_.restore(v);  // (the port starts with it at the boot, the level and the slots go once the driver runs)
   const KitValues now = kit_values();
   if (v.radio_region != now.radio_region || v.radio_freq != now.radio_freq) {
     ctx_.radio_.restore(static_cast<hal::capture::Region>(v.radio_region), v.radio_freq);
@@ -245,6 +250,7 @@ void Runtime::poll() noexcept {
 
   poll_midi();
   ctx_.audio_in_.poll(ctx_.ms_);
+  ctx_.usb_audio_.poll();
   if (platform_.recorder != nullptr) {  // the Input tap hears the line's channel map as the engine does (hal/record.h)
     platform_.recorder->set_line_map(static_cast<hal::record::LineMap>(ctx_.audio_in_.channel_map()));
   }
@@ -393,6 +399,14 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
     w.flag("gate", !ctx_.audio_in_.settling());
     w.str("radio", radio_state_name(ctx_.radio_.status().state));
     w.num("freq", ctx_.radio_.freq());
+  }
+  if (ctx_.usb_audio_.available()) {
+    const hal::usb_audio::DiskStatus disk = ctx_.usb_audio_.disk();
+    w.str("usb", ctx_.usb_audio_.audio() ? hal::usb_audio::profile_name(ctx_.usb_audio_.profile()) : "STD");
+    w.flag("dup", ctx_.usb_audio_.duplex());
+    w.num("ret", ctx_.usb_audio_.return_level());
+    w.flag("strm", ctx_.usb_audio_.streaming());
+    w.str("disk", disk.phase == hal::usb_audio::DiskPhase::Out ? "out" : (disk.phase == hal::usb_audio::DiskPhase::Working ? "working" : "idle"));
   }
   std::size_t n = w.size();
   // The app's pairs go after a space; the room is what the kit's pairs left (the separator, one character and the terminator at least).

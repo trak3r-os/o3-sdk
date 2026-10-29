@@ -30,3 +30,8 @@
 // Not cleared at reset: the code that starts the DMA zeroes the ring first. The section name begins `.bss.`, so GCC refuses a
 // non-zero initialiser at compile time, as for the noinit objects.
 #define O3SDK_DMA_RING [[gnu::section(".bss.dma_rings")]]
+
+// The USB stems' memory (audio/taps.h StemPool; M2c slice U): `.tapmem_l`, a NOLOAD section at the start of the free half of SRAM_L (mem_map.h kSramLDataBudget), behind the hot code. Not cleared at
+// reset: the StemTap's constructor zeroes it before main. The name begins `.bss.`, so GCC refuses a non-zero initialiser at compile time, as for the noinit objects. The object declares its own
+// alignment (alignas) and static_asserts it. Only an image's object: a host build puts it in .bss, so the users guard it with O3SDK_AUDIO_RAMFUNC.
+#define O3SDK_TAP_MEM_L [[gnu::section(".bss.tap_mem_l")]]

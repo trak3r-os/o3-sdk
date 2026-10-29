@@ -1092,7 +1092,7 @@ TEST_CASE("files: the settings read at boot apply over the app's defaults; a mis
     CHECK(v.theme == ui::ThemeId::Black);
     CHECK(v.midi.channel == 5);
     CHECK(v.midi.out_channel == 1);  // the file wins
-    CHECK(rig.files.settings_report().applied == 14);
+    CHECK(rig.files.settings_report().applied == 30);
     rig.values = v;
     rig.idle_ms(3000);
     CHECK(card.ops == 0);  // what was read is what is saved

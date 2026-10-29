@@ -8,7 +8,7 @@ What the system Config screen lets the user change, and the app did not ask for,
 "FORM" u32 length "O3SK"  SETS  [unknown chunks]  "CRC "
 ```
 
-At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 128 bytes (14 keys).
+At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 218 bytes (30 keys: 4 + 30 x 6 bytes in `SETS`).
 
 ## 1. `SETS`
 
@@ -30,8 +30,14 @@ At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 128 byt
 | 12 | audio in monitor, per cent | 0 (off) .. 100 |
 | 13 | radio region (`hal::capture::Region`) | 0 Europe, 1 USA, 2 Australia, 3 Japan |
 | 14 | radio station, 10 kHz units (the one value that is not a byte) | 7600 .. 10800 |
+| 15 | USB audio: the AUDIO set (1) or STANDARD (0) (slice U) | 0, 1 (the boot set is 1) |
+| 16 | USB audio profile (`hal::usb_audio::Profile`) | 0 P2, 1 P8 (the boot profile), 2 P10, 3 P11 |
+| 17 | USB audio: the return stream is part of the set | 0, 1 (the boot set has it) |
+| 18 | RETURN LEVEL, per cent | 0 .. 100 (100) |
+| 19 | the edited stem slots below apply (else the profile's factory slots) | 0, 1 |
+| 20 .. 30 | stem slot 1 .. 11 of the profile, a mask of the 16 stem sources (bit 0 T1 .. bit 11 T12, 12 Master L, 13 Master R, 14 Send A, 15 Send B; the second value that is not a byte) | 0 .. 65535 |
 
-**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 15. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The settings of later slices (the USB layout and stem map, brightness and pad lights) take the next keys. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.
+**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 31. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The settings of later slices (the USB layout and stem map, brightness and pad lights) take the next keys. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.
 
 ## 2. Other chunks
 

@@ -402,13 +402,19 @@ int main() {
 #else
   o3sdk::hal::record::Recorder* const recorder = &record_service::service();
 #endif
+  // USB audio (Platform::usb_audio): the stems, the return, the layout and the card as a disk, over usb0; the service wraps the render below. The tone image has no USB audio.
+#if O3SDK_AUDIO_TEST || !O3SDK_CONSOLE
+  [[maybe_unused]] o3sdk::hal::usb_audio::Device* const usb_device = nullptr;
+#else
+  o3sdk::hal::usb_audio::Device* const usb_device = &usb_audio::device();
+#endif
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
   // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
                                        &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture,
-                                       recorder};
+                                       recorder, usb_device};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi,
@@ -450,8 +456,9 @@ int main() {
   const o3sdk::hal::audio::BlockCallback render = mk66::audio_test_tone();
 #elif O3SDK_CONSOLE
   // The record service after the runtime's block (record_service.h: it records the input or the master into the app's take while one is armed, and costs a load and a branch otherwise), and
-  // the USB audio tap after that: the master the main output plays goes to the capture stream (usb_audio.h). Before start(): the callbacks point at static state.
-  const o3sdk::hal::audio::BlockCallback render = usb_audio::wrap(record_service::wrap(rt.block_callback(), g_engine));
+  // the USB audio service after that (usb_audio.h): the engine's stems and the master go to the capture stream while the computer listens, the computer's return is added to the output and, with
+  // the audio in's source Usb, replaces the codec's block as the engine's input (and the take's). Before start(): the callbacks point at static state.
+  const o3sdk::hal::audio::BlockCallback render = usb_audio::wrap(record_service::wrap(rt.block_callback(), g_engine), g_engine);
 #else
   const o3sdk::hal::audio::BlockCallback render = record_service::wrap(rt.block_callback(), g_engine);
 #endif
@@ -532,7 +539,12 @@ int main() {
     mk66::set_module(console::kUsbModule);
     namespace layout = usb0::boot_layout;
     usb0::bind_midi(g_midi.usb_out(), g_midi.usb_in(), g_midi.time_ref());  // before the pull-up: the USB interrupt's MIDI binding (the bytes of the host's MIDI port, the frame's events) is there from its first pass
-    if (usb0::start(layout::kMode, layout::kProfile, layout::kReturn)) {
+    // The set of the first enumeration is the one the kit's settings kept (read above; the boot's AUDIO, P8, duplex when there are none, layout::k*), and never DISK: the card is the unit's at boot, and
+    // CARD AS DISK is given on request, in the running mode (docs/M2C-PLAN.md D14). A profile the driver refuses falls back to STANDARD inside start() (logged).
+    static_assert(layout::kMode == o3sdk::usb::Mode::Audio && layout::kProfile == o3sdk::usb::Profile::P8 && layout::kReturn, "the kit's default layout (app/usb_audio.h) is the boot layout");
+    const o3sdk::app::UsbAudio::Layout kept = rt.context().usb_audio().boot_layout();
+    const o3sdk::usb::Mode start_mode = kept.audio ? o3sdk::usb::Mode::Audio : o3sdk::usb::Mode::Standard;
+    if (usb0::start(start_mode, mk66::audio::to_usb(kept.profile), kept.duplex)) {
       console::note_usb_started();
       // What the driver presents, which is not the boot layout when start() fell back to STANDARD (a layout it refused, descriptors that did not build).
       char line[56];
@@ -626,6 +638,24 @@ int main() {
     if (poll_card(ms)) {  // a card taken out or put in
       rt.card_changed();  // a firmware list that is open closes and the update path is cancelled
     }
+#if !O3SDK_AUDIO_TEST
+    {
+      // CARD AS DISK (usb_audio.h, DiskShare): the hand-over's state machine and, while the computer has the card, the SCSI pump. The render's load of the last block (every 50 ms) holds the pump above 85 %.
+      static unsigned render_load = 0;
+      static std::uint32_t load_at = 0;
+      if (ms - load_at >= 50u) {
+        load_at = ms;
+        render_load = static_cast<unsigned>(mk66::audio_status().snapshot().render_last / (o3sdk::hal::audio::kCyclesPerBlock / 100u));
+      }
+      const usb_audio::DiskNote note = usb_audio::disk_pass(ms, powering_off(), render_load);
+      if (note.text != nullptr) {
+        rt.system_strip(note.text, -1, note.hold_ms);
+      }
+      if (note.card_changed) {
+        rt.card_changed();  // the files service sees the card go or come back: a list the app holds is stale, the kit's settings are read again
+      }
+    }
+#endif
 #endif
     if (audio_up && ms - last_audio_poll >= kAudioPollMs) {
       last_audio_poll = ms;

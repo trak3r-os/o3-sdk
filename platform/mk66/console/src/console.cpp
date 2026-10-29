@@ -84,6 +84,7 @@
 #include <o3sdk/platform/mk66/usb/shot_stream.h>
 #include <o3sdk/platform/mk66/usb/soc_facts.h>
 #include <o3sdk/platform/mk66/usb/usb0.h>
+#include <o3sdk/platform/mk66/usb/usb_audio.h>
 #include <o3sdk/ui/plot/ram_g_map.h>
 #include <o3sdk/usb/diag_log.h>
 #include <o3sdk/usb/diag_pump.h>
@@ -308,6 +309,41 @@ void usb_request(shell::Shell& sh, o3sdk::usb::Mode mode, o3sdk::usb::Profile pr
       "); this terminal drops, reconnect in about a second\n");
 }
 
+void usb_map_command(shell::Shell& sh, const shell::Args& a) {
+  char buf[kTextBuffer];
+  audio::StemMap& map = usb0::stem_map();
+  if (a.argc == 3 && same(a.argv[2], "reset")) {
+    map.reset(map.profile());
+    usb0::apply_stem_map();
+  } else if (a.argc == 4) {
+    std::uint32_t slot = 0;
+    std::uint32_t sources = 0;
+    if (!parse_dec(a.argv[2], o3sdk::usb::kMaxChannels, slot) || slot == 0u || !audio::parse_sources(a.argv[3], sources) || !map.set_slot(slot - 1u, sources)) {
+      sh.out().text("usage: usb map [reset | <slot> <sources>]   slot 1..profile channels, sources like T1+T9, ML, MR, SA, SB or -\n");
+      return;
+    }
+    usb0::apply_stem_map();
+  } else if (a.argc != 2) {
+    sh.out().text("usage: usb map [reset | <slot> <sources>]\n");
+    return;
+  }
+  send(sh, format_stem_map(map, buf, sizeof buf), buf);
+}
+
+// OS-USBDISK U2a: the first events of endpoint 0 in the last DISK attach (usb/ep0_trace.h), one line each; the ring survives the rollback to the previous layout, so this is read once the console is back.
+void usb_ep0_view(shell::Shell& sh) {
+  const o3sdk::usb::Ep0Trace& trace = usb0::ep0_trace();
+  const unsigned n = trace.count();
+  sh.out().text("usb ep0: ").text(n == 0u ? "nothing recorded (no DISK attach since the boot)\n" : "the first events of the last DISK attach\n");
+  char line[96];
+  for (unsigned i = 0; i < n; ++i) {
+    send(sh, format_usb_ep0_entry(i, trace.entry(i), line, sizeof line), line);
+  }
+  if (n != 0u) {
+    send(sh, format_usb_ep0_retries(trace.stall_retries(), line, sizeof line), line);
+  }
+}
+
 void usb_subcommand(shell::Shell& sh, const shell::Args& a) {
   const char* sub = a.argv[1];
   if (same(sub, "audio")) {
@@ -327,8 +363,37 @@ void usb_subcommand(shell::Shell& sh, const shell::Args& a) {
     } else {
       sh.out().text("usage: usb mode [standard|audio]\n");
     }
+  } else if (same(sub, "profile")) {
+    std::uint32_t channels = 0;
+    o3sdk::usb::Profile profile = o3sdk::usb::Profile::P10;
+    // The third word, when there is one, chooses USB RETURN with the profile: `out` is capture only ("10 OUT"), `duplex` adds the stereo return ("8 OUT / 2 IN").
+    bool usb_return = usb0::return_enabled();
+    const bool word = a.argc == 4 && (same(a.argv[3], "out") || same(a.argv[3], "duplex"));
+    if (word) {
+      usb_return = same(a.argv[3], "duplex");
+    }
+    if ((a.argc == 3 || word) && parse_dec(a.argv[2], 11u, channels) && (channels == 2u || channels == 8u || channels == 10u || channels == 11u)) {
+      profile = channels == 2u ? o3sdk::usb::Profile::P2 : (channels == 8u ? o3sdk::usb::Profile::P8 : (channels == 11u ? o3sdk::usb::Profile::P11 : o3sdk::usb::Profile::P10));
+      usb_request(sh, usb0::mode(), profile, usb_return);  // in AUDIO mode this re-enumerates; in STANDARD it only sets what the next AUDIO attach uses
+    } else {
+      sh.out().text("usage: usb profile <2|8|10|11> [out|duplex]   (10 = T1..T8 + master, 8 = T1..T6 + master; out = capture only: `profile 10 out` is \"10 OUT\",\n"
+                    "       duplex adds the stereo return: `profile 8 duplex` is \"8 OUT / 2 IN\", the layout that opens both ways behind a hub)\n");
+    }
+  } else if (same(sub, "return")) {
+    if (a.argc == 2) {
+      char layout[20];
+      sh.out().text("usb return: ").text(usb0::return_enabled() ? "on" : "off").text(" (").text(usb_layout_name(usb0::profile(), usb0::return_enabled(), layout)).text(")\n");
+    } else if (a.argc == 3 && (same(a.argv[2], "on") || same(a.argv[2], "off"))) {
+      usb_request(sh, usb0::mode(), usb0::profile(), same(a.argv[2], "on"));
+    } else {
+      sh.out().text("usage: usb return [on|off]   (off = no playback stream: the host cannot open a return the bus has no room for)\n");
+    }
+  } else if (same(sub, "map")) {
+    usb_map_command(sh, a);
+  } else if (same(sub, "ep0")) {
+    usb_ep0_view(sh);
   } else {
-    sh.out().text("usage: usb [audio [reset] | mode [standard|audio]]\n");
+    sh.out().text("usage: usb [audio [reset] | mode [standard|audio] | profile <2|8|10|11> [out|duplex] | return [on|off] | map [reset | <slot> <sources>] | ep0]\n");
   }
 }
 
@@ -356,6 +421,39 @@ void cmd_usb(shell::Shell& sh, const shell::Args& a) {
               usb0::soc::kUsbClockHz};
   char buf[kTextBuffer];
   send(sh, format_usb(r, buf, sizeof buf), buf);
+}
+
+// `disk`, `disk share [ro]`, `disk eject` (OS-USBDISK U2a, the running mode): the unit gives the card to the computer while it goes on playing, and takes it back. `share` waits for a due settings write (2 s),
+// switches the USB set to DISK (the console's port re-enumerates: open it again), and hands the card over once the computer has configured the disk; `ro` exports it write-protected. `eject` is the unit's side
+// of an eject (the computer's next command is UNIT ATTENTION, a copy in flight ends at its next block): it asks no confirmation, the console command is the confirmation. The Tracker takes the card back only through
+// an eject, never on its own. `disk` alone prints the state.
+void cmd_disk(shell::Shell& sh, const shell::Args& a) {
+  const char* refusal = nullptr;
+  if (a.argc >= 2 && same(a.argv[1], "share") && a.argc <= 3 && (a.argc == 2 || same(a.argv[2], "ro"))) {
+    refusal = usb_audio::disk_request(a.argc == 3);
+    if (refusal == nullptr) {
+      sh.out().text(a.argc == 3 ? "disk: sharing read-only; the console port re-enumerates, open it again and `disk` shows the state\n" : "disk: sharing; the console port re-enumerates, open it again and `disk` shows the state\n");
+      log("disk: share asked from the console");
+      return;
+    }
+  } else if (a.argc == 2 && same(a.argv[1], "eject")) {
+    refusal = usb_audio::disk_eject_request();
+    if (refusal == nullptr) {
+      sh.out().text("disk: ejecting; the card is remounted, the USB set comes back\n");
+      log("disk: eject asked from the console");
+      return;
+    }
+  } else if (a.argc != 1) {
+    sh.out().text("usage: disk [share [ro]|eject]\n");
+    return;
+  }
+  if (refusal != nullptr) {
+    sh.out().text("ERR disk: ").text(refusal).nl();
+    return;
+  }
+  const usb0::DiskState d = usb0::disk_state();
+  sh.out().text("disk: ").text(usb_audio::disk_state_name()).text(", owner ").text(storage::device::owner() == storage::CardOwner::Host ? "computer" : "tracker").text(d.configured ? ", configured" : ", not configured");
+  sh.out().text(d.writable ? ", writable" : ", read-only").text(usb0::disk_throttled() ? ", throttled" : "").nl();
 }
 
 void cmd_log(shell::Shell& sh, const shell::Args& a) { run_log_command(sh, g_log, a); }
@@ -983,6 +1081,7 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Radio)] = &cmd_radio;
   kit[static_cast<unsigned>(Cmd::Mon)] = &cmd_mon;
   kit[static_cast<unsigned>(Cmd::Rec)] = &cmd_rec;
+  kit[static_cast<unsigned>(Cmd::Disk)] = &cmd_disk;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));
@@ -996,6 +1095,11 @@ void attach_capture(hal::capture::CaptureHw& capture) noexcept { g_capture = &ca
 
 void note_usb_started() noexcept {
   guard_layout(usb0::mode() == o3sdk::usb::Mode::Audio ? UsbModeGuard::Layout::Audio : UsbModeGuard::Layout::Standard);
+}
+
+void note_usb_layout_requested() noexcept {
+  const o3sdk::usb::Mode mode = usb0::change_phase() != 0u ? usb0::pending_mode() : usb0::mode();
+  guard_layout(mode == o3sdk::usb::Mode::Audio ? UsbModeGuard::Layout::Audio : UsbModeGuard::Layout::Standard);
 }
 
 void service() noexcept {

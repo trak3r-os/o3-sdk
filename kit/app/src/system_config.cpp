@@ -21,13 +21,14 @@ using Section = SystemConfig::Section;
 using Phase = FirmwareView::Phase;
 
 // The order of the tabs.
-constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Audio, Section::Midi, Section::Display, Section::Info};
+constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Audio, Section::Midi, Section::Card, Section::Display, Section::Info};
 
 const char* tab_label(Section s) noexcept {
   switch (s) {
     case Section::Firmware: return "FIRMWARE";
     case Section::Audio: return "AUDIO";
     case Section::Midi: return "MIDI";
+    case Section::Card: return "CARD";
     case Section::Display: return "DISPLAY";
     case Section::Info: return "INFO";
   }
@@ -53,20 +54,36 @@ void format_uptime(std::uint64_t seconds, char* out, std::size_t cap) noexcept {
   upper_copy(out, cap, s.c_str());
 }
 
+// The files service's view of the card for the CARD section.
+const char* card_state_text(Files::Card c) noexcept {
+  switch (c) {
+    case Files::Card::None: return "NO CARD";
+    case Files::Card::Ready: return "READY";
+    case Files::Card::ReadOnly: return "WRITE PROTECTED";
+    case Files::Card::Unsupported: return "EXFAT: NOT SUPPORTED";
+    case Files::Card::OnComputer: return "ON THE COMPUTER - EJECT FIRST";
+    case Files::Card::InUse: return "IN USE (FIRMWARE UPDATE)";
+  }
+  return "";
+}
+
 }  // namespace
 
-SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi, bool audio) noexcept
+SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi, bool audio, bool usb, bool card) noexcept
     : sink_(firmware),
       build_(build),
       midi_(midi),
       audio_(audio),
-      section_(firmware != nullptr && firmware->available() ? Section::Firmware : (audio ? Section::Audio : (midi ? Section::Midi : Section::Display))) {}
+      usb_(usb),
+      card_(card),
+      section_(firmware != nullptr && firmware->available() ? Section::Firmware : (audio || usb ? Section::Audio : (midi ? Section::Midi : (card ? Section::Card : Section::Display)))) {}
 
 bool SystemConfig::has(Section s) const noexcept {
   switch (s) {
     case Section::Firmware: return sink_ != nullptr && sink_->available();
-    case Section::Audio: return audio_;
+    case Section::Audio: return audio_ || usb_;
     case Section::Midi: return midi_;
+    case Section::Card: return card_;
     case Section::Display:
     case Section::Info: break;
   }
@@ -78,6 +95,7 @@ const char* SystemConfig::section_name() const noexcept {
     case Section::Firmware: return "firmware";
     case Section::Audio: return "audio";
     case Section::Midi: return "midi";
+    case Section::Card: return "card";
     case Section::Display: return "display";
     case Section::Info: return "info";
   }
@@ -108,7 +126,7 @@ void SystemConfig::close(Context& ctx) noexcept {
 void SystemConfig::enter(Context& ctx) noexcept {
   if (section_ == Section::Firmware) {
     open_list(ctx);
-  } else if (section_ == Section::Audio) {
+  } else if (section_ == Section::Audio && audio_) {
     ctx.audio_in().watch(true);  // the level meter: the engine measures the input only while this page is up
   }
 }
@@ -117,9 +135,10 @@ void SystemConfig::enter(Context& ctx) noexcept {
 void SystemConfig::leave_section(Context& ctx) noexcept {
   if (section_ == Section::Firmware) {
     (void)firmware_abandon(view_, sink_);
-  } else if (section_ == Section::Audio) {
+  } else if (section_ == Section::Audio && audio_) {
     ctx.audio_in().watch(false);
   }
+  disarm();  // a change that waited for its second F1 is not asked for from another page
 }
 
 void SystemConfig::open_list(Context& ctx) noexcept {
@@ -178,12 +197,18 @@ void SystemConfig::input(Context& ctx, const Input& in) noexcept {
     return;
   }
   bool taken = false;
+  // A change that waits for its second F1 is kept only by that F1 (and by a turn of the encoder, which changes the proposal); any other control takes it back.
+  if (ask_ != Ask::None && !in.press(Button::F1) && !in.turn()) {
+    disarm();
+  }
   if (section_ == Section::Firmware) {
     taken = firmware_input(ctx, in);
   } else if (section_ == Section::Audio) {
     taken = audio_input(ctx, in);
   } else if (section_ == Section::Midi) {
     taken = midi_input(ctx, in);
+  } else if (section_ == Section::Card) {
+    taken = card_input(ctx, in);
   } else if (section_ == Section::Display) {
     taken = display_input(ctx, in);
   }
@@ -262,11 +287,12 @@ bool SystemConfig::midi_input(Context& ctx, const Input& in) noexcept {
 }
 
 // UP / DOWN move the cursor over the rows; the encoder steps the row's value (SHIFT: coarser), F1 steps it by one and wraps (the monitor's F1 is off / on, the radio's SEEK row
-// seeks up). F5 and F6 seek down and up while the radio is the input; on a receiver that did not answer F5 tries it again.
+// seeks up). F5 and F6 seek down and up while the radio is the input; on a receiver that did not answer F5 tries it again. The USB set's rows (USB AUDIO, PROFILE, RETURN) only propose: the
+// second F1 applies, the port reconnects (usb_row).
 bool SystemConfig::audio_input(Context& ctx, const Input& in) noexcept {
   AudioIn& a = ctx.audio_in();
   Radio& radio = ctx.radio();
-  const bool on_radio = a.source() == AudioIn::Source::Radio;
+  const bool on_radio = audio_ && a.source() == AudioIn::Source::Radio;
   if (on_radio && (in.press(Button::F5) || in.press(Button::F6))) {
     const hal::capture::RadioStatus::State s = radio.status().state;
     if (s == hal::capture::RadioStatus::State::Absent || s == hal::capture::RadioStatus::State::Failed) {
@@ -278,8 +304,12 @@ bool SystemConfig::audio_input(Context& ctx, const Input& in) noexcept {
     }
     return true;
   }
-  const unsigned rows = audio_row_count(a.source());
+  AudioRow kinds[kAudioMaxRows];
+  const unsigned rows = audio_rows(kinds, a.source(), audio_, usb_);
   const int last = static_cast<int>(rows) - 1;
+  if (last < 0) {
+    return false;
+  }
   if (audio_row_ > last) {
     audio_row_ = static_cast<std::uint8_t>(last);
   }
@@ -300,10 +330,10 @@ bool SystemConfig::audio_input(Context& ctx, const Input& in) noexcept {
   if (steps == 0) {
     return false;
   }
-  switch (audio_row_) {
+  switch (kinds[audio_row_]) {
     case kAudioInput: {
       const bool radio_ok = radio.status().state != hal::capture::RadioStatus::State::Absent;
-      const AudioIn::Source to = audio_step_source(a.source(), steps, wrap, radio_ok);
+      const AudioIn::Source to = audio_step_source(a.source(), steps, wrap, radio_ok, usb_);
       if (to != a.source()) {
         (void)a.select(to, a.gain());
       }
@@ -336,9 +366,119 @@ bool SystemConfig::audio_input(Context& ctx, const Input& in) noexcept {
     case kAudioSeek:
       radio.seek(steps > 0);
       break;
+    case kAudioUsb:
+    case kAudioProfile:
+    case kAudioReturn:
+      return usb_row(ctx, kinds[audio_row_], steps, wrap);
+    case kAudioReturnLevel: {
+      UsbAudio& u = ctx.usb_audio();
+      const unsigned to = audio_step_percent(u.return_level(), coarse ? steps * 5 : steps, wrap);
+      if (to != u.return_level()) {
+        u.set_return_level(to);
+      }
+      break;
+    }
     default: break;
   }
   return true;
+}
+
+// The USB set's rows: a move proposes (the row shows it and says what the second F1 does), the second F1 asks the port for it. `f1` is the F1 press (it wraps round and confirms); a turn of the
+// encoder changes the proposal, and a proposal that is the layout in use again is dropped.
+bool SystemConfig::usb_row(Context& ctx, unsigned kind, int steps, bool f1) noexcept {
+  UsbAudio& u = ctx.usb_audio();
+  if (u.changing()) {
+    strip("THE USB PORT IS RECONNECTING", -1, kNoticeMs, ctx.now());
+    return true;
+  }
+  if (ask_ == Ask::Layout && f1) {
+    const bool ok = u.request(want_audio_, static_cast<hal::usb_audio::Profile>(want_profile_), want_duplex_);
+    disarm();
+    strip(ok ? "THE USB PORT RECONNECTS: THE COMPUTER FINDS THE UNIT AGAIN" : "THE USB PORT CANNOT CHANGE NOW (THE CARD IS OUT OR A CHANGE RUNS)", -1, kNoticeMs, ctx.now());
+    return true;
+  }
+  if (ask_ != Ask::Layout) {
+    want_audio_ = u.audio();
+    want_profile_ = static_cast<std::uint8_t>(u.profile());
+    want_duplex_ = u.duplex();
+  }
+  if (kind == kAudioUsb) {
+    want_audio_ = !want_audio_;
+  } else if (kind == kAudioProfile) {
+    want_profile_ = static_cast<std::uint8_t>(audio_step_profile(static_cast<hal::usb_audio::Profile>(want_profile_), steps, f1));
+  } else {
+    want_duplex_ = !want_duplex_;
+  }
+  const bool differs = want_audio_ != u.audio() || want_profile_ != static_cast<std::uint8_t>(u.profile()) || want_duplex_ != u.duplex();
+  ask_ = differs ? Ask::Layout : Ask::None;
+  ask_until_ = ctx.now() + core::ticks_from_ms(kAskMs);
+  return true;
+}
+
+// The CARD section: UP / DOWN choose a row; F1 on CARD AS DISK asks (the row says what the second F1 does), F1 or the encoder on READ ONLY switches it.
+bool SystemConfig::card_input(Context& ctx, const Input& in) noexcept {
+  const int last = static_cast<int>(kCardBaseRows + (usb_ ? kCardUsbRows : 0u)) - 1;
+  if (card_row_ > last) {
+    card_row_ = static_cast<std::uint8_t>(last);
+  }
+  if (in.press(Button::Up) || in.press(Button::Down)) {
+    const int row = static_cast<int>(card_row_) + (in.press(Button::Down) ? 1 : -1);
+    card_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row > last ? last : row));
+    disarm();
+    return true;
+  }
+  if (!usb_) {
+    return false;
+  }
+  UsbAudio& u = ctx.usb_audio();
+  const bool f1 = in.press(Button::F1) && !in.shift;
+  if (card_row_ == kCardDisk && (f1 || in.turn())) {
+    if (!f1) {
+      disarm();
+      return true;
+    }
+    const hal::usb_audio::DiskStatus d = u.disk();
+    if (ask_ == Ask::Share || ask_ == Ask::Eject) {  // the second F1
+      const bool share = ask_ == Ask::Share;
+      disarm();
+      if (share) {
+        const hal::usb_audio::DiskRefusal refusal = u.share_disk();
+        strip(refusal == hal::usb_audio::DiskRefusal::None ? "GIVING THE CARD TO THE COMPUTER: THE USB PORT RECONNECTS" : hal::usb_audio::disk_refusal_text(refusal), -1, kNoticeMs, ctx.now());
+      } else {
+        strip(u.eject_disk() ? "EJECTING: THE CARD COMES BACK" : "THE DISK IS NOT OUT", -1, kNoticeMs, ctx.now());
+      }
+      return true;
+    }
+    // The first F1: refuse at once what the second would be refused for, so that nobody confirms a share that cannot happen.
+    const char* refused = nullptr;
+    if (d.phase == hal::usb_audio::DiskPhase::Working) {
+      refused = "A HAND-OVER IS RUNNING";
+    } else if (d.phase == hal::usb_audio::DiskPhase::Idle) {
+      if (!d.available) {
+        refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Unavailable);
+      } else if (!d.card_present) {
+        refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::NoCard);
+      } else if (d.busy || ctx.files().busy()) {
+        refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Busy);
+      } else if (u.changing()) {
+        refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Layout);
+      }
+    }
+    if (refused != nullptr) {
+      strip(refused, -1, kNoticeMs, ctx.now());
+      return true;
+    }
+    ask_ = d.phase == hal::usb_audio::DiskPhase::Out ? Ask::Eject : Ask::Share;
+    ask_until_ = ctx.now() + core::ticks_from_ms(kAskMs);
+    return true;
+  }
+  if (card_row_ == kCardReadOnly && (f1 || in.turn())) {
+    if (!u.set_read_only(!u.read_only())) {
+      strip("READ ONLY IS FIXED WHILE THE CARD IS OUT", -1, kNoticeMs, ctx.now());
+    }
+    return true;
+  }
+  return false;
 }
 
 bool SystemConfig::display_input(Context& ctx, const Input& in) noexcept {
@@ -368,6 +508,10 @@ void SystemConfig::step_theme(Context& ctx, int dir) noexcept {
 void SystemConfig::update(Context& ctx) noexcept {
   if (strip_on_ && core::tick_reached(ctx.now(), strip_until_)) {
     strip_on_ = false;
+  }
+  if (ask_ != Ask::None && core::tick_reached(ctx.now(), ask_until_)) {
+    ask_ = Ask::None;  // nobody confirmed
+    ctx.redraw();
   }
   if (sink_ == nullptr || !view_.open()) {
     return;
@@ -445,9 +589,29 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
       break;
     case Section::Audio: {
       const AudioIn& a = ctx.audio_in();
-      const AudioView view{a.source(), a.gain(), a.monitor(), ctx.radio().status(), a.meter(), a.settling(), a.failed(),
-                           audio_row_ < audio_row_count(a.source()) ? audio_row_ : audio_row_count(a.source()) - 1u};
+      const UsbAudio& u = ctx.usb_audio();
+      const bool proposed = ask_ == Ask::Layout;
+      const UsbView usb{proposed ? want_audio_ : u.audio(),
+                        proposed ? static_cast<hal::usb_audio::Profile>(want_profile_) : u.profile(),
+                        proposed ? want_duplex_ : u.duplex(),
+                        u.return_level(),
+                        u.streaming(),
+                        u.return_streaming(),
+                        u.changing(),
+                        proposed};
+      AudioRow kinds[kAudioMaxRows];
+      const unsigned rows = audio_rows(kinds, a.source(), audio_, usb_);
+      const AudioView view{audio_, usb_, usb, a.source(), a.gain(), a.monitor(), ctx.radio().status(), a.meter(), a.settling(), a.failed(), audio_row_ < rows ? audio_row_ : (rows != 0u ? rows - 1u : 0u)};
       draw_audio_page(r, grid, view);
+      break;
+    }
+    case Section::Card: {
+      const Files& f = ctx.files();
+      const hal::usb_audio::DiskStatus disk = usb_ ? ctx.usb_audio().disk() : hal::usb_audio::DiskStatus{};
+      const CardAsk ask = ask_ == Ask::Share ? CardAsk::Share : (ask_ == Ask::Eject ? CardAsk::Eject : CardAsk::None);
+      const unsigned rows = kCardBaseRows + (usb_ ? kCardUsbRows : 0u);
+      const CardView view{card_state_text(f.card()), f.status().text != nullptr ? f.status().text : "", f.volume(), usb_, disk, ctx.usb_audio().read_only(), ask, card_row_ < rows ? card_row_ : rows - 1u};
+      draw_card_page(r, grid, view);
       break;
     }
     case Section::Midi:
@@ -528,13 +692,19 @@ void SystemConfig::soft_keys(const Context& ctx, SoftKeys& keys) const noexcept 
       }
       break;
     case Section::Audio:
-      keys.label[0] = "NEXT";
-      if (ctx.audio_in().source() == AudioIn::Source::Radio) {
+      keys.label[0] = ask_ == Ask::Layout ? "APPLY" : "NEXT";
+      keys.hot = ask_ == Ask::Layout ? 1u : 0u;
+      if (audio_ && ctx.audio_in().source() == AudioIn::Source::Radio) {
         const hal::capture::RadioStatus::State s = ctx.radio().status().state;
         const bool dead = s == hal::capture::RadioStatus::State::Absent || s == hal::capture::RadioStatus::State::Failed;
         keys.label[4] = dead ? "RETRY" : "SEEK -";
         keys.label[5] = dead ? nullptr : "SEEK +";
       }
+      keys.label[7] = "CLOSE";
+      break;
+    case Section::Card:
+      keys.label[0] = ask_ != Ask::None ? "CONFIRM" : "CHANGE";
+      keys.hot = ask_ != Ask::None ? 1u : 0u;
       keys.label[7] = "CLOSE";
       break;
     case Section::Midi:

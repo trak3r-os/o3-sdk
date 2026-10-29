@@ -2,7 +2,7 @@
 //
 // <app>_sim: runs the app this executable is linked with (o3sdk_app(), cmake/O3sdkTargets.cmake) headless on the host.
 //
-//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--card DIR]
+//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--card DIR]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
@@ -10,7 +10,7 @@
 // gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
 // read or written, no flash exists); without it the screen has no FIRMWARE section. --midi gives the app a fake MIDI device
 // (platform/host/fake_midi.h: the MIDI section of the system Config, the routes, the clock); a scenario that has a `midi` or `clock` line gets
-// one without the option, and an app run without one sees the platform it had before MIDI existed. --audio-in gives it a fake codec input and FM radio (platform/host/fake_capture.h: the
+// one without the option, and an app run without one sees the platform it had before MIDI existed. --usb gives it a fake USB port and computer (platform/host/fake_usb_audio.h; a scenario with a usb, usbwav or card disk line makes one too). --audio-in gives it a fake codec input and FM radio (platform/host/fake_capture.h: the
 // AUDIO section of the system Config, Context::audio_in() and radio()); a scenario that has an `input` or `radio` line gets one without the option, and an app run without one has no
 // audio in and a silent input. --card DIR makes the directory (created when it is not there) the app's SD card
 // (platform/host/dir_card.h): Context::files() saves and loads there, under DIR/Apps/<app>/, the kit keeps the theme and the MIDI settings in DIR/Apps/<app>/system.o3s, and a scenario may
@@ -33,7 +33,7 @@
 namespace {
 
 void usage(const char* argv0) {
-  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--card DIR]\n", argv0);
+  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--card DIR]\n", argv0);
 }
 
 // Does the scenario text have a `midi` or `clock` command (the first word of a line)?
@@ -64,6 +64,24 @@ bool uses_capture(const std::string& text) {
   return false;
 }
 
+// Does the scenario text have a `usb` or `usbwav` command, or `card disk`?
+bool uses_usb(const std::string& text) {
+  std::istringstream lines(text);
+  std::string line;
+  while (std::getline(lines, line)) {
+    std::istringstream words(line.substr(0, line.find('#')));
+    std::string first;
+    std::string second;
+    if (words >> first) {
+      words >> second;
+      if (first == "usb" || first == "usbwav" || (first == "card" && second == "disk")) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 std::string lower_name(const char* s) {
   std::string out;
   for (; *s != '\0'; ++s) {
@@ -83,6 +101,7 @@ int main(int argc, char** argv) {
   std::string card_dir;
   bool midi = false;
   bool audio_in = false;
+  bool usb = false;
   long ms = 500;
   for (int i = 1; i < argc; ++i) {
     const char* a = argv[i];
@@ -101,6 +120,8 @@ int main(int argc, char** argv) {
       midi = true;
     } else if (std::strcmp(a, "--audio-in") == 0) {
       audio_in = true;
+    } else if (std::strcmp(a, "--usb") == 0) {
+      usb = true;
     } else if (std::strcmp(a, "--ms") == 0 && has_value) {
       ms = std::strtol(argv[++i], nullptr, 10);
     } else {
@@ -131,6 +152,7 @@ int main(int argc, char** argv) {
   }
   o3sdk::platform::host::FakeMidi fake_midi;
   o3sdk::platform::host::FakeCapture fake_capture;
+  o3sdk::platform::host::FakeUsbAudio fake_usb;
   std::unique_ptr<o3sdk::platform::host::DirCard> card;
   if (!card_dir.empty()) {
     std::error_code ec;
@@ -142,7 +164,7 @@ int main(int argc, char** argv) {
     card = std::make_unique<o3sdk::platform::host::DirCard>(card_dir);
   }
   o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware, (midi || uses_midi(scenario_text)) ? &fake_midi : nullptr, card.get(), nullptr,
-                    (audio_in || uses_capture(scenario_text)) ? &fake_capture : nullptr);
+                    (audio_in || uses_capture(scenario_text)) ? &fake_capture : nullptr, (usb || uses_usb(scenario_text)) ? &fake_usb : nullptr);
   if (!h.start()) {
     // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
     if (h.engine().setup_errors() != 0u) {

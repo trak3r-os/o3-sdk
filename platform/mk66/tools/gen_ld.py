@@ -264,7 +264,7 @@ def self_test():
     pins = {  # independent copies of the facts: the chip (K66 RM memory map), ADR 0013 D7 (SRAM_U) and the kit's map (docs/M2-PLAN.md, "Memory")
         "kFlashSize": 1 << 20, "kSramLBase": 0x1FFF0000, "kSramLSize": 64 << 10, "kSramUBase": 0x20000000,
         "kSramUSize": 192 << 10, "kSdramBase": 0x70000000, "kSdramSize": 16 << 20, "kSramUMinFree": 32 << 10,
-        "kRamfuncLBudget": 32 << 10, "kSramLFreeBase": 0x1FFF8000, "kDmaRingAlign": 1024, "kSdramArenaAlign": 32,
+        "kRamfuncLBudget": 32 << 10, "kSramLFreeBase": 0x1FFF8000, "kSramLDataBudget": 20 << 10, "kDmaRingAlign": 1024, "kSdramArenaAlign": 32,
         "kFlashConfigOffset": 0x400, "kStackTop": 0x20030000, "kStackSize": 24 << 10,
     }
     for name, value in pins.items():

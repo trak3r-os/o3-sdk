@@ -36,6 +36,7 @@
 #include <o3sdk/hal/leds.h>
 #include <o3sdk/hal/midi.h>
 #include <o3sdk/hal/record.h>
+#include <o3sdk/hal/usb_audio.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -74,6 +75,10 @@ struct Platform {
   // Recording (recorder.h, docs/M2C-PLAN.md section 6): the platform's recorder for Context::recorder(). The platform also wraps the render callback with the one that feeds it
   // (platform/mk66/audio record_service.h); the runtime's own block does not know it. Null: no recording, every call of recorder() is refused.
   hal::record::Recorder* recorder = nullptr;
+  // USB audio (usb_audio.h, docs/M2C-PLAN.md section 7): the port's layout, the stems, the return and the card as a disk, for Context::usb_audio() and the USB rows of the AUDIO section and the
+  // CARD section of the system Config. The platform also wraps the render callback with the service's (platform/mk66/audio usb_audio_service.h); the runtime's own block does not know it. Null: none of
+  // it, every call of usb_audio() is refused, and the runtime and the render are as they were.
+  hal::usb_audio::Device* usb_audio = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).
@@ -112,7 +117,7 @@ class Runtime {
   // `playing` is the last Play/Stop the main loop asked for, `tempo` is in milli-BPM (120000 = 120.0), `cpu` the render's load of the
   // last block in percent (0 without a cycle counter), `frames` the frames drawn. Spaces in a name become '_'. NUL terminated, cut
   // at a pair when `cap` is short; returns the length. Main loop only.
-  //   ... frames=<n> sys=0|1 section=<firmware|audio|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>
+  //   ... frames=<n> sys=0|1 section=<firmware|audio|midi|card|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>
   //       card=<none|ready|readonly|unsupported|computer|inuse> files=<idle|running|done|failed> [<the app's pairs>]
   // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase, `card` the
   // files service's view of the card (files.h Card; `none` also without a card capability) and `files` the phase of its last job (Files::Status).
@@ -120,6 +125,8 @@ class Runtime {
   //   ... files=<...> [in=<line|lineleft|lineright|miclow|michigh|radio|usb> gain=<0..100> mon=<0..100> gate=0|1 radio=<off|starting|ready|tuning|seeking|absent|failed> freq=<10 kHz units>]
   //       [<the app's pairs>]
   // The audio pairs (the choice of Context::audio_in() and radio(); `gate` is 0 while the source settles) are there only when the platform has a capture device.
+  //       [usb=<STD|P2|P8|P10|P11> dup=0|1 ret=<0..100> strm=0|1 disk=<idle|working|out>]
+  // The USB pairs (Context::usb_audio(): the set presented, the return stream in it, the return's level, the computer has the capture stream open, the card as a disk) are there only when the platform has a USB audio device.
   std::size_t state_line(char* out, std::size_t cap) const noexcept;
 
   // ---- The system layer (system_config.h) -----------------------------------------------------------------------------------------

@@ -356,7 +356,25 @@ TEST_CASE("mk66 diag text: usb audio (OS-006d)") {
   CHECK(tiny[32] == 'Z');
 }
 
-TEST_CASE("mk66 diag text: the mode names (OS-006d)") {
+TEST_CASE("mk66 diag text: stem map and the mode names (OS-006d)") {
+  o3sdk::platform::mk66::audio::StemMap map;
+  char buf[1024];
+  console::format_stem_map(map, buf, sizeof buf);
+  CHECK(std::strcmp(buf,
+                    "stem map: profile 10 (runtime only: the factory map after a reboot)\n"
+                    "  S1 = T1\n  S2 = T2\n  S3 = T3\n  S4 = T4\n  S5 = T5\n  S6 = T6\n  S7 = T7\n  S8 = T8\n"
+                    "  S9 = ML\n  S10 = MR\n"
+                    "  heard in the master only: T9+T10+T11+T12\n") == 0);
+  CHECK(map.set_slot(7, (1u << 7) | (1u << 11)));
+  CHECK(map.set_slot(0, 0));
+  console::format_stem_map(map, buf, sizeof buf);
+  CHECK(std::strstr(buf, "  S1 = -\n") != nullptr);
+  CHECK(std::strstr(buf, "  S8 = T8+T12\n") != nullptr);
+  CHECK(std::strstr(buf, "  heard in the master only: T1+T9+T10+T11\n") != nullptr);
+  CHECK(map.reset(o3sdk::usb::Profile::P2));
+  console::format_stem_map(map, buf, sizeof buf);
+  CHECK(std::strstr(buf, "profile 2 ") != nullptr);
+  CHECK(std::strstr(buf, "  heard in the master only: T1+T2+T3+T4+T5+T6+T7+T8+T9+T10+T11+T12\n") != nullptr);
   CHECK(std::strcmp(console::usb_mode_name(o3sdk::usb::Mode::Standard), "STANDARD") == 0);
   CHECK(std::strcmp(console::usb_mode_name(o3sdk::usb::Mode::Audio), "AUDIO") == 0);
   CHECK(std::strcmp(console::usb_profile_name(o3sdk::usb::Profile::P4S), "4S") == 0);

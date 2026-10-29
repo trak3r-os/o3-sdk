@@ -43,6 +43,9 @@ bool AudioIn::select(Source source, unsigned gain_percent) noexcept {
   source_ = source;
   gain_ = static_cast<std::uint8_t>(clamped(gain_percent));
   selected_ = true;
+  if (usb_ != nullptr) {
+    usb_->route_return_to_input(source == Source::Usb);  // the service replaces the codec's block by the return (or by silence while the computer plays nothing)
+  }
   // The planes go silent first (a one-block fade), so that nothing of the switch reaches the units or the monitor; the new channel map joins them only once the fade is done
   // (poll(), kMapDelayMs on), or the first block of the fade would carry it at full level.
   engine_->set_input_gate(false);

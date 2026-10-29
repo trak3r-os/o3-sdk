@@ -9,6 +9,7 @@
 //   * panel_image() is the screen above a drawing of the 48 pads: each pad lit to its LED level, a held pad framed in blue.
 //   * The audio can be recorded and written as a 16-bit stereo WAV at the engine's rate.
 //   * Context::recorder() is the unit's record service over the fake codec (recording.h of the plan, section 6): a take here is the unit's to the sample.
+//   * Context::usb_audio() is the unit's USB audio service over a fake port and a fake computer (platform/host/fake_usb_audio.h, section 7): the stems and the return here are the unit's to the sample.
 
 #include <o3sdk/app/app.h>
 #include <o3sdk/app/panel.h>
@@ -19,6 +20,7 @@
 #include <o3sdk/platform/host/fake_capture.h>
 #include <o3sdk/platform/host/fake_firmware.h>
 #include <o3sdk/platform/host/fake_midi.h>
+#include <o3sdk/platform/host/fake_usb_audio.h>
 #include <o3sdk/platform/host/fakes.h>
 #include <o3sdk/platform/host/host_card.h>
 #include <o3sdk/platform/host/protect_card.h>
@@ -66,9 +68,12 @@ class Harness {
   // kit keeps no settings); the harness puts a write-protect switch in front of it (card_protect). `app_id`: the folder name of Apps/<id>/ when
   // the app's build gave none (a test app; null: o3sdk_app_id()). `capture`: the codec's input and the FM radio of the platform (a platform::host::FakeCapture; null: none, no
   // AUDIO section, Context::audio_in() and radio() are refused, and the input of every block is silence); with one, the harness gives the engine what its read_block() delivers and
-  // steps its service() once a millisecond. All of them must outlive the harness.
+  // steps its service() once a millisecond. `usb`: the USB port and the computer behind it (a platform::host::FakeUsbAudio; null: none, no USB rows and no CARD AS DISK, the render as it was);
+  // the harness wraps the render with its service, starts it in the layout the kit's settings kept and steps its clock once a millisecond; with a card, CARD AS DISK puts the card under its
+  // host gate. All of them must outlive the harness.
   explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr, platform::host::FakeMidi* midi = nullptr,
-                   platform::host::HostCard* card = nullptr, const char* app_id = nullptr, platform::host::FakeCapture* capture = nullptr);
+                   platform::host::HostCard* card = nullptr, const char* app_id = nullptr, platform::host::FakeCapture* capture = nullptr,
+                   platform::host::FakeUsbAudio* usb = nullptr);
   ~Harness();
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
@@ -119,6 +124,10 @@ class Harness {
   platform::host::FakeMidi* midi() { return midi_; }
   // The fake capture device the harness was given (null without one).
   platform::host::FakeCapture* capture() { return capture_; }
+  // The fake USB port the harness was given (null without one), and the card as a disk (`card disk on|off`): the app layer's share_disk() / eject_disk(); nullptr when the request went
+  // through, else why it did not (hal::usb_audio::disk_refusal_text).
+  platform::host::FakeUsbAudio* usb() { return usb_; }
+  const char* card_disk(bool on);
   std::uint64_t due_samples() const;
   // The recorder of the platform (Platform::recorder, Context::recorder()): the unit's own record service (platform/mk66/audio record_service.h) wrapped around every rendered block, over
   // the fake codec's input. A restart makes a new one.
@@ -140,6 +149,7 @@ class Harness {
   app::App& app_;
   platform::host::FakeMidi* midi_;
   platform::host::FakeCapture* capture_;
+  platform::host::FakeUsbAudio* usb_;
   hal::firmware::FirmwareSink* firmware_;
   platform::host::HostCard* inner_card_;
   const char* app_id_;

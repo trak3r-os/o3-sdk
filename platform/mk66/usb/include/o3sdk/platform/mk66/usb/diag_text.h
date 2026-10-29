@@ -7,6 +7,7 @@
 // formatters (audio/diag.h) and are bound the same way. No printf: audio::diag::Text is the bounded builder.
 
 #include <o3sdk/platform/mk66/audio/diag.h>
+#include <o3sdk/platform/mk66/audio/stem_map.h>
 #include <o3sdk/core/input_event.h>
 #include <o3sdk/hal/input.h>
 #include <o3sdk/platform/mk66/audio.h>
@@ -72,6 +73,8 @@ const char* usb_profile_name(o3sdk::usb::Profile p) noexcept;      // "2", "8", 
 // The user's name of a layout (OS-USBRET): channels out of the Tracker, and the stereo return into it when there is one. "10 OUT", "8 OUT / 2 IN".
 // Written into `buf` (at least 20 bytes) and returned.
 const char* usb_layout_name(o3sdk::usb::Profile p, bool usb_return, char* buf) noexcept;
+// `diag usb map`: one line per slot of the profile, "S3 = T3", then the sources nobody names ("heard in the master only").
+std::size_t format_stem_map(const audio::StemMap& map, char* out, std::size_t cap) noexcept;
 std::size_t format_usb_audio(const UsbAudioReport& r, char* out, std::size_t cap) noexcept;
 
 const char* device_state_name(o3sdk::usb::DeviceState s) noexcept;

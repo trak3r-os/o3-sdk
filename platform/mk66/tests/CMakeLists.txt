@@ -66,7 +66,9 @@ mk66_suite(mk66_power_tests platform_mk66_power mk66_power_*_test.cpp)
 # The USB driver's pure parts (usb/): the SoC facts, the diag text, the injector, the input hold, the peek/poke lists, the `shot` stream, the real shell + pump + log pager over the
 # device and its fake controller (mk66_usb_console_test.cpp), the USB audio tap and the boot layout's descriptors. The fake controller and the rig are the kit's tests' (tests/usb).
 mk66_suite(mk66_usb_tests platform_mk66_usb
-  mk66_usb_*_test.cpp mk66_hil_inject_test.cpp mk66_input_hold_test.cpp mk66_mem_access_test.cpp mk66_shot_stream_test.cpp)
+  mk66_usb_*_test.cpp mk66_disk_share_test.cpp mk66_hil_inject_test.cpp mk66_input_hold_test.cpp mk66_mem_access_test.cpp mk66_shot_stream_test.cpp)
 if(TARGET mk66_usb_tests)
   target_include_directories(mk66_usb_tests PRIVATE ${PROJECT_SOURCE_DIR}/tests/usb)
+  # The MSC bridge and the disk hand-over tests run over the storage fakes and the FatFs writer (M2c slice U, ported from track3r-os).
+  target_link_libraries(mk66_usb_tests PRIVATE platform_mk66_save)
 endif()

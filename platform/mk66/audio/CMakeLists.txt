@@ -15,7 +15,7 @@
 # link `usb` after this library (platform/mk66/CMakeLists.txt, _mk66_main_libs). A target that links this library and runs the taps (the tests) links `usb` itself.
 o3sdk_library(platform_mk66_audio
   SOURCES src/pipeline.cpp src/status.cpp src/test_tone.cpp src/diag.cpp src/taps.cpp src/kernels.cpp src/stem_map.cpp src/test_signal.cpp src/si4703.cpp
-  src/record_service.cpp
+  src/record_service.cpp src/usb_audio_service.cpp
   DEPENDS platform_mk66_base dsp)
 target_include_directories(platform_mk66_audio PUBLIC $<TARGET_PROPERTY:usb,INTERFACE_INCLUDE_DIRECTORIES>)
 # track3r-os builds its audio library with -ffp-contract=off on the target (no fused multiply-add: the host and the unit round alike). Only the ported float code gets it here, so the

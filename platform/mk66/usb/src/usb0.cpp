@@ -32,16 +32,24 @@
 #include "../../src/internal.h"
 #include "../../src/regs.h"
 
+#include <o3sdk/core/placement.h>
+#include <o3sdk/platform/mk66/audio/usb_audio_service.h>
 #include <o3sdk/platform/mk66/mem_map.h>
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/platform/mk66/sections.h>
+#include <o3sdk/platform/mk66/storage/device.h>
 #include <o3sdk/platform/mk66/usb/console.h>
+#include <o3sdk/platform/mk66/usb/msc_bridge.h>
 #include <o3sdk/platform/mk66/usb/soc_facts.h>
 #include <o3sdk/platform/mk66/midi/usb_bind.h>
 #include <o3sdk/platform/mk66/usb/usb_audio.h>
 #include <o3sdk/usb/descriptors.h>
+#include <o3sdk/usb/ep0_trace.h>
 #include <o3sdk/usb/identity.h>
 #include <o3sdk/usb/iso_audio.h>
+#include <o3sdk/usb/msc.h>
+#include <o3sdk/usb/msc_link.h>
+#include <o3sdk/usb/msc_throttle.h>
 
 #include <cstdint>
 #include <cstring>
@@ -123,22 +131,40 @@ o3sdk::usb::MidiRing g_midi_from_host;
 o3sdk::usb::CdcTxWriter g_writer(g_cdc_tx);
 Usb0Regs g_regs;
 o3sdk::usb::UsbDevice<Usb0Regs> g_dev(g_regs, g_bdt, g_pipe, g_stream_counters, g_cdc_tx, g_cdc_rx, g_midi_to_host, g_midi_from_host);
+// OS-USBDISK U2a: endpoint 0's first 32 events of a DISK attach (ep0_trace.h, 388 B in .bss; `usb ep0`). Armed by start() / attach() for the DISK set only, with the interrupt line off, disarmed by detach(); the USB
+// interrupt is the only writer while it is armed, so it survives the rollback to the previous layout (the way back does not arm it) until the next DISK attach.
+o3sdk::usb::Ep0Trace g_ep0_trace;
 volatile bool g_attached = false;  // the pull-up is on: written by start() and the mode change in the main thread, read by the console
-
-// OS-005c2: the MIDI timing core's ends of the two MIDI rings (bind_midi). The interrupt reads the three pointers; bind_midi() writes them with interrupts masked.
-o3sdk::platform::mk66::midi::UsbMidiOut* volatile g_midi_out = nullptr;
-o3sdk::platform::mk66::midi::RtInRing* volatile g_midi_in = nullptr;
-const o3sdk::platform::mk66::midi::TimeRef* volatile g_midi_ref = nullptr;
-o3sdk::platform::mk66::midi::UsbBindStats g_midi_stats;
 
 // ---- AUDIO mode (OS-006d) -------------------------------------------------------------------------------------------------------------------
 // The return ring (USB ISR writes, the engine's pull reads: 2 KB), its engine-side reader, and the streams object, built by start() once the engine exists (it
-// holds a reference to the tap's stem ring, which must not be asked for during static initialisation).
+// holds a reference to the tap's stem ring, which must not be asked for during static initialisation). The stem map is the user's slot mapping.
 o3sdk::usb::ReturnRing g_return_ring;
 o3sdk::usb::ReturnReader g_return_reader(g_return_ring, g_stream_counters);
 alignas(o3sdk::usb::IsoAudio) unsigned char g_iso_storage[sizeof(o3sdk::usb::IsoAudio)];
 o3sdk::usb::IsoAudio* g_iso = nullptr;
+o3sdk::platform::mk66::audio::StemMap g_map;
 static_assert(soc::kConfigBufferBytes >= o3sdk::usb::kMaxConfigDescriptorSize, "the AUDIO configuration descriptor fits the buffer");
+
+// ---- DISK mode (OS-USBDISK U1c, docs/specs/OS-USBDISK.md 3.4) ---------------------------------------------------------------------------------
+// The Mass Storage function: the link (the two packet rings, 1.1 KB, .bss) is bound to the device by start() and is the ONLY thing the USB interrupt shares with the main loop in DISK mode (single
+// writer per field, usb/msc_link.h); the engine (the SCSI state machine, its block buffers) and the pump are built by start() and touched by the main loop alone (disk_pass), never by the
+// interrupt. The bridge is the engine's BlockStore over the card (storage/block_device.h), a medium only while the owner is Host. Built once, never destroyed; null until start().
+using MscBridge = o3sdk::platform::mk66::usb::MscBridge;
+o3sdk::usb::MscLink g_msc_link;
+alignas(MscBridge) unsigned char g_bridge_storage[sizeof(MscBridge)];
+// The engine (1.1 KB: both 512-byte block buffers) is in the SDRAM slack window, not SRAM_U (spec 3.4 item 5): main loop only (placement-new in start(), then disk_pass/disk_state), the SDHC is POLLED
+// (the CPU moves every block through its FIFO), and the USB DMA touches only the link's 64-byte slots (mem_map.h), so nothing but the core reads or writes these bytes. start() constructs it; null until then.
+O3SDK_BIG alignas(o3sdk::usb::msc::Engine) unsigned char g_engine_storage[sizeof(o3sdk::usb::msc::Engine)];
+alignas(o3sdk::usb::MscPump) unsigned char g_pump_storage[sizeof(o3sdk::usb::MscPump)];
+o3sdk::usb::MscThrottle g_throttle;  // Q11: main loop only (fed by set_render_load, asked by disk_pass)
+MscBridge* g_bridge = nullptr;
+o3sdk::usb::msc::Engine* g_engine = nullptr;
+o3sdk::usb::MscPump* g_pump = nullptr;
+
+// The pump publishes an IN packet: pend the USB interrupt (STIR, privileged) so the descriptor is armed at once and not at the next start of frame. Main loop; the interrupt is the only
+// reader of the rings, so a spurious pend costs one empty pass of the handler.
+void kick_usb() { regs::nvic_stir() = soc::kIrqNumber; }
 
 // A mode change in progress (request_mode / service): written and read by the main thread only.
 constexpr std::uint32_t kDrainMs = 120;   // the console's reply leaves over the CDC port first (the host polls the bulk IN endpoint every few ms)
@@ -158,7 +184,14 @@ void queue_change(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_r
   g_change.since_ms = boot::uptime_ms_low();
   g_change.phase = 1;
 }
+bool g_disk_boot = false;   // OS-USBDISK: start() presented DISK (the boot disk): final until a restart; the running mode's layout (disk_layout_enter) never sets it (main thread only)
 bool g_powered_off = false;  // OS-POWER P1: detach_for_power() ran: no later mode change, no attach (main thread only)
+
+// OS-005c2: the MIDI timing core's ends of the two MIDI rings (bind_midi). The interrupt reads the three pointers; bind_midi() writes them with interrupts masked.
+o3sdk::platform::mk66::midi::UsbMidiOut* volatile g_midi_out = nullptr;
+o3sdk::platform::mk66::midi::RtInRing* volatile g_midi_in = nullptr;
+const o3sdk::platform::mk66::midi::TimeRef* volatile g_midi_ref = nullptr;
+o3sdk::platform::mk66::midi::UsbBindStats g_midi_stats;
 
 static_assert(alignof(o3sdk::usb::BdtTable) == 512, "the buffer descriptor table is 512-byte aligned by type (ADR 0011 lesson 1)");
 
@@ -193,14 +226,10 @@ void on_usb_event(void*, o3sdk::usb::UsbEvent event, std::uint32_t arg) {
   }
 }
 
-// The streams started or stopped (ISR context, from usb::IsoAudio): the master tap and the return pull follow the host's alternate settings, so an
-// idle device pays nothing for either. UsbAudioTap::set_enabled and set_return_enabled are single atomic stores.
+// The streams started or stopped (ISR context, from usb::IsoAudio): the engine's stem tap and the return pull follow the host's alternate settings, so an
+// idle device pays nothing for either. UsbAudioService::streams_changed is atomic stores and the engine's source mask (also one atomic word).
 void on_streams(void*, bool in_active, std::uint32_t channels, bool out_active) {
-  if (in_active) {
-    usb_audio::tap().set_channels(channels);  // before the enable: the master goes on the last two channels of the stream the host selected
-  }
-  usb_audio::tap().set_enabled(in_active);
-  usb_audio::tap().set_return_enabled(out_active);
+  usb_audio::service().streams_changed(in_active, out_active);
   console::log_dec(in_active ? "usb: stems stream, channels" : "usb: stems stream stopped, was", channels);
   console::log(out_active ? "usb: return stream on" : "usb: return stream off");
 }
@@ -247,12 +276,13 @@ bool start(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) 
   // The set of this first enumeration (OS-USBAUDIO). The static constructor built STANDARD with the boot layout; the descriptors are rebuilt here, before the pull-up and with the interrupt line
   // still off, so no host has seen anything else. A layout the engine cannot feed, or a set that does not build, is STANDARD with the boot layout.
   if (mode != g_desc.cfg.mode || profile != g_desc.cfg.profile || usb_return != g_desc.cfg.usb_return) {
-    if (mode == o3sdk::usb::Mode::Disk || !usb_audio::supported(profile) || !g_desc.build(mode, profile, usb_return)) {
+    if (!usb_audio::supported(profile) || !g_desc.build(mode, profile, usb_return)) {
       console::log("usb: boot layout refused, STANDARD");
       (void)g_desc.build(o3sdk::usb::Mode::Standard, kBootProfile, true);
     }
     g_pipe.rebind(g_desc.cfg, g_desc.device, g_desc.device_len, g_desc.config, g_desc.config_len);
   }
+  g_disk_boot = g_desc.cfg.mode == o3sdk::usb::Mode::Disk;
   if (g_desc.device_len != o3sdk::usb::kDeviceDescriptorSize || g_desc.config_len < 9u ||
       (g_desc.config[2] | (g_desc.config[3] << 8)) != static_cast<int>(g_desc.config_len)) {
     console::log("usb: descriptors did not build, pull-up off");
@@ -264,7 +294,17 @@ bool start(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) 
     g_iso = new (g_iso_storage) o3sdk::usb::IsoAudio(usb_audio::tap().ring(), g_return_ring, g_return_reader, g_stream_counters);
     g_iso->set_hook(&on_streams, nullptr);
     g_dev.bind_audio(g_iso);
-    usb_audio::tap().attach_return(&g_return_reader);
+    // DISK mode's link and engine (nothing is armed unless the descriptor set is DISK and the host configures it): bound before the interrupt line is enabled.
+    g_bridge = new (g_bridge_storage) MscBridge(storage::device::block(), storage::device::swap());
+    g_bridge->set_blocking_hook(&appimg::service_while_blocked);  // a card that follow() starts blocks for its initialisation: the display stays serviced (U1c part 2b review, minor 1)
+    std::memset(g_engine_storage, 0, sizeof g_engine_storage);  // the SDRAM holds whatever it held: the engine's members the constructor leaves alone (the buffers) read zero, as they did in .bss
+    g_engine = new (g_engine_storage) o3sdk::usb::msc::Engine(*g_bridge);
+    g_pump = new (g_pump_storage) o3sdk::usb::MscPump(g_msc_link, *g_engine, &kick_usb);
+    g_dev.bind_msc(&g_msc_link);
+    g_dev.bind_trace(&g_ep0_trace);
+    usb_audio::service().attach_return(&g_return_reader);
+    o3sdk::platform::mk66::audio::factory_map(g_map, g_desc.cfg.profile);  // (the map class starts at profile 10; the boot layout is the one the caller chose, kBootProfile by default; o3-sdk: its factory slots, usb_audio_service.h)
+    g_map.apply(usb_audio::tap());
   }
 
   // 1. Clock: the IRC48M as the USB clock, gated on.
@@ -284,6 +324,9 @@ bool start(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) 
   module_on();
 
   // 5. Endpoint 0 and the table ready (the state a bus reset leaves), interrupts enabled in the module.
+  if (g_desc.cfg.mode == o3sdk::usb::Mode::Disk) {
+    g_ep0_trace.arm();  // (the interrupt line is still off)
+  }
   g_dev.prepare();
 
   // 6. The interrupt line.
@@ -306,6 +349,11 @@ std::uint8_t change_phase() noexcept { return g_change.phase; }
 o3sdk::usb::Mode pending_mode() noexcept { return g_change.mode; }
 o3sdk::usb::Profile pending_profile() noexcept { return g_change.profile; }
 bool pending_return() noexcept { return g_change.usb_return; }
+o3sdk::platform::mk66::audio::StemMap& stem_map() noexcept { return g_map; }
+void apply_stem_map() noexcept {
+  g_map.apply(usb_audio::tap());
+  usb_audio::service().refresh_stems();  // (the engine's source mask follows the slots)
+}
 const o3sdk::usb::IsoAudio* iso() noexcept { return g_iso; }
 
 void reset_stream_counters() noexcept {
@@ -318,17 +366,44 @@ void reset_stream_counters() noexcept {
 bool request_mode(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile) noexcept { return request_layout(mode, profile, g_desc.cfg.usb_return); }
 
 bool request_layout(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) noexcept {
-  if (g_powered_off || g_iso == nullptr || g_change.phase != 0u || mode == o3sdk::usb::Mode::Disk || !usb_audio::supported(profile)) {
+  if (g_powered_off || g_iso == nullptr || g_change.phase != 0u || !usb_audio::supported(profile)) {
     return false;
+  }
+  if (g_desc.cfg.mode == o3sdk::usb::Mode::Disk) {
+    // The DISK set is final until a restart (OS-USBDISK boot disk; v0.6.8: the app's mode sync took the default USB AUDIO for a change and re-enumerated the unit as AUDIO in the middle of the computer's
+    // enumeration). Nothing re-enumerates away from it or inside it: the same layout asked again is Ok (nothing to do), any other is refused (usb::disk_layout_accepts, host-tested). The running mode (U2)
+    // leaves DISK by its own call, not through here.
+    return o3sdk::usb::disk_layout_accepts(g_desc.cfg.profile, g_desc.cfg.usb_return, mode, profile, usb_return);
   }
   if (mode == o3sdk::usb::Mode::Standard && g_desc.cfg.mode == o3sdk::usb::Mode::Standard) {
     // STANDARD's descriptors depend on neither the profile nor USB RETURN: nothing to re-enumerate, the next AUDIO attach uses them.
     g_desc.cfg.usb_return = usb_return;
-    g_desc.cfg.profile = profile;
+    if (profile != g_map.profile()) {
+      o3sdk::platform::mk66::audio::factory_map(g_map, profile);
+      g_desc.cfg.profile = profile;
+      apply_stem_map();
+    }
     return true;
   }
   if (mode == g_desc.cfg.mode && profile == g_desc.cfg.profile && usb_return == g_desc.cfg.usb_return) {
     return true;
+  }
+  queue_change(mode, profile, usb_return);
+  return true;
+}
+
+bool disk_layout_enter(o3sdk::usb::Profile profile, bool usb_return) noexcept {
+  if (g_powered_off || g_iso == nullptr || g_change.phase != 0u || g_desc.cfg.mode == o3sdk::usb::Mode::Disk || !usb_audio::supported(profile)) {
+    return false;
+  }
+  queue_change(o3sdk::usb::Mode::Disk, profile, usb_return);  // (always a re-enumeration: the Disk set is another device, even from STANDARD)
+  return true;
+}
+
+bool disk_layout_leave(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) noexcept {
+  if (g_powered_off || g_iso == nullptr || g_change.phase != 0u || g_desc.cfg.mode != o3sdk::usb::Mode::Disk || g_disk_boot || mode == o3sdk::usb::Mode::Disk ||
+      !usb_audio::supported(profile)) {
+    return false;  // the boot disk's set is final (a reset is its only exit); DISK to DISK is no way out
   }
   queue_change(mode, profile, usb_return);
   return true;
@@ -342,6 +417,7 @@ void detach() noexcept {
   usb_reg(soc::kOffControl) = 0;
   regs::nvic_icer(soc::kIrqNumber) = regs::irq_bit(soc::kIrqNumber);
   usb_reg(soc::kOffCtl) = 0;
+  g_ep0_trace.disarm();
   g_attached = false;
   g_iso->reset_session(g_desc.cfg.speed);
 }
@@ -352,9 +428,16 @@ void attach() noexcept {
     console::log("usb: descriptors did not build, back to STANDARD");
     g_desc.build(o3sdk::usb::Mode::Standard, kBootProfile, true);
   }
+  if (g_desc.cfg.profile != g_map.profile()) {
+    o3sdk::platform::mk66::audio::factory_map(g_map, g_desc.cfg.profile);
+  }
+  apply_stem_map();
   g_stream_counters.reset();
   g_pipe.rebind(g_desc.cfg, g_desc.device, g_desc.device_len, g_desc.config, g_desc.config_len);
   module_on();
+  if (g_desc.cfg.mode == o3sdk::usb::Mode::Disk) {
+    g_ep0_trace.arm();  // (the interrupt line is off: the main loop is the writer for the prepare() below, the interrupt from the pull-up on)
+  }
   g_dev.prepare();
   regs::nvic_icpr(soc::kIrqNumber) = regs::irq_bit(soc::kIrqNumber);
   regs::nvic_iser(soc::kIrqNumber) = regs::irq_bit(soc::kIrqNumber);
@@ -408,9 +491,64 @@ void service() noexcept {
   }
 }
 
+bool disk_open(bool writable) noexcept {
+  if (g_bridge == nullptr || g_engine == nullptr) {
+    return false;
+  }
+  g_bridge->set_writable(writable);  // before the card is opened: no block can be written under another policy
+  const bool opened = g_bridge->open();
+  g_engine->medium_changed();  // whatever the computer saw before this (nothing, normally) was not this card
+  console::log(opened ? (writable ? "usb: disk opened, writable" : "usb: disk opened, read-only") : "usb: disk: no card, or it did not start");
+  return opened;
+}
+
+void disk_pass(std::uint32_t now_ms) noexcept {
+  if (g_pump == nullptr || g_desc.cfg.mode != o3sdk::usb::Mode::Disk || !g_attached || g_change.phase != 0u || !g_pipe.configured()) {
+    return;
+  }
+  if (g_bridge->follow(now_ms)) {  // the slot changed under the computer: the card let go / the new one started; the engine answers UNIT ATTENTION
+    g_engine->medium_changed();
+    console::log(g_bridge->opened() ? "usb: disk: card changed, started" : "usb: disk: card removed or did not start");
+  }
+  if (g_throttle.allow(now_ms)) {  // Q11: the card is followed every pass; only the pump (the transfer) is held to every 2 ms above 85 % render load
+    g_pump->step();
+  }
+}
+
+void disk_close() noexcept {
+  if (g_bridge != nullptr && g_bridge->opened()) {
+    g_bridge->close();
+    console::log("usb: disk closed");
+  }
+}
+
+void set_render_load(unsigned percent) noexcept { g_throttle.feed(percent); }
+bool disk_throttled() noexcept { return g_throttle.throttled(); }
+bool disk_take_eject_request() noexcept { return g_engine != nullptr && g_engine->take_eject_request(); }
+void disk_unit_eject() noexcept {
+  if (g_engine != nullptr) {
+    g_engine->unit_eject();
+  }
+}
+
+DiskState disk_state() noexcept {
+  DiskState d;
+  if (g_bridge == nullptr || g_engine == nullptr) {
+    return d;
+  }
+  d.present = g_bridge->present();
+  d.ejected = g_engine->ejected();
+  d.writable = !g_bridge->write_protected();  // what the computer is told (the policy AND the card's own protect bit), not the policy alone
+  d.busy = !g_engine->idle();
+  d.blocks = g_bridge->block_count();
+  d.configured = g_attached && g_desc.cfg.mode == o3sdk::usb::Mode::Disk && g_pipe.configured();
+  return d;
+}
+
 const o3sdk::usb::DeviceCounters& device_counters() noexcept { return g_dev.counters(); }
 const o3sdk::usb::ControlPipe& control() noexcept { return g_pipe; }
 const o3sdk::usb::Counters& stream_counters() noexcept { return g_stream_counters; }
+const o3sdk::usb::Ep0Trace& ep0_trace() noexcept { return g_ep0_trace; }
 o3sdk::usb::CdcTxWriter& cdc_writer() noexcept { return g_writer; }
 o3sdk::usb::CdcRxRing& cdc_rx() noexcept { return g_cdc_rx; }
 o3sdk::usb::MidiRing& midi_to_host() noexcept { return g_midi_to_host; }

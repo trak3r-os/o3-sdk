@@ -6,7 +6,7 @@ Python 3 standard library only, run as `python3 -I <tool>` (nothing from the cur
 
 ## The USB console tools
 
-`o3console.py`, `o3shot.py`, `o3audio.py`, `o3hil.py` and `o3disk.py` are track3r-os's, copied from its `platform/mk66/tools` and
+`o3console.py`, `o3shot.py`, `o3audio.py`, `o3hil.py`, `o3disk.py` and `o3tone.py` are track3r-os's, copied from its `platform/mk66/tools` and
 identical but for the rename `o3os` -> `o3sdk` (mock replies and example names in the self-tests, an option name in a help text) and
 two edits in `o3hil.py`'s self-test, which looked for the tracker's tree (see "Differences", below). The unit keeps the USB identity of
 track3r-os (`16D0:0E9F`, product "Track3r"), so the tools find it the same way: `/dev/serial/by-id/*Track3r*` for the console and an
@@ -19,7 +19,8 @@ an o3sdk image `Track3r o3sdk, build <id>`; no tool parses that line (`--expect-
 | `o3shot.py` | decode the `shot` stream to a PNG; `compare A.png B.png` with tolerances (the FT812 is not the simulator's rasteriser) |
 | `o3audio.py` | `record` the unit's USB audio and measure each channel (level, silence, clipping, pitch) |
 | `o3hil.py` | JSON scenarios in `hil/` driving key, pad, enc, state, leds, shot and audio steps |
-| `o3disk.py` | the PC side of the USB disk scenarios (`o3hil` `disk` steps); o3sdk has no disk set yet, kept so the port stays whole |
+| `o3disk.py` | the PC side of the USB disk scenarios (`o3hil` `disk` steps; the disk is CARD AS DISK, `disk share [ro]`, M2c slice U) |
+| `o3tone.py` | plays a known tone from the PC into the unit's USB AUDIO return (the computer's stream; M2c slice U); `hil/hello_usb.json` asks for it |
 
 Never run them against a unit from an agent session; the test session at the unit does (`docs/hw/`). Each one's header says what it
 sends and which exit status means what.

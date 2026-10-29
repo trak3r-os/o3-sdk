@@ -21,7 +21,7 @@ const char* result_name(Result r) noexcept {
 
 namespace {
 
-static_assert(kRadioFreq == kKeyCount, "the keys are 1 .. kKeyCount, in order");
+static_assert(kUsbStem11 == kKeyCount && kUsbStem1 + hal::usb_audio::kMaxChannels - 1u == kUsbStem11, "the keys are 1 .. kKeyCount, in order");
 
 struct Entry {
   std::uint16_t key;
@@ -45,15 +45,23 @@ void gather(const KitValues& v, Entry (&out)[kKeyCount]) noexcept {
   out[11] = {kInputMonitor, static_cast<float>(v.in_monitor)};
   out[12] = {kRadioRegion, static_cast<float>(v.radio_region)};
   out[13] = {kRadioFreq, static_cast<float>(v.radio_freq)};
+  out[14] = {kUsbAudio, v.usb_audio ? 1.0f : 0.0f};
+  out[15] = {kUsbProfile, static_cast<float>(v.usb_profile)};
+  out[16] = {kUsbDuplex, v.usb_duplex ? 1.0f : 0.0f};
+  out[17] = {kUsbReturnLevel, static_cast<float>(v.usb_level)};
+  out[18] = {kUsbMapSet, v.usb_map_set ? 1.0f : 0.0f};
+  for (unsigned i = 0; i < hal::usb_audio::kMaxChannels; ++i) {
+    out[19 + i] = {static_cast<std::uint16_t>(kUsbStem1 + i), static_cast<float>(v.usb_stem[i])};
+  }
 }
 
 // Applies one entry to `v`: 1 applied, 0 the key is not known, -1 the value is not one this key takes.
 int apply(KitValues& v, std::uint16_t key, float value) noexcept {
-  if (key < kTheme || key > kRadioFreq) {
+  if (key < kTheme || key > kUsbStem11) {
     return 0;
   }
-  // Every setting is a small whole number (a NaN fails the first test); the station is the one that does not fit a byte.
-  const float limit = key == kRadioFreq ? 65535.0f : 255.0f;
+  // Every setting is a small whole number (a NaN fails the first test); the station and the stem masks are the ones that do not fit a byte.
+  const float limit = key == kRadioFreq || key >= kUsbStem1 ? 65535.0f : 255.0f;
   if (!(value >= 0.0f && value <= limit) || static_cast<float>(static_cast<unsigned>(value)) != value) {
     return -1;
   }
@@ -124,7 +132,31 @@ int apply(KitValues& v, std::uint16_t key, float value) noexcept {
       }
       v.radio_freq = static_cast<std::uint16_t>(n);
       return 1;
+    case kUsbAudio:
+    case kUsbDuplex:
+    case kUsbMapSet:
+      if (n > 1u) {
+        return -1;
+      }
+      (key == kUsbAudio ? v.usb_audio : key == kUsbDuplex ? v.usb_duplex : v.usb_map_set) = n != 0u;
+      return 1;
+    case kUsbProfile:
+      if (n >= hal::usb_audio::kProfileCount) {
+        return -1;
+      }
+      v.usb_profile = static_cast<std::uint8_t>(n);
+      return 1;
+    case kUsbReturnLevel:
+      if (n > 100u) {
+        return -1;
+      }
+      v.usb_level = static_cast<std::uint8_t>(n);
+      return 1;
     default:
+      if (key >= kUsbStem1 && key <= kUsbStem11) {
+        v.usb_stem[key - kUsbStem1] = static_cast<std::uint16_t>(n);
+        return 1;
+      }
       return 0;
   }
 }

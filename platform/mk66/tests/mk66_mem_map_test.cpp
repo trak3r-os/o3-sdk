@@ -37,6 +37,8 @@ TEST_CASE("mk66 mem_map: SDRAM is .sdram_bss then the app's arena, and every byt
 TEST_CASE("mk66 mem_map: SRAM_L is the hot code's budget and free space; SRAM_U has room") {
   CHECK(mem::kRamfuncLBudget == 32u * 1024u);
   CHECK(mem::kSramLFreeBase == 0x1FFF8000u);
+  CHECK(mem::kSramLDataBudget == 20u * 1024u);  // the USB stems' pool (taps.h StemPool, .tapmem_l)
+  CHECK(mem::kSramLDataBudget <= mem::kSramLSize - mem::kRamfuncLBudget);
   CHECK(mem::kRamfuncLBudget <= mem::kSramLSize);
   CHECK(mem::kRamfuncLSize == 0xC800u);  // the update path's validator window: track3r-os's 50 KiB
   CHECK(mem::kRamfuncLBudget <= mem::kRamfuncLSize);

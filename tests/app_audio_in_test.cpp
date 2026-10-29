@@ -589,7 +589,7 @@ TEST_CASE("radio: a receiver that does not answer is Absent, nothing retries by 
 
 TEST_CASE("settings: audio in and the radio are keys 10 to 14 of SETS, round trip, and an old file keeps the defaults") {
   using namespace app::settings;
-  static_assert(kInputSource == 10 && kInputGain == 11 && kInputMonitor == 12 && kRadioRegion == 13 && kRadioFreq == 14 && kKeyCount == 14, "keys are appended, never reused");
+  static_assert(kInputSource == 10 && kInputGain == 11 && kInputMonitor == 12 && kRadioRegion == 13 && kRadioFreq == 14 && kKeyCount >= 14, "keys are appended, never reused (slice U appended 15..30)");
   app::KitValues v;
   v.in_source = static_cast<std::uint8_t>(Source::MicHigh);
   v.in_gain = 37;

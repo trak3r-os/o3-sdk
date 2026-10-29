@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
-// What an app and its screens may use: the engine, the panel's state, MIDI, the card's files, audio in and the FM radio, recording, time, the screen switch and the theme. Handed to every call;
+// What an app and its screens may use: the engine, the panel's state, MIDI, the card's files, audio in and the FM radio, recording, USB audio, time, the screen switch and the theme. Handed to every call;
 // owned by the runtime.
 
 #include <o3sdk/app/audio_in.h>
@@ -10,6 +10,7 @@
 #include <o3sdk/app/panel.h>
 #include <o3sdk/app/radio.h>
 #include <o3sdk/app/recorder.h>
+#include <o3sdk/app/usb_audio.h>
 #include <o3sdk/core/tick.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/ui/theme.h>
@@ -44,6 +45,10 @@ class Context {
   Recorder& recorder() noexcept { return recorder_; }
   const Recorder& recorder() const noexcept { return recorder_; }
 
+  // USB audio (usb_audio.h): the port's layout, the stems, the return and the card as a disk. An app that never calls it pays nothing in the render. Main loop only.
+  UsbAudio& usb_audio() noexcept { return usb_audio_; }
+  const UsbAudio& usb_audio() const noexcept { return usb_audio_; }
+
   core::Tick now() const noexcept { return now_; }          // microseconds, wraps (core/tick.h)
   std::uint64_t uptime_ms() const noexcept { return ms_; }  // does not wrap
 
@@ -67,6 +72,7 @@ class Context {
   AudioIn audio_in_;
   Radio radio_;
   Recorder recorder_;
+  UsbAudio usb_audio_;
   core::Tick now_ = 0;
   std::uint64_t ms_ = 0;
   Screen* screen_ = nullptr;

@@ -313,7 +313,8 @@ TEST_CASE("sim files: the theme and the MIDI channel survive a reboot and a cold
     tap(h, app::Button::Config);
     h.run_ms(50);
     CHECK(h.runtime().system_open());
-    tap(h, app::Button::Right);  // MIDI -> DISPLAY (no FIRMWARE section here)
+    tap(h, app::Button::Right);  // MIDI -> CARD (no FIRMWARE section here)
+    tap(h, app::Button::Right);  // CARD -> DISPLAY
     CHECK(has(state(h), "section=display"));
     h.turn(1);
     h.run_ms(1);

@@ -57,6 +57,10 @@ constexpr std::uint32_t sdram_alias(std::uint32_t sdram_address) noexcept { retu
 // module slab are gone with the tracker.
 inline constexpr std::uint32_t kRamfuncLBudget = 32u * kKiB;
 inline constexpr std::uint32_t kSramLFreeBase = kSramLBase + kRamfuncLBudget;
+// The free half's first object (M2c slice U, docs/M2C-PLAN.md section 7): `.tapmem_l`, NOLOAD, at kSramLFreeBase: the USB stems' pool and ring (audio/taps.h StemPool, O3SDK_TAP_MEM_L in
+// sections.h), which the render writes a block at a time and the USB interrupt reads a packet at a time. About 15.8 KB today (11 channels x 5 blocks x 128 frames, the staging blocks and the
+// ring); the budget is what the linker script asserts. Not cleared by the reset sequence: the StemTap's constructor zeroes it before main.
+inline constexpr std::uint32_t kSramLDataBudget = 20u * kKiB;
 // The SRAM_L window the update path's validator accepts for a vector (update/hex_validator.h pins its copy to this): track3r-os's, 50 KiB. It is not
 // a section of this image; o3sdk's kRamfuncLBudget fits inside, so the validator accepts o3sdk's images and track3r-os's (the way back).
 inline constexpr std::uint32_t kRamfuncLSize = 0xC800u;
@@ -147,6 +151,7 @@ static_assert(kCrashBlockSize % 8u == 0u && kFaultStackSize % 8u == 0u && kStack
 static_assert(kRamfuncLBudget <= kSramLSize && kRamfuncLBudget % 4u == 0u, "the hot-code budget fits SRAM_L, in whole words");
 static_assert(kRamfuncLBudget <= kRamfuncLSize, "the hot-code budget fits the window the update path's validator accepts");
 static_assert(kSramLFreeBase + (kSramLSize - kRamfuncLBudget) == kSramLBase + kSramLSize, "the free part of SRAM_L runs to its end");
+static_assert(kSramLDataBudget <= kSramLSize - kRamfuncLBudget && kSramLDataBudget % 8u == 0u, "the tap data fits the free part of SRAM_L");
 static_assert(kSdramArenaAlign % 16u == 0u && kSdramBase % kSdramArenaAlign == 0u, "the arena is aligned to whole cache lines");
 static_assert(sdram_alias(kSdramBase + kSdramSize - 1u) < 0x10000000u, "the whole SDRAM fits the ICode alias window 0x0800_0000-0x0FFF_FFFF");
 static_assert(budget_sum(kSramUBudget) + kSramUMinFree <= kSramUSize, "ADR 0013 D7: the SRAM_U rows leave at least 32 KiB free");

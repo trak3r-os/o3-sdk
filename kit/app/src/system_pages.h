@@ -7,6 +7,8 @@
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/capture.h>
 #include <o3sdk/hal/midi.h>
+#include <o3sdk/hal/storage.h>
+#include <o3sdk/hal/usb_audio.h>
 #include <o3sdk/ui/renderer.h>
 
 namespace o3sdk::app {
@@ -28,23 +30,41 @@ inline constexpr unsigned kMidiRowCount = 8;
 hal::midi::Config midi_step(hal::midi::Config c, unsigned row, int steps, bool wrap) noexcept;
 void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row) noexcept;
 
-// The AUDIO page (system_audio_page.cpp): INPUT, GAIN and MONITOR, then FREQ, REGION and SEEK while the radio is the input.
-enum AudioRow : unsigned { kAudioInput, kAudioGain, kAudioMonitor, kAudioFreq, kAudioRegion, kAudioSeek };
+// The AUDIO page (system_audio_page.cpp): INPUT, GAIN and MONITOR, then FREQ, REGION and SEEK while the radio is the input (a platform with a capture device), then USB AUDIO, PROFILE, RETURN
+// and RETURN LEVEL (a platform with a USB audio device).
+enum AudioRow : unsigned { kAudioInput, kAudioGain, kAudioMonitor, kAudioFreq, kAudioRegion, kAudioSeek, kAudioUsb, kAudioProfile, kAudioReturn, kAudioReturnLevel };
 inline constexpr unsigned kAudioBaseRows = 3;
 inline constexpr unsigned kAudioRadioRows = 3;
-// How many rows the page has for this source.
-constexpr unsigned audio_row_count(hal::capture::Source source) noexcept {
-  return source == hal::capture::Source::Radio ? kAudioBaseRows + kAudioRadioRows : kAudioBaseRows;
-}
-// The sources the INPUT row offers, in order (the USB return has no path yet: slice U adds it).
-inline constexpr unsigned kAudioSourceChoices = 6;
+inline constexpr unsigned kAudioUsbRows = 4;
+inline constexpr unsigned kAudioMaxRows = kAudioBaseRows + kAudioRadioRows + kAudioUsbRows;
+// The rows the page has, in order, as AudioRow kinds, for this source and these capabilities: how many.
+unsigned audio_rows(AudioRow (&kinds)[kAudioMaxRows], hal::capture::Source source, bool has_input, bool has_usb) noexcept;
+// The sources the INPUT row offers, in order: the line, the microphone, the radio and, with a USB audio device, the computer's return.
+inline constexpr unsigned kAudioSourceChoices = 7;
 // `source` moved by `steps` choices of the INPUT row: clamped, or wrapped round with `wrap`; the radio is skipped while no receiver is there (`radio_ok` false), unless it is where
-// the move starts and goes nowhere else.
-hal::capture::Source audio_step_source(hal::capture::Source source, int steps, bool wrap, bool radio_ok) noexcept;
+// the move starts and goes nowhere else; the USB return is offered only with `usb_ok`.
+hal::capture::Source audio_step_source(hal::capture::Source source, int steps, bool wrap, bool radio_ok, bool usb_ok = false) noexcept;
+// `p` moved by `steps` choices of the PROFILE row (P2, P8, P10, P11): clamped, or wrapped round.
+hal::usb_audio::Profile audio_step_profile(hal::usb_audio::Profile p, int steps, bool wrap) noexcept;
 // A per cent value moved by `steps` (clamped to 0..100, or wrapped round with `wrap`).
 unsigned audio_step_percent(unsigned value, int steps, bool wrap) noexcept;
 
+// What the USB rows show: the layout (the proposal while a change waits for its second F1) and the streams.
+struct UsbView {
+  bool audio;
+  hal::usb_audio::Profile profile;
+  bool duplex;
+  unsigned level;      // the return's level, per cent
+  bool streaming;      // the computer has the capture stream open
+  bool return_open;    // and the return stream
+  bool changing;       // the port is re-enumerating
+  bool proposed;       // audio, profile and duplex are a proposal: F1 again applies it, the port reconnects
+};
+
 struct AudioView {
+  bool has_input;
+  bool has_usb;
+  UsbView usb;
   hal::capture::Source source;
   unsigned gain;
   unsigned monitor;
@@ -55,5 +75,22 @@ struct AudioView {
   unsigned row;
 };
 void draw_audio_page(ui::Renderer& r, const PageGrid& grid, const AudioView& v) noexcept;
+
+// The CARD page (system_card_page.cpp): the card as the files service sees it, the volume, the files job, and CARD AS DISK and READ ONLY with a USB audio device.
+enum CardRow : unsigned { kCardState, kCardVolume, kCardFiles, kCardDisk, kCardReadOnly };
+inline constexpr unsigned kCardBaseRows = 3;
+inline constexpr unsigned kCardUsbRows = 2;
+enum class CardAsk : std::uint8_t { None, Share, Eject };  // the second F1 of CARD AS DISK is waited for
+struct CardView {
+  const char* state;  // the files service's view of the card, upper case
+  const char* files;  // its job's text, "" when idle
+  hal::storage::VolumeInfo volume;
+  bool has_usb;
+  hal::usb_audio::DiskStatus disk;
+  bool read_only;
+  CardAsk ask;
+  unsigned row;
+};
+void draw_card_page(ui::Renderer& r, const PageGrid& grid, const CardView& v) noexcept;
 
 }  // namespace o3sdk::app

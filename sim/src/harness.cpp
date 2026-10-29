@@ -65,10 +65,11 @@ void put_u16(std::FILE* f, std::uint16_t v) {
 }  // namespace
 
 Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi, platform::host::HostCard* card, const char* app_id,
-                 platform::host::FakeCapture* capture)
+                 platform::host::FakeCapture* capture, platform::host::FakeUsbAudio* usb)
     : app_(app),
       midi_(midi),
       capture_(capture),
+      usb_(usb),
       firmware_(firmware),
       inner_card_(card),
       app_id_(app_id),
@@ -79,6 +80,16 @@ Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform:
     protect_ = std::make_unique<platform::host::ProtectCard>(*card);
   }
   make_runtime();
+  if (usb_ != nullptr && protect_ != nullptr) {
+    // The card as a disk: the computer's gate in front of the card, the runtime told when it changes hands, and "the card is in use" is the files service's job.
+    platform::host::ProtectCard* const card_ptr = protect_.get();
+    usb_->bind_card([card_ptr]() { return card_ptr->card_present(); },
+                    [this, card_ptr](bool computer) {
+                      card_ptr->set_host(computer);
+                      runtime_->card_changed();
+                    });
+    usb_->bind_busy([this]() { return runtime_->context().files().busy(); });
+  }
   clock_.set(1000);  // not zero: a tick of 0 is a legal time, but starting elsewhere catches code that treats it as "never"
 }
 
@@ -89,7 +100,7 @@ void Harness::make_runtime() {
   files_work_ = protect_ != nullptr ? std::make_unique<app::Files::Work>() : nullptr;
   recorder_ = std::make_unique<platform::mk66::audio::RecordService>();
   platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr, capture_,
-                                                           recorder_.get()});
+                                                           recorder_.get(), usb_ != nullptr ? &usb_->device() : nullptr});
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
 }
 
@@ -100,6 +111,10 @@ bool Harness::start() {
       (void)protect_->mount();  // (the unit's main mounts the card after the boot, before the settings are read)
     }
     (void)runtime_->load_settings();
+  }
+  if (usb_ != nullptr) {  // the port starts in the layout the settings kept, as the unit's main starts usb0 (the first pass of the runtime then applies the level and the slots)
+    const app::UsbAudio::Layout l = runtime_->context().usb_audio().boot_layout();
+    usb_->power_up(l.audio, l.profile, l.duplex);
   }
   runtime_->poll();
   const std::string refused = setup_report();
@@ -124,6 +139,18 @@ void Harness::card_in() {
   }
 }
 
+const char* Harness::card_disk(bool on) {
+  if (usb_ == nullptr || protect_ == nullptr) {
+    return "no USB device or no card in this harness";
+  }
+  app::UsbAudio& u = runtime_->context().usb_audio();
+  if (on) {
+    const hal::usb_audio::DiskRefusal r = u.share_disk();
+    return r == hal::usb_audio::DiskRefusal::None ? nullptr : hal::usb_audio::disk_refusal_text(r);
+  }
+  return u.eject_disk() ? nullptr : "THE DISK IS NOT OUT";
+}
+
 void Harness::card_protect(bool on) {
   if (protect_ != nullptr) {
     protect_->set_protect(on);
@@ -135,6 +162,7 @@ bool Harness::reboot() {
   runtime_.reset();
   platform_.reset();
   if (protect_ != nullptr) {
+    protect_->set_host(false);  // the power goes: the card is the unit's again
     protect_->set_present(false);  // the power goes: a file being written is left torn
     protect_->set_present(true);
     (void)protect_->mount();
@@ -201,7 +229,8 @@ std::uint64_t Harness::due_samples() const {
 
 void Harness::render_due() {
   const std::uint64_t due = due_samples();
-  const hal::audio::BlockCallback cb = recorder_->wrap(runtime_->block_callback(), *engine_);  // the unit's record service around the runtime's block
+  const hal::audio::BlockCallback record = recorder_->wrap(runtime_->block_callback(), *engine_);  // the unit's record service around the runtime's block
+  const hal::audio::BlockCallback cb = usb_ != nullptr ? usb_->wrap(record, *engine_) : record;     // and the USB audio service around that (main.cpp's order)
   std::int16_t in[hal::audio::kBlockSamples] = {};
   std::int16_t out[hal::audio::kBlockSamples];
   hal::audio::BlockReport report{};
@@ -221,6 +250,9 @@ void Harness::render_due() {
 void Harness::run_ms(std::uint32_t ms) {
   for (std::uint32_t i = 0; i < ms; ++i) {
     clock_.advance(core::kTicksPerMs);
+    if (usb_ != nullptr) {
+      usb_->tick(static_cast<std::uint32_t>(clock_.uptime_ms()));
+    }
     render_due();
     if (capture_ != nullptr) {
       capture_->service(clock_.uptime_ms());  // the platform's main loop: the radio's state machine, once a pass

@@ -4,7 +4,7 @@
 // The kit's console commands: names and one-line help as plain data that the host tests read. Copied from track3r-os
 // (platform/mk66/usb/command_table.h) for the commands this console has; the image's table (src/console.cpp) takes every name and help
 // text from here by enumerator and binds only the handler. A help text that named a sub-command this console does not have (cpu perf,
-// usb map and profile, enc accel) names only the ones it has. `fw` is the only command that writes the card or reaches the bootloader
+// enc accel) names only the ones it has. `fw` is the only command that writes the card or reaches the bootloader
 // (core.h keeps an app's commands from using the words of that path).
 
 #include <cstddef>
@@ -12,9 +12,9 @@
 
 namespace o3sdk::platform::mk66::console {
 
-// The order of the table, and of `help`: track3r-os's relative order for the commands in scope; `midi` (docs/M2B2-PLAN.md, slice MD), `files` (docs/M2C-PLAN.md, slice FA) and `radio` and `mon` (slice AI: `radio` is track3r-os's OS-RAD1 command, `mon` its line-in monitor level) and `rec` (slice RC) are o3-sdk's own and come last.
+// The order of the table, and of `help`: track3r-os's relative order for the commands in scope; `midi` (docs/M2B2-PLAN.md, slice MD), `files` (docs/M2C-PLAN.md, slice FA) and `radio` and `mon` (slice AI: `radio` is track3r-os's OS-RAD1 command, `mon` its line-in monitor level) `rec` (slice RC) and `disk` (slice U: track3r-os's OS-USBDISK command) are o3-sdk's own and come last.
 enum class Cmd : unsigned {
-  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard, Midi, Files, Radio, Mon, Rec,
+  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard, Midi, Files, Radio, Mon, Rec, Disk,
   Count
 };
 
@@ -30,7 +30,7 @@ inline constexpr CommandInfo kCommandInfo[] = {
     {"cpu", "cpu [reset]: audio load: cycles per stage, underruns, jitter"},
     {"mem", "memory map, SRAM budgets, free SRAM"},
     {"crash", "the crash record the previous run left"},
-    {"usb", "usb [audio|mode ..]: counters, AUDIO mode"},
+    {"usb", "usb [audio|mode|profile|return|map|ep0 ..]: counters, AUDIO mode"},
     {"log", "log [count]: the last lines boot code and drivers wrote"},
     {"input", "input [stats]: live input events (any key stops)"},
     {"peek", "peek <hexaddr> [1..16]: read 32-bit words (clocked modules only)"},
@@ -54,6 +54,7 @@ inline constexpr CommandInfo kCommandInfo[] = {
     {"radio", "radio [retry]: FM radio state, last failure, registers, pins"},
     {"mon", "mon [off|on|0..100]: audio-in monitor level (0 = off, on = 70)"},
     {"rec", "rec: the recorder's state, frames, overrun, tap"},
+    {"disk", "disk [share [ro]|eject]: the card as a USB disk (never at boot)"},
 };
 static_assert(sizeof(kCommandInfo) / sizeof(kCommandInfo[0]) == static_cast<std::size_t>(Cmd::Count), "one row per Cmd");
 

@@ -16,6 +16,7 @@
 // usb::UsbDevice and touches the buffer descriptors and the endpoints alone; everything the main loop and the engine share with it is
 // a lock-free ring (usb/device.h).
 
+#include <o3sdk/platform/mk66/audio/stem_map.h>
 #include <o3sdk/platform/mk66/midi/in.h>
 #include <o3sdk/platform/mk66/midi/time_ref.h>
 #include <o3sdk/platform/mk66/midi/usb_bind.h>
@@ -24,6 +25,7 @@
 #include <o3sdk/usb/control.h>
 #include <o3sdk/usb/counters.h>
 #include <o3sdk/usb/device.h>
+#include <o3sdk/usb/ep0_trace.h>
 #include <o3sdk/usb/iso_audio.h>
 
 #include <cstdint>
@@ -36,7 +38,7 @@ namespace o3sdk::platform::mk66::usb0 {
 // OFF and the reason in the log, if a precondition fails (the descriptor table is not 512-byte aligned, the descriptors did not build or
 // are inconsistent). Call once, in the main thread, after the clock tree, the SDRAM, the interrupt priorities and the log.
 // The descriptor set of that first enumeration is `mode` with `profile` and `usb_return` (OS-USBAUDIO: chosen before the pull-up, so the host sees one device and no STANDARD-then-AUDIO
-// switch). A profile the engine cannot feed, the DISK set (not in o3-sdk), or descriptors that do not build, fall back to STANDARD (logged). In STANDARD the profile and the return are only remembered for a later AUDIO attach.
+// switch). A profile the engine cannot feed, or descriptors that do not build, fall back to STANDARD (logged). In STANDARD the profile and the return are only remembered for a later AUDIO attach.
 bool start(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) noexcept;
 
 // True once start() switched the pull-up on.
@@ -54,6 +56,9 @@ o3sdk::usb::CdcRxRing& cdc_rx() noexcept;
 o3sdk::usb::MidiRing& midi_to_host() noexcept;
 o3sdk::usb::MidiRing& midi_from_host() noexcept;
 const char* serial() noexcept;
+
+// OS-USBDISK U2a: the first events of endpoint 0 in the last DISK attach (`usb ep0`); empty before one. Kept across the rollback to the previous layout.
+const o3sdk::usb::Ep0Trace& ep0_trace() noexcept;
 
 // OS-005c2: binds the two MIDI rings to the MIDI timing core (midi/usb_bind.h). From now on the USB interrupt (priority 64) is the ONE consumer of `out` (the frame's events
 // go into midi_to_host() before the device logic arms the bulk-IN buffer, see usb0.cpp) and the ONE producer of `in` (the host's bytes, stamped at the interrupt's
@@ -73,7 +78,8 @@ bool return_enabled() noexcept;
 // console's reply to leave over the CDC port, detach (pull-up off, streams stopped, the stem tap off), wait for the host to notice, then rebuild the
 // descriptors and attach again. The host re-enumerates (CDC `diag` terminal sessions end; MIDI and the firmware-update path come back with the new set).
 // False, nothing changed, when a change is already in progress, the profile is one the engine cannot feed (P4S), or the driver is not running.
-// Asking for the set that is presented now is a successful no-op. The DISK set (Mode::Disk) is refused.
+// Asking for the set that is presented now is a successful no-op. A profile different from the current one resets the stem map to that profile's
+// factory slots (the slot masks mean something else on another layout).
 bool request_mode(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile) noexcept;  // keeps the current USB RETURN
 // The same with USB RETURN chosen too. In AUDIO a different mode, profile or return re-enumerates; in STANDARD (whose descriptors depend on none of them) the
 // choice is only remembered for the next AUDIO attach.
@@ -102,5 +108,43 @@ void irc48m_off() noexcept;
 const o3sdk::usb::IsoAudio* iso() noexcept;
 // Zeroes the stream counters (`diag usb audio reset`), with the USB interrupt masked for the few words.
 void reset_stream_counters() noexcept;
+
+
+// ---- DISK mode (OS-USBDISK U1c, docs/specs/OS-USBDISK.md 3.4) ------------------------------------------------------------------------------
+// The Mass Storage function of the DISK descriptor set (CDC + MIDI + MSC, mode Disk). start() builds the link, the engine and the pump and binds the link to the device; the USB interrupt only
+// moves packets between the controller and the link's rings, and everything below is main loop only.
+// disk_open(): after the Disk layout is on the bus and the card's owner is Host (storage::device::boot_to_host() or hand_to_host(); 4.2: the owner last), starts the card for the computer
+// (MscBridge::open, blocks for the card's initialisation: the caller keeps the display serviced) and tells the engine the medium is new. True when the card started. `writable` is the policy
+// for this session (MscBridge::set_writable, applied before the card is opened and kept for any card put in later): false exports the card write-protected (WP bit, DATA PROTECT).
+bool disk_open(bool writable) noexcept;
+// Every pass of the main loop: nothing unless the mode is DISK, the host has configured it and no layout change is running. Then: follows the card slot (a settled insert or pull: close, open,
+// Engine::medium_changed) and runs the pump (the SCSI state machine, one block of card I/O at most per round, up to MscPump::kMaxRounds rounds). `now_ms` is the millisecond clock.
+void disk_pass(std::uint32_t now_ms) noexcept;
+struct DiskState {
+  bool configured = false;  // DISK is presented and the computer has configured the device
+  bool present = false;     // a card is started and answers
+  bool ejected = false;     // the computer ejected the medium (START STOP UNIT)
+  bool writable = false;    // the disk is exported writable: the session's policy allows it and the card has no write-protect bit of its own (!MscBridge::write_protected)
+  bool busy = false;        // a SCSI command is in flight (Engine::idle() is false): a WRITE(10) may be half done
+  std::uint32_t blocks = 0;
+};
+DiskState disk_state() noexcept;
+// OS-USBDISK U2a (the running mode, docs/specs/OS-USBDISK.md 4.2, 6.1; DiskShare drives these). disk_layout_enter(): queues the DISK set (CDC + MIDI + MSC) over the layout presented now (request_mode's three steps:
+// the reply leaves, detach, attach); false when a change is in progress, DISK is already presented or the profile cannot be fed. disk_layout_leave(): queues the layout `mode`/`profile`/`usb_return` out of DISK, only
+// when DISK was NOT the boot layout (the boot disk's exit is a reset). request_layout()/request_mode() keep refusing every change while DISK is presented.
+bool disk_layout_enter(o3sdk::usb::Profile profile, bool usb_return) noexcept;
+bool disk_layout_leave(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) noexcept;
+// The computer ejected the medium (START STOP UNIT): true once. The unit's eject: the computer's next command is UNIT ATTENTION, then NOT READY, MEDIUM NOT PRESENT. Main loop.
+// Q11: the render's load in percent of the block budget, once a pass (main loop); above 85 % (smoothed, released below 80 %) disk_pass() runs the pump every 2 ms only (usb/msc_throttle.h). disk_throttled(): `diag usb` and the tests.
+void set_render_load(unsigned percent) noexcept;
+bool disk_throttled() noexcept;
+bool disk_take_eject_request() noexcept;
+void disk_unit_eject() noexcept;
+// OS-POWER P1 (stage C of the shutdown in the boot disk mode, docs/specs/OS-POWER.md section 5): the MSC close. The engine answers NOT READY, MEDIUM NOT PRESENT from here (a block in flight has finished:
+// this is the main loop, which runs the pump); the computer sees the unplug at stage D without an eject. Idempotent; nothing when no disk was opened.
+void disk_close() noexcept;
+// The stem map (runtime only; see audio/stem_map.h). Main loop. After editing a slot call apply_stem_map().
+o3sdk::platform::mk66::audio::StemMap& stem_map() noexcept;
+void apply_stem_map() noexcept;
 
 }  // namespace o3sdk::platform::mk66::usb0

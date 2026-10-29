@@ -94,6 +94,8 @@ class Files {
   // The platform has a card capability and this app's id is a valid folder name. false: every call is refused with "NO CARD".
   bool available() const noexcept { return ready_; }
   Card card() const noexcept;
+  // The volume of the mounted card (the CARD section shows it); empty (FsKind::None) when none is mounted or there is no card capability.
+  hal::storage::VolumeInfo volume() const noexcept { return ready_ && storage_ != nullptr ? storage_->volume() : hal::storage::VolumeInfo{}; }
   // A card job (or a request waiting to start) is there: no new call is taken, and the FIRMWARE section says SAVING.
   bool busy() const noexcept { return kind_ != Kind::None || pend_ != Kind::None; }
 

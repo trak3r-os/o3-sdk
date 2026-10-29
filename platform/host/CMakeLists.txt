@@ -9,6 +9,9 @@ o3sdk_library(platform_host SOURCES src/fakes.cpp src/sha256.cpp src/png.cpp src
 
 # stb_image_write.h is vendored third-party code (third_party/stb), found as <stb/stb_image_write.h> through a SYSTEM include
 # directory. Its implementation lives in stb_image_write_impl.cpp, the only file built without the first-party warning flags.
+# The fake USB port runs the unit's own USB audio service (fake_usb_audio.h, M2c slice U): the platform's audio library (the stem tap and map, the service; it brings dsp) and the kit's usb library.
+target_link_libraries(platform_host PUBLIC platform_mk66_audio usb)
+
 target_include_directories(platform_host SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party)
 set_source_files_properties(src/stb_image_write_impl.cpp PROPERTIES COMPILE_OPTIONS "-w;-O2")
 set_source_files_properties(src/sha256.cpp src/png.cpp PROPERTIES COMPILE_OPTIONS "-O2")

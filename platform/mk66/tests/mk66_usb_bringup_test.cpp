@@ -128,8 +128,10 @@ TEST_CASE("usb bring-up: the tap can feed the set the image boots in, and the bo
   CHECK(ua::supported(Profile::P8));
   CHECK(ua::supported(Profile::P2));  // the console's way back asks for (STANDARD, P2, false)
   CHECK_FALSE(ua::supported(Profile::P4S));
-  // The stream's channel count, which the hook gives the tap, is the profile's: the master lands on its last two.
-  CHECK(ua::UsbAudioTap::kDefaultChannels == profile_channels(Profile::P8));
+  // The stream's channel count, which the map gives the tap, is the profile's: the master lands on its last two.
+  o3sdk::platform::mk66::audio::StemMap map;
+  CHECK(o3sdk::platform::mk66::audio::factory_map(map, Profile::P8));
+  CHECK(map.channels() == profile_channels(Profile::P8));
 }
 
 TEST_CASE("usb bring-up: a host enumerating the boot layout through the control pipe - after the constructor-time STANDARD set, as start() rebinds it - reads the golden bytes, the identity and the serial") {

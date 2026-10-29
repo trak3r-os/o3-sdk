@@ -325,6 +325,23 @@ std::size_t format_usb_audio(const UsbAudioReport& r, char* out, std::size_t cap
   return t.size();
 }
 
+std::size_t format_stem_map(const audio::StemMap& map, char* out, std::size_t cap) noexcept {
+  Text t(out, cap);
+  t.str("stem map: profile ").str(usb_profile_name(map.profile())).str(" (runtime only: the factory map after a reboot)\n");
+  std::uint32_t named = 0;
+  for (std::uint32_t s = 0; s < map.channels(); ++s) {
+    char src[48];
+    audio::format_sources(map.slot(s), src, sizeof src);
+    t.str("  S").dec(s + 1u).str(" = ").str(src).nl();
+    named |= map.slot(s);
+  }
+  char rest[64];
+  const std::uint32_t tracks = (1u << audio::stem_src::kTracks) - 1u;
+  audio::format_sources(tracks & ~named, rest, sizeof rest);
+  t.str("  heard in the master only: ").str(rest).nl();
+  return t.size();
+}
+
 std::size_t format_reset_sources(std::uint16_t sources, char* out, std::size_t cap) noexcept {
   Text t(out, cap);
   struct Bit {

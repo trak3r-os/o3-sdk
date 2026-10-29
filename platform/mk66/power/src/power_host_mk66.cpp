@@ -226,8 +226,11 @@ class Mk66PowerHost final : public PowerHost {
  public:
   bool firmware_active() noexcept override { return appimg::firmware_update_active(); }
   bool export_running() noexcept override { return appimg::power_export_running(); }
-  // o3-sdk cut: no MSC disk (docs/M2B2-PLAN.md section 2): no computer ever has the card, so none is in the middle of a copy. (track3r-os: usb0::disk_state(), configured, present, not ejected, writable.)
-  bool disk_writing() noexcept override { return false; }
+  // The computer has the card, the disk is writable and not ejected: it may be in the middle of a copy. The same condition as the boot disk's second key press (app_main.cpp disk_boot_pass).
+  bool disk_writing() noexcept override {
+    const usb0::DiskState d = usb0::disk_state();
+    return d.configured && d.present && !d.ejected && d.writable;
+  }
   void export_cancel() noexcept override { appimg::power_export_stop(); }
 
   void quiesce_engine() noexcept override { appimg::power_quiesce(); }
@@ -246,10 +249,16 @@ class Mk66PowerHost final : public PowerHost {
   bool save_committing() noexcept override { return appimg::power_save_committing(); }
   void save_cancel() noexcept override { appimg::power_save_cancel(); }
 
-  // Every claim on the card. (o3-sdk cut: no MSC disk, so no SCSI command in flight and no Host owner; track3r-os also asked usb0::disk_state().busy for the boot disk.)
-  bool card_busy() noexcept override { return storage::device::card_busy(); }
+  // Every claim on the card, and in the boot disk a SCSI command in flight (a WRITE(10) may be half done): the pump keeps running in the main loop, so it ends; stage C closes the disk between two commands.
+  bool card_busy() noexcept override {
+    return storage::device::card_busy() || (storage::device::owner() == storage::CardOwner::Host && usb0::disk_state().busy);
+  }
   void card_release() noexcept override {
-    storage::device::release();  // FatFs lets go of the volume: nothing is written, nothing cancelled (track3r-os: usb0::disk_close() when the owner is Host)
+    if (storage::device::owner() == storage::CardOwner::Host) {
+      usb0::disk_close();  // the boot disk: the MSC engine answers NOT READY from here; the computer sees the unplug in stage D without an eject
+    } else {
+      storage::device::release();  // FatFs lets go of the volume: nothing is written, nothing cancelled
+    }
   }
 
   void usb_drain() noexcept override {

@@ -275,18 +275,80 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
       } else {
         return fail("radio stations <f...> | radio absent | radio present");
       }
+    } else if (cmd == "usb") {
+      if (h.usb() == nullptr) {
+        return fail("usb: this harness has no USB device (<app>_sim makes one when the scenario has a usb, usbwav or card disk line, or with --usb)");
+      }
+      platform::host::FakeUsbAudio& u = *h.usb();
+      app::UsbAudio& ctx = h.runtime().context().usb_audio();
+      if (w.size() == 3 && w[1] == "listen" && (w[2] == "on" || w[2] == "off")) {
+        u.listen(w[2] == "on");
+      } else if ((w.size() == 3 || w.size() == 4) && w[1] == "profile" && to_int(w[2], n) && (n == 2 || n == 8 || n == 10 || n == 11) && (w.size() == 3 || w[3] == "out" || w[3] == "duplex")) {
+        const hal::usb_audio::Profile p = n == 2 ? hal::usb_audio::Profile::P2 : (n == 8 ? hal::usb_audio::Profile::P8 : (n == 10 ? hal::usb_audio::Profile::P10 : hal::usb_audio::Profile::P11));
+        if (!ctx.request(ctx.audio(), p, w.size() == 4 ? w[3] == "duplex" : ctx.duplex())) {
+          return fail("usb profile: refused (a change is running or the card is out)");
+        }
+      } else if (w.size() == 3 && w[1] == "audio" && (w[2] == "on" || w[2] == "off")) {
+        if (!ctx.request(w[2] == "on", ctx.profile(), ctx.duplex())) {
+          return fail("usb audio: refused (a change is running or the card is out)");
+        }
+      } else if (w.size() == 3 && w[1] == "map" && w[2] == "reset") {
+        ctx.reset_stems();
+      } else if (w.size() == 4 && w[1] == "map" && to_int(w[2], n) && n >= 1 && n <= static_cast<long>(hal::usb_audio::kMaxChannels)) {
+        std::uint32_t sources = 0;
+        if (!platform::mk66::audio::parse_sources(w[3].c_str(), sources)) {
+          return fail("usb map <slot> <sources>: sources like T1+T3, ML, MR, SA, SB or -");
+        }
+        if (!ctx.set_stem(static_cast<unsigned>(n - 1), sources)) {
+          return fail("usb map: the slot is not one of the profile's channels");
+        }
+      } else if (w.size() == 3 && w[1] == "level" && to_int(w[2], n) && n >= 0 && n <= 100) {
+        ctx.set_return_level(static_cast<unsigned>(n));
+      } else if (w.size() >= 3 && w[1] == "return" && w[2] == "tone") {
+        double hz = 0.0;
+        double dbfs = -12.0;
+        if (w.size() < 4 || w.size() > 5 || !to_double(w[3], hz) || (w.size() == 5 && !to_double(w[4], dbfs)) || !(hz >= 20.0 && hz <= 20000.0) || !(dbfs <= 0.0 && dbfs >= -96.0)) {
+          return fail("usb return tone <hz 20..20000> [<dbfs -96..0>]");
+        }
+        u.play_tone(static_cast<float>(hz), static_cast<float>(dbfs));
+      } else if (w.size() == 4 && w[1] == "return" && w[2] == "wav") {
+        std::string why;
+        if (!u.play_wav_file(w[3], why)) {
+          return fail("usb return wav: " + why);
+        }
+      } else if (w.size() == 3 && w[1] == "return" && w[2] == "off") {
+        u.play_off();
+      } else {
+        return fail("usb listen on|off | usb profile <2|8|10|11> [out|duplex] | usb audio on|off | usb map <slot> <sources> | usb map reset | usb level <0..100> | usb return tone <hz> [<dbfs>] | usb return wav <file> | usb return off");
+      }
+      h.run_ms(1);
+    } else if (cmd == "usbwav") {
+      if (h.usb() == nullptr) {
+        return fail("usbwav: this harness has no USB device");
+      }
+      if (w.size() != 2) {
+        return fail("usbwav <name>");
+      }
+      if (!h.usb()->write_wav(out_dir + "/" + w[1] + ".wav")) {
+        return fail("usbwav: cannot write " + out_dir + "/" + w[1] + ".wav");
+      }
     } else if (cmd == "card") {
       if (h.card() == nullptr) {
         return fail("card: this harness has no card (<app>_sim --card DIR)");
       }
-      if (w.size() == 2 && w[1] == "out") {
+      if (w.size() == 3 && w[1] == "disk" && (w[2] == "on" || w[2] == "off")) {
+        const char* why = h.card_disk(w[2] == "on");
+        if (why != nullptr) {
+          return fail(std::string("card disk ") + w[2] + ": refused: " + why);
+        }
+      } else if (w.size() == 2 && w[1] == "out") {
         h.card_out();
       } else if (w.size() == 2 && w[1] == "in") {
         h.card_in();
       } else if (w.size() == 3 && w[1] == "protect" && (w[2] == "on" || w[2] == "off")) {
         h.card_protect(w[2] == "on");
       } else {
-        return fail("card out | card in | card protect on|off");
+        return fail("card out | card in | card protect on|off | card disk on|off");
       }
       h.run_ms(1);
     } else if (cmd == "reboot") {

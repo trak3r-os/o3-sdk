@@ -28,6 +28,10 @@ const char* caption(unsigned row) noexcept {
     case kAudioFreq: return "FREQ";
     case kAudioRegion: return "REGION";
     case kAudioSeek: return "SEEK";
+    case kAudioUsb: return "USB AUDIO";
+    case kAudioProfile: return "PROFILE";
+    case kAudioReturn: return "RETURN";
+    case kAudioReturnLevel: return "RETURN LEVEL";
     default: return "";
   }
 }
@@ -56,9 +60,37 @@ void append_freq(Text& s, unsigned freq) noexcept {
 
 bool radio_dead(const RadioStatus& st) noexcept { return st.state == RadioStatus::State::Absent || st.state == RadioStatus::State::Failed; }
 
+// "8 CHANNELS, MASTER ON 7-8".
+void append_profile(Text& s, hal::usb_audio::Profile p) noexcept {
+  const unsigned n = hal::usb_audio::profile_channels(p);
+  append_uint(s, n);
+  s.append(n == 2u ? " CHANNELS, MASTER ONLY" : " CHANNELS, MASTER ON ");
+  if (n != 2u) {
+    append_uint(s, n - 1u);
+    s.append("-");
+    append_uint(s, n);
+  }
+}
+
 void value_text(Text& out, const AudioView& v, unsigned row) noexcept {
   out.clear();
   switch (row) {
+    case kAudioUsb:
+      out.assign(v.usb.audio ? "ON" : "OFF  (CONSOLE AND MIDI ONLY)");
+      break;
+    case kAudioProfile:
+      append_profile(out, v.usb.profile);
+      break;
+    case kAudioReturn:
+      out.assign(v.usb.duplex ? "ON  (THE COMPUTER CAN PLAY TO THE UNIT)" : "OFF  (CAPTURE ONLY)");
+      break;
+    case kAudioReturnLevel:
+      append_uint(out, v.usb.level);
+      out.append(" %");
+      if (v.usb.return_open) {
+        out.append("   (PLAYING)");
+      }
+      break;
     case kAudioInput:
       out.assign(source_label(v.source));
       if (v.source == Source::Radio && v.radio.state == RadioStatus::State::Absent) {
@@ -98,14 +130,37 @@ void value_text(Text& out, const AudioView& v, unsigned row) noexcept {
 
 }  // namespace
 
-Source audio_step_source(Source source, int steps, bool wrap, bool radio_ok) noexcept {
-  // The choices that can be reached: every source of the row, but the radio while nobody answers there (it stays when the move starts on it).
+unsigned audio_rows(AudioRow (&kinds)[kAudioMaxRows], Source source, bool has_input, bool has_usb) noexcept {
+  unsigned n = 0;
+  if (has_input) {
+    const unsigned input = source == Source::Radio ? kAudioBaseRows + kAudioRadioRows : kAudioBaseRows;
+    for (unsigned i = 0; i < input; ++i) {
+      kinds[n++] = static_cast<AudioRow>(i);
+    }
+  }
+  if (has_usb) {
+    for (unsigned i = 0; i < kAudioUsbRows; ++i) {
+      kinds[n++] = static_cast<AudioRow>(kAudioUsb + i);
+    }
+  }
+  return n;
+}
+
+hal::usb_audio::Profile audio_step_profile(hal::usb_audio::Profile p, int steps, bool wrap) noexcept {
+  const int count = static_cast<int>(hal::usb_audio::kProfileCount);
+  int to = static_cast<int>(p) + steps;
+  to = wrap ? ((to % count) + count) % count : (to < 0 ? 0 : (to >= count ? count - 1 : to));
+  return static_cast<hal::usb_audio::Profile>(to);
+}
+
+Source audio_step_source(Source source, int steps, bool wrap, bool radio_ok, bool usb_ok) noexcept {
+  // The choices that can be reached: every source of the row, but the radio while nobody answers there (it stays when the move starts on it) and the USB return without a USB device.
   Source list[kAudioSourceChoices];
   int count = 0;
   int at = 0;
   for (unsigned i = 0; i < kAudioSourceChoices; ++i) {
     const Source s = static_cast<Source>(i);
-    if (s == Source::Radio && !radio_ok && source != Source::Radio) {
+    if ((s == Source::Radio && !radio_ok && source != Source::Radio) || (s == Source::Usb && !usb_ok && source != Source::Usb)) {
       continue;
     }
     if (s == source) {
@@ -138,28 +193,44 @@ void draw_audio_page(ui::Renderer& r, const PageGrid& grid, const AudioView& v) 
   const auto y_of = [&](int line) { return grid.y0 + line * pitch; };
 
   Text text;
-  const unsigned rows = audio_row_count(v.source);
+  AudioRow kinds[kAudioMaxRows];
+  const unsigned rows = audio_rows(kinds, v.source, v.has_input, v.has_usb);
   for (unsigned i = 0; i < rows; ++i) {
     const bool on = i == v.row;
-    const bool grey = i >= kAudioBaseRows && radio_dead(v.radio);  // the radio's rows of a receiver that is not there
+    const unsigned kind = kinds[i];
+    const bool grey = (kind >= kAudioFreq && kind <= kAudioSeek && radio_dead(v.radio)) || (kind >= kAudioUsb && v.usb.changing);  // the radio's rows of a receiver that is not there; the port while it re-enumerates
     if (on) {
       r.highlight_row({x - m.pad, y_of(static_cast<int>(i)), grid.w + 2 * m.pad, pitch});
     }
-    r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(static_cast<int>(i)), pitch), caption(i), on ? Color::SelText : Color::TextDim, Face::Label);
-    value_text(text, v, i);
+    r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(static_cast<int>(i)), pitch), caption(kind), on ? Color::SelText : Color::TextDim, Face::Label);
+    value_text(text, v, kind);
     r.text(value_x, ui::caps_y(t, Face::Data, y_of(static_cast<int>(i)), pitch), text.c_str(), on ? Color::SelText : (grey ? Color::TextDim : Color::Text), Face::Data);
   }
 
   // The input's level, with the gain and the gate: what the units and the monitor hear.
   int line = static_cast<int>(rows) + 1;
-  r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "LEVEL L", Color::TextDim, Face::Label);
-  level_meter(r, {value_x, y_of(line) + 6, 300, pitch - 12}, v.meter.l);
-  ++line;
-  r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "LEVEL R", Color::TextDim, Face::Label);
-  level_meter(r, {value_x, y_of(line) + 6, 300, pitch - 12}, v.meter.r);
-  ++line;
+  if (v.has_input) {
+    r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "LEVEL L", Color::TextDim, Face::Label);
+    level_meter(r, {value_x, y_of(line) + 6, 300, pitch - 12}, v.meter.l);
+    ++line;
+    r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "LEVEL R", Color::TextDim, Face::Label);
+    level_meter(r, {value_x, y_of(line) + 6, 300, pitch - 12}, v.meter.r);
+    ++line;
+  }
+  if (v.has_usb) {
+    ++line;
+    text.clear();
+    text.assign(v.usb.changing ? "THE PORT IS RECONNECTING" : (!v.usb.audio ? "STANDARD" : (v.usb.return_open ? "CAPTURE AND RETURN OPEN" : (v.usb.streaming ? "CAPTURE OPEN" : "NO STREAM OPEN"))));
+    r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "USB", Color::TextDim, Face::Label);
+    r.text(value_x, ui::caps_y(t, Face::Data, y_of(line), pitch), text.c_str(), Color::Text, Face::Data);
+    ++line;
+    if (v.usb.proposed) {
+      r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(line), pitch), "F1 AGAIN APPLIES IT: THE PORT RECONNECTS, THE COMPUTER SEES THE UNIT GO AND COME BACK.", Color::Text, Face::Label);
+      ++line;
+    }
+  }
 
-  if (v.source == Source::Radio) {
+  if (v.has_input && v.source == Source::Radio) {
     ++line;
     text.clear();
     switch (v.radio.state) {

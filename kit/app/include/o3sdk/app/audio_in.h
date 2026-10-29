@@ -6,7 +6,7 @@
 // section, and the runtime and the render are as they were).
 //
 //   Source. select(source, gain_percent) points the codec's ADC at the line jack (LineMix, LineLeft, LineRight), the microphone (MicLow, MicHigh), the FM
-//   receiver (Radio, see radio.h) or the USB return (Usb: no analogue part, the codec is left as it is), with a gain of 0..100 per cent (the platform maps
+//   receiver (Radio, see radio.h) or the USB return (Usb: no analogue part, the codec is left as it is; the engine's input is then what the computer plays, usb_audio.h), with a gain of 0..100 per cent (the platform maps
 //   it: the line 0..22.5 dB, the microphone 0..25 or 0..44 dB). The input reaches the render as it always did, as in_l / in_r of a unit and
 //   BlockContext::input_l() of a hook. While the source settles (kSettleMs: the ADC's input switch clicks, the analogue switch and the receiver need
 //   time) the engine holds those planes silent through its input gate (Engine::set_input_gate: a one-block fade, then nothing), and opens it again by
@@ -33,6 +33,7 @@
 
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/capture.h>
+#include <o3sdk/hal/usb_audio.h>
 
 #include <atomic>
 #include <cstdint>
@@ -94,6 +95,8 @@ class AudioIn {
     hw_ = hw;
     engine_ = engine;
   }
+  // The USB device that makes the Usb source's input (null: the source is not offered): select() tells it whether the return is the engine's input.
+  void bind_usb(hal::usb_audio::Device* usb) noexcept { usb_ = usb; }
   // The runtime's, every pass of the main loop: the gate's reopening, the retry, the peaks.
   void poll(std::uint64_t now_ms) noexcept;
   // The settings' way in (docs/formats/o3sdk-settings.md): the saved choice, applied over the app's defaults. With a capture device it is select() and monitor();
@@ -106,6 +109,7 @@ class AudioIn {
   bool radio_is_dead() const noexcept;
 
   hal::capture::CaptureHw* hw_ = nullptr;
+  hal::usb_audio::Device* usb_ = nullptr;
   dsp::Engine* engine_ = nullptr;
   Source source_ = Source::LineMix;
   std::uint8_t gain_ = 0;

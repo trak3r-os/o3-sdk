@@ -27,6 +27,14 @@
 //
 //   card out|in               the SD card out of its slot (every card call answers NO CARD, a file being written stays torn) and back in (mounted at once)
 //   card protect on|off       the card's write-protect switch
+//   card disk on|off          the card as a USB disk (docs/M2C-PLAN.md section 7): `on` is what the Config's CARD AS DISK does (Context::usb_audio().share_disk()): the port re-enumerates and the card is
+//                             the computer's (card=computer in `state`, every save refused with CARD ON COMPUTER - EJECT FIRST) after about 2.5 s of simulated time; `off` is the eject. A refusal
+//                             (the card in use, no card) fails the scenario with its text
+//   usb listen on|off         the computer opens (or closes) the capture stream of the USB port: nothing streams until it does
+//   usb profile <2|8|10|11> [out|duplex]   the USB layout (the console's `usb profile`): the port re-enumerates, about a second of simulated time, and the factory map of the profile is back;
+//                             `usb audio on|off` is the AUDIO set or STANDARD; `usb map <slot 1..> <sources>` (T1+T3, ML, MR, SA, SB, -) edits a slot, `usb map reset`; `usb level <0..100>` is RETURN LEVEL
+//   usb return tone <hz> [<dbfs>]|wav <file>|off   what the computer plays to the unit (the return stream: open while the layout has it and the computer listens)
+//   usbwav <name>             <out>/<name>.wav: what the computer captured since its stream opened, one channel per channel of the profile (16 bit, 44.1 kHz)
 //   reboot                    the unit restarted on the same card: the runtime and the engine made again, App::setup, the kit's settings read from the card
 //   expect file <path>        the card holds the file `path` (relative to its root, "Apps/hello/riff.o3a"); `expect nofile <path>` it does not
 //   expect state <text>       the console's `state` line holds `text` ("files=done", "card=none", "section=display"); a scenario that fails an expect fails with its line
@@ -34,6 +42,7 @@
 //
 // `input` and `radio` need a capture device (platform/host/fake_capture.h: the simulator makes one when the scenario uses them or with --audio-in); the AUDIO section of the
 // system Config and Context::audio_in() / radio() exist only with one.
+// `usb`, `usbwav` and `card disk` need a USB audio device (platform/host/fake_usb_audio.h: the simulator makes one when the scenario uses them or with --usb); `card disk` needs a card too.
 // `midi` and `clock` need a MIDI device (Harness(app, firmware, &fake_midi); the simulator makes one when the scenario uses them or with
 // --midi). Each command that touches the panel is followed by one millisecond, so that the runtime sees events in order.
 

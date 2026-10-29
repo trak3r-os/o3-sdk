@@ -97,10 +97,16 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 
 | `card out` / `card in` | the card out of its slot (every card call answers NO CARD, a file being written stays torn) and back (mounted at once, the runtime told as the platform's card watch does) |
 | `card protect on\|off` | the card's write-protect switch |
+| `card disk on\|off` | the card as a USB disk (`Context::usb_audio().share_disk()`, the Config's CARD AS DISK): the port re-enumerates and the card is the computer's after about 2.5 s of simulated time (`card=computer`, every save refused with CARD ON COMPUTER - EJECT FIRST); `off` is the eject. A refusal fails the scenario |
+| `usb listen on\|off` | the computer opens (closes) the capture stream of the USB port (a USB device: `--usb`, or a scenario with a `usb`, `usbwav` or `card disk` line); nothing streams until it does |
+| `usb profile <2\|8\|10\|11> [out\|duplex]`, `usb audio on\|off` | the USB layout (the port re-enumerates, about a second; the profile's factory map comes back) |
+| `usb map <slot> <sources>`, `usb map reset`, `usb level <0..100>` | a stem slot (`T1+T3`, `ML`, `MR`, `SA`, `SB`, `-`), the factory slots, RETURN LEVEL |
+| `usb return tone <hz> [<dbfs>]`, `usb return wav <file>`, `usb return off` | what the computer plays to the unit (the return stream) |
+| `usbwav <name>` | `<out>/<name>.wav`: what the computer captured since its stream opened, one channel per channel of the profile (16 bit, 44.1 kHz) |
 | `reboot` | the unit restarted on the same card: the engine and the runtime made again, `App::setup`, the kit's settings read from the card |
 | `expect file <path>` / `expect nofile <path>` | the card holds (does not hold) the file `path`, relative to its root: `expect file Apps/hello/riff.o3a`. A wrong expectation fails the scenario with its line |
 | `expect state <text>` | the console's `state` line contains `text`: `expect state files=done`, `expect state card=none`, `expect state riff=3` (an app's pair) |
 
-`card` and `expect file` need a card (`--card`); `reboot` works without one.
+`card` and `expect file` need a card (`--card`); `reboot` works without one. `usb`, `usbwav` and `card disk` need a USB audio device (`platform/host/fake_usb_audio.h`: the unit's own `UsbAudioService` over a fake port and computer; `--usb` or a scenario that uses one makes it; in a test `sim::Harness(..., &fake_usb)`, `Harness::usb()`, `card_disk(bool)`), and `card disk` a card too.
 
 Each command that touches the panel is followed by one millisecond, so the runtime sees the events in order.

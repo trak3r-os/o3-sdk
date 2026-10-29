@@ -9,9 +9,13 @@
 //   FIRMWARE  switch the unit to another image from the card: the list of Firmware/*.ptf, a sliced check, two questions (F1 each), then
 //             the install through hal::firmware::FirmwareSink. Nothing is written before INSTALL. Hidden when Platform::firmware is null.
 //   AUDIO     the audio in (Context::audio_in(): INPUT, GAIN, MONITOR, a level meter) and, while INPUT is RADIO, the receiver (Context::radio(): FREQ, REGION, SEEK
-//             with F5 / F6, and what the chip says). Hidden when Platform::capture is null; the radio rows say so when no receiver answers.
+//             with F5 / F6, and what the chip says); then, with Platform::usb_audio, USB AUDIO (the AUDIO set or STANDARD), PROFILE, RETURN and RETURN LEVEL (Context::usb_audio()). A change of
+//             the set asks F1 twice: the first shows what would be asked, the second applies it and the port reconnects. Hidden when the platform has neither a capture device nor a USB
+//             audio device; the radio rows say so when no receiver answers.
 //   MIDI      the user's hal::midi::Config (the channel notes come in on, the channel and ports out, clock and transport out, FOLLOW and its
 //             port, transport in) and the device's status. Hidden when Platform::midi is null.
+//   CARD      with a card capability: the card as the files service sees it, the volume and the files job, and, with Platform::usb_audio, CARD AS DISK (the card shared to the computer as a
+//             disk, F1 twice, never at boot; F1 twice again to eject) and READ ONLY (the policy of the next share).
 //   DISPLAY   the theme.
 //   INFO      the app's name and version, the build, the uptime.
 //
@@ -19,7 +23,7 @@
 //
 // Keys. CONFIG opens and closes it; LEFT / RIGHT change section (not while a question or a check is up); F8 is BACK (one level up, and
 // the last level closes the screen); in FIRMWARE: UP / DOWN and the encoder choose a file, F1 asks (UPDATE, YES, INSTALL), any other
-// control takes a question back; in AUDIO: UP / DOWN choose a row, the encoder and F1 change its value (SHIFT: coarse), F5 / F6 seek down / up while the radio is the
+// control takes a question back; in AUDIO: UP / DOWN choose a row, the encoder and F1 change its value (SHIFT: coarse; the USB set's rows ask F1 again), F5 / F6 seek down / up while the radio is the
 // input (F5 retries a receiver that failed or did not answer); in MIDI: UP / DOWN choose a row, the encoder and F1 change its value; in DISPLAY: the encoder, UP / DOWN
 // and F1 change the theme. Past INSTALL no key acts and CONFIG does not close it.
 //
@@ -44,16 +48,18 @@ class Context;
 
 class SystemConfig {
  public:
-  enum class Section : std::uint8_t { Firmware, Audio, Midi, Display, Info };
-  static constexpr unsigned kSectionCount = 5;
+  enum class Section : std::uint8_t { Firmware, Audio, Midi, Card, Display, Info };
+  static constexpr unsigned kSectionCount = 6;
 
   static constexpr std::uint32_t kStripMs = 400;          // a strip that is not fed goes this long after its last call
   static constexpr std::uint32_t kNoticeMs = 3000;        // a refusal the screen says on the strip
+  static constexpr std::uint32_t kAskMs = 5000;           // a change that waits for its second F1 is dropped after this long
   static constexpr unsigned kStripChars = 72;
 
   // `firmware`: the update path (null, or one that is not available(): no FIRMWARE section); `build`: the build id INFO shows (null: none);
   // `midi`: the platform has a MIDI device (Context::midi() is live: the MIDI section is shown); `audio`: it has a capture device (Context::audio_in() is live: the AUDIO section is shown).
-  SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi = false, bool audio = false) noexcept;
+  // `usb`: it has a USB audio device (Context::usb_audio() is live: the USB rows and CARD AS DISK are shown); `card`: it has a card capability (the CARD section is shown).
+  SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi = false, bool audio = false, bool usb = false, bool card = false) noexcept;
 
   bool open() const noexcept { return open_; }
   // Past INSTALL: the hand-over has started, the screen cannot be closed and no key acts.
@@ -81,7 +87,7 @@ class SystemConfig {
   bool strip_active() const noexcept { return strip_on_; }
   void draw_strip(ui::Renderer& r, const ui::Rect& area) const noexcept;
 
-  // The names of the console's `state`: "firmware", "audio", "midi", "display", "info".
+  // The names of the console's `state`: "firmware", "audio", "midi", "card", "display", "info".
   const char* section_name() const noexcept;
 
  private:
@@ -95,16 +101,29 @@ class SystemConfig {
   bool display_input(Context& ctx, const Input& in) noexcept;
   bool midi_input(Context& ctx, const Input& in) noexcept;
   bool audio_input(Context& ctx, const Input& in) noexcept;
+  bool card_input(Context& ctx, const Input& in) noexcept;
+  bool usb_row(Context& ctx, unsigned kind, int steps, bool f1) noexcept;
+  void disarm() noexcept { ask_ = Ask::None; }
   void step_theme(Context& ctx, int dir) noexcept;
 
   hal::firmware::FirmwareSink* sink_;
   const char* build_;
   bool midi_;
   bool audio_;
+  bool usb_;
+  bool card_;
   FirmwareView view_;
   Section section_;
   std::uint8_t midi_row_ = 0;  // the MIDI section's cursor
   std::uint8_t audio_row_ = 0;  // the AUDIO section's
+  std::uint8_t card_row_ = 0;   // the CARD section's
+  // A change that waits for its second F1: the USB layout (the proposal is want_*), or the card's share or eject.
+  enum class Ask : std::uint8_t { None, Layout, Share, Eject };
+  Ask ask_ = Ask::None;
+  core::Tick ask_until_ = 0;
+  bool want_audio_ = true;
+  std::uint8_t want_profile_ = 1;  // hal::usb_audio::Profile
+  bool want_duplex_ = true;
   bool open_ = false;
   core::FixedString<kStripChars> strip_text_;
   int strip_progress_ = -1;
