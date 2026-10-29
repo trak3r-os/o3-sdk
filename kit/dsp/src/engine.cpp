@@ -4,6 +4,7 @@
 #include <o3sdk/core/audio_clock.h>
 
 #include <cmath>
+#include <cstring>
 
 namespace o3sdk::dsp {
 
@@ -27,6 +28,15 @@ float soft_clip(float x) noexcept {
   const float u = (a - 0.8f) * 5.0f;
   const float y = 0.8f + 0.2f * (u / (1.0f + u));
   return x < 0.0f ? -y : y;
+}
+
+// clamp(x) * 32767 rounded half away from zero, as planes_to_s16; NaN is silence (the cast of a NaN is undefined).
+std::int16_t to_s16(float v) noexcept {
+  if (v != v) {
+    return 0;
+  }
+  const float a = clampf(v, -1.0f, 1.0f) * 32767.0f;
+  return static_cast<std::int16_t>(a < 0.0f ? a - 0.5f : a + 0.5f);
 }
 
 void clear(float* p, std::uint32_t n) noexcept {
@@ -622,6 +632,25 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   const float* il = in_l != nullptr ? in_l : zero;
   const float* ir = in_r != nullptr ? in_r : zero;
 
+  // The input gate: a steady open gate (the default) is this one test. Closed, the units hear the zero planes with no work; across a change one
+  // block ramps the input into gated_l / gated_r.
+  float gated_l[kMaxBlockFrames];
+  float gated_r[kMaxBlockFrames];
+  const bool gate_open = gate_open_.load(std::memory_order_relaxed);
+  if (!gate_open || gate_gain_ != 1.0f) {
+    if (!gate_open && gate_gain_ == 0.0f) {
+      il = zero;
+      ir = zero;
+    } else {
+      gate_input(il, ir, gated_l, gated_r, frames, gate_gain_, gate_open ? 1.0f : 0.0f);
+      il = gated_l;
+      ir = gated_r;
+    }
+  }
+  if (peaks_on_.load(std::memory_order_relaxed)) {
+    measure_input(il, ir, frames);
+  }
+
   drain();
   if (follow_pending_) {
     apply_follow();
@@ -660,6 +689,13 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
     clear(send_r[b], frames);
   }
 
+  const float monitor_to = monitor_.load(std::memory_order_relaxed);
+  if (monitor_to != 0.0f || monitor_gain_ != 0.0f) {
+    monitor_input(il, ir, master_l, master_r, frames, monitor_to);
+  }
+  const std::uint32_t stem_mask = stem_mask_.load(std::memory_order_relaxed);
+  std::uint32_t staged = 0;  // the stem sources this block staged (bit i of kStemSources)
+
   const float inv_frames = 1.0f / static_cast<float>(frames);
   float slot_peaks[kMaxSlots] = {};
   for (unsigned s = 0; s < kMaxSlots; ++s) {
@@ -690,6 +726,10 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
     float gr = slot.gain_r;
     float gs[kSendCount] = {slot.send_gain[0], slot.send_gain[1]};
     float peak = 0.0f;
+    if ((stem_mask & (1u << s)) != 0u) {
+      stage_slot(s, buf_l, buf_r, level, frames);
+      staged |= 1u << s;
+    }
     for (std::uint32_t i = 0; i < frames; ++i) {
       gl += dl;
       gr += dr;
@@ -718,6 +758,10 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
       continue;
     }
     run_unit(send_fx_[b], send_l[b], send_r[b], send_l[b], send_r[b], frames);
+    if ((stem_mask & (1u << (kStemSendA + b))) != 0u) {
+      stage_mono(kMaxSlots + 2u + b, send_l[b], send_r[b], frames);
+      staged |= 1u << (kStemSendA + b);
+    }
     for (std::uint32_t i = 0; i < frames; ++i) {
       master_l[i] += send_l[b][i];
       master_r[i] += send_r[b][i];
@@ -749,6 +793,25 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
     out_r[i] = soft_clip(r);
   }
   master_gain_ = master_level_;
+  if (stem_mask != 0u) {
+    if ((stem_mask & (1u << kStemMasterL)) != 0u) {
+      stage_plane(kMaxSlots, out_l, frames);
+      staged |= 1u << kStemMasterL;
+    }
+    if ((stem_mask & (1u << kStemMasterR)) != 0u) {
+      stage_plane(kMaxSlots + 1u, out_r, frames);
+      staged |= 1u << kStemMasterR;
+    }
+    for (unsigned i = 0; i < kStemSources; ++i) {
+      const unsigned buf = i < kMaxSlots ? i : (i >= kStemMasterL ? kMaxSlots + (i - kStemMasterL) : kStemBufs);
+      stem_table_[i] = ((staged >> i) & 1u) != 0u && buf < kStemBufs ? stem_buf_[buf] : nullptr;
+    }
+    stem_valid_ = staged & ((1u << kMaxSlots) - 1u);
+    stem_live_ = staged != 0u;
+  } else if (stem_live_) {
+    stem_live_ = false;
+    stem_valid_ = 0;
+  }
   const bool clipped = peak_l > 0.8f || peak_r > 0.8f;
 
   block_ = core::ClockFrame{followed_, transport_.playing, transport_.started, transport_.stopped, transport_.pos, transport_.inc,
@@ -761,6 +824,107 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   ++blocks_;
   const std::uint32_t spent = cycles_ != nullptr ? cycles_() - t0 : 0u;
   publish(peak_l, peak_r, slot_peaks, spent, clipped);
+}
+
+// ---- Audio in and stems (render side) ---------------------------------------------------------------------------------------
+
+InputPeaks Engine::input_peaks() noexcept {
+  const std::uint32_t l = peak_bits_[0].exchange(0u, std::memory_order_relaxed);
+  const std::uint32_t r = peak_bits_[1].exchange(0u, std::memory_order_relaxed);
+  InputPeaks p;
+  std::memcpy(&p.l, &l, sizeof p.l);
+  std::memcpy(&p.r, &r, sizeof p.r);
+  return p;
+}
+
+// One block of linear ramp from `from` to `to` (0 or 1): sample i is the input times from + (to - from) * (i + 1) / frames, so a fade-in starts
+// at 1/frames of the input and a fade-out ends at exactly 0.
+void Engine::gate_input(const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames, float from, float to) noexcept {
+  const float step = (to - from) / static_cast<float>(frames);
+  float g = from;
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    g += step;
+    out_l[i] = in_l[i] * g;
+    out_r[i] = in_r[i] * g;
+  }
+  gate_gain_ = to;
+  work_.gate_frames += frames;
+}
+
+void Engine::monitor_input(const float* in_l, const float* in_r, float* master_l, float* master_r, std::uint32_t frames, float to) noexcept {
+  const float step = (to - monitor_gain_) / static_cast<float>(frames);
+  float g = monitor_gain_;
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    g += step;
+    master_l[i] += in_l[i] * g;
+    master_r[i] += in_r[i] * g;
+  }
+  monitor_gain_ = to;
+  work_.monitor_frames += frames;
+}
+
+void Engine::measure_input(const float* in_l, const float* in_r, std::uint32_t frames) noexcept {
+  float pl = 0.0f;
+  float pr = 0.0f;
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    const float a = absf(in_l[i]);
+    const float b = absf(in_r[i]);
+    pl = a > pl ? a : pl;
+    pr = b > pr ? b : pr;
+  }
+  const float p[2] = {pl, pr};
+  for (unsigned c = 0; c < 2; ++c) {
+    std::uint32_t bits;
+    std::memcpy(&bits, &p[c], sizeof bits);
+    if (bits >= 0x7F800000u) {  // a NaN or an infinity is not a level
+      continue;
+    }
+    std::uint32_t seen = peak_bits_[c].load(std::memory_order_relaxed);
+    while (bits > seen && !peak_bits_[c].compare_exchange_weak(seen, bits, std::memory_order_relaxed)) {
+    }
+  }
+  work_.peak_frames += frames;
+}
+
+// The slot's post-fader pre-pan mono block: (L + R) / 2 times the fader gain, which ramps from where the last staged block left it (a slot
+// that was not staged last block starts at its target) to `target` across the block, the way the mixer's gains do.
+void Engine::stage_slot(unsigned slot, const float* l, const float* r, float target, std::uint32_t frames) noexcept {
+  Slot& sl = slots_[slot];
+  const float from = ((stem_valid_ >> slot) & 1u) != 0u ? sl.fader_gain : target;
+  const float step = (target - from) / static_cast<float>(frames);
+  float g = from;
+  std::int16_t* dst = stem_buf_[slot];
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    g += step;
+    dst[i] = to_s16((l[i] + r[i]) * 0.5f * g);
+  }
+  for (std::uint32_t i = frames; i < kMaxBlockFrames; ++i) {
+    dst[i] = 0;
+  }
+  sl.fader_gain = target;
+  work_.stem_frames += frames;
+}
+
+void Engine::stage_mono(unsigned buf, const float* l, const float* r, std::uint32_t frames) noexcept {
+  std::int16_t* dst = stem_buf_[buf];
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    dst[i] = to_s16((l[i] + r[i]) * 0.5f);
+  }
+  for (std::uint32_t i = frames; i < kMaxBlockFrames; ++i) {
+    dst[i] = 0;
+  }
+  work_.stem_frames += frames;
+}
+
+void Engine::stage_plane(unsigned buf, const float* x, std::uint32_t frames) noexcept {
+  std::int16_t* dst = stem_buf_[buf];
+  for (std::uint32_t i = 0; i < frames; ++i) {
+    dst[i] = to_s16(x[i]);
+  }
+  for (std::uint32_t i = frames; i < kMaxBlockFrames; ++i) {
+    dst[i] = 0;
+  }
+  work_.stem_frames += frames;
 }
 
 void Engine::publish(float peak_l, float peak_r, const float* slot_peaks, std::uint32_t cycles, bool clipped) noexcept {

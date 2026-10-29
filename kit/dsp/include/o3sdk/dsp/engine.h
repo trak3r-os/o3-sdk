@@ -32,6 +32,16 @@
 // midi_out() and block_frame() after it. With a master followed, the block's Transport is the master's and the engine's own advance
 // is parked; a clocked hook, which walks ctx.transport(), follows with no change. While following, play() and stop() are requests for the
 // device (take_transport_request()), and playing() and tempo() report the master's.
+//
+// Audio in and stems (docs/M2C-PLAN.md sections 5 and 7). Four optional features, all off or open by default, so an app that never calls
+// them renders bit-identically to an engine without them, and each one that is not in use costs a relaxed load and a branch a block, no
+// per-sample work (feature_work() counts what they did; a test holds it at 0):
+//   gate     set_input_gate(false) holds the codec input silent for the units, the hooks, the monitor and the peaks (the 200 ms a source
+//            switch settles); the planes ramp across one block, open to shut and back, so nothing clicks.
+//   monitor  set_input_monitor(gain) adds the (gated) input to the master bus before the master inserts, ramped across the block.
+//   peaks    set_input_peaks(true) measures the (gated) input; input_peaks() returns the peak of each channel since the last call.
+//   stems    set_stem_slots(mask) stages, after render(), the post-fader pre-pan mono block of the selected slots and the master pair and
+//            the sends as 16-bit blocks in the order of the USB stem sources; stem_block() hands the table to the platform's StemTap.
 
 #include <o3sdk/core/midi_types.h>
 #include <o3sdk/core/param.h>
@@ -57,6 +67,15 @@ inline constexpr std::uint32_t kCommandRingSize = 512;
 inline constexpr unsigned kMaxCommandsPerBlock = 256;  // a bound on the drain, so a flooded ring cannot stretch a block
 inline constexpr unsigned kMaxInjectPerUnit = kMaxEventsPerUnit / 2;  // a unit's events a block that inject() takes (routed notes): the rest of its list is the hooks'
 inline constexpr unsigned kMaxMidiOut = 32;  // messages the hooks may send in one block (BlockContext::send_midi); the rest are dropped and counted
+
+// The USB stem sources, in the order of the platform's stem_src (platform/mk66/audio/taps.h: T1..T12, Master L, Master R, Send A, Send B), which is
+// the bit order of set_stem_slots() and the index of stem_block()'s table. The engine's slots 0..7 are T1..T8 (M2C-PLAN D12); T9..T12 are never staged.
+inline constexpr unsigned kStemSources = 16;
+inline constexpr unsigned kStemMasterL = 12;
+inline constexpr unsigned kStemMasterR = 13;
+inline constexpr unsigned kStemSendA = 14;
+inline constexpr unsigned kStemSendB = 15;
+inline constexpr std::uint32_t kStemMask = ((1u << kMaxSlots) - 1u) | (1u << kStemMasterL) | (1u << kStemMasterR) | (1u << kStemSendA) | (1u << kStemSendB);
 
 using UnitId = std::uint8_t;
 inline constexpr UnitId kNoUnit = 0xFF;
@@ -147,6 +166,21 @@ struct EngineStats {
   std::uint32_t dropped_midi = 0;      // send_midi() messages refused past kMaxMidiOut a block, since start()
 };
 
+// The codec input's peaks (linear, 1.0 = full scale), as Engine::input_peaks() reports them.
+struct InputPeaks {
+  float l = 0.0f;
+  float r = 0.0f;
+};
+
+// What the optional input and stem features did, in frames processed (a render-side counter that moves only inside a feature's own pass): all
+// zero while none of them is in use. Read it from the render context or with the render stopped (a test, the simulator).
+struct FeatureWork {
+  std::uint32_t gate_frames = 0;     // frames of a gate ramp (a steady gate, open or shut, costs none)
+  std::uint32_t monitor_frames = 0;  // frames the monitor was summed into the master bus
+  std::uint32_t peak_frames = 0;     // frames the input peaks were measured over
+  std::uint32_t stem_frames = 0;     // frames converted for the stems, summed over the staged sources
+};
+
 class Engine {
  public:
   Engine() noexcept;
@@ -222,6 +256,39 @@ class Engine {
     return r;
   }
 
+  // ---- Audio in and stems (main loop; each is one atomic word the render reads once a block, so a change lands at the next block) ----------
+  // The gate on the codec input (open at construction). Closing holds in_l / in_r silent for everything that listens (the units' input, the
+  // hooks' input_l(), the monitor, the peaks): a one-block linear fade to 0, then no work at all; opening fades back to the input in one block.
+  void set_input_gate(bool open) noexcept { gate_open_.store(open, std::memory_order_relaxed); }
+  bool input_gate() const noexcept { return gate_open_.load(std::memory_order_relaxed); }
+  // The monitor: the (gated) input times `gain` joins the master bus before the master inserts, so the master level, inserts and the clip are
+  // heard on it; both channels with their own side. Linear, clamped to 0..1.5 (NaN: 0); 0 at construction, which is off and free; a change ramps
+  // across a block. The app maps its percentage (track3r-os: off, on = 70) to a gain.
+  void set_input_monitor(float gain) noexcept {
+    monitor_.store(gain != gain ? 0.0f : (gain < 0.0f ? 0.0f : (gain > 1.5f ? 1.5f : gain)), std::memory_order_relaxed);
+  }
+  float input_monitor() const noexcept { return monitor_.load(std::memory_order_relaxed); }
+  // The input peaks are measured only while this is on (off at construction); turning it off stops the work and leaves the last value.
+  void set_input_peaks(bool on) noexcept { peaks_on_.store(on, std::memory_order_relaxed); }
+  bool input_peaks_on() const noexcept { return peaks_on_.load(std::memory_order_relaxed); }
+  // The largest |sample| of each channel of the gated input since the previous call (a peak hold that the read clears; nothing is lost between
+  // the render's update and the clear: it is an atomic exchange against a compare-and-swap max), 0 while input_peaks_on() was false.
+  InputPeaks input_peaks() noexcept;
+  // The sources to stage for the stems: bit i of kStemSources (slot s is bit s; kStemMasterL/R, kStemSendA/B). Bits outside kStemMask are
+  // dropped; 0 (at construction) stages nothing and costs nothing. The platform sets it from the union of the profile's slot masks while the
+  // IN stream runs.
+  void set_stem_slots(std::uint32_t mask) noexcept { stem_mask_.store(mask & kStemMask, std::memory_order_relaxed); }
+  std::uint32_t stem_slots() const noexcept { return stem_mask_.load(std::memory_order_relaxed); }
+  // After render() (the render context): the table of the stems of that block, for StemTap::push() with no copy and no change of format:
+  // kStemSources pointers, entry i a block of kMaxBlockFrames mono int16 samples (4-byte aligned; the frames a short render() did not make
+  // are 0), or null where the source is not staged (not selected, a slot with no source, a send with no effect: StemTap hears silence). Slot
+  // s: (L + R) / 2 of the slot after its inserts and its fader (level and mute, ramped as the mixer ramps), before the pan and the sends.
+  // Master L / R: the output of render() (after the master level and the clip: what planes_to_s16 sends to the codec). Send A / B: the mono
+  // sum of the bus's effect return. Each is clamp(x) * 32767 rounded, as planes_to_s16. nullptr when no source is staged; valid until the
+  // next render().
+  const std::int16_t* const* stem_block() const noexcept { return stem_live_ ? stem_table_ : nullptr; }
+  FeatureWork feature_work() const noexcept { return work_; }
+
   EngineStats stats() const noexcept;
   std::uint32_t dropped_commands() const noexcept { return dropped_commands_; }
 
@@ -275,6 +342,7 @@ class Engine {
     float gain_l = 0.0f;
     float gain_r = 0.0f;
     float send_gain[kSendCount] = {0.0f, 0.0f};
+    float fader_gain = 0.0f;  // the stems' fader (level and mute, no pan) reached at the end of the last block that staged this slot
   };
 
   bool refuse(SetupCall call, SetupReason reason, unsigned slot, unsigned index, unsigned unit) noexcept;  // records, returns false
@@ -286,6 +354,13 @@ class Engine {
   void apply_follow() noexcept;    // render side: the frame follow() was given becomes the block's transport
   void release_follow() noexcept;  // render side: the master is let go
   void run_unit(UnitId unit, const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames) noexcept;
+  // The optional features (render side), each called only when it is in use.
+  void gate_input(const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames, float from, float to) noexcept;
+  void monitor_input(const float* in_l, const float* in_r, float* master_l, float* master_r, std::uint32_t frames, float to) noexcept;
+  void measure_input(const float* in_l, const float* in_r, std::uint32_t frames) noexcept;
+  void stage_slot(unsigned slot, const float* l, const float* r, float target, std::uint32_t frames) noexcept;
+  void stage_mono(unsigned buf, const float* l, const float* r, std::uint32_t frames) noexcept;
+  void stage_plane(unsigned buf, const float* x, std::uint32_t frames) noexcept;
   void publish(float peak_l, float peak_r, const float* slot_peaks, std::uint32_t cycles, bool clipped) noexcept;
 
   // Setup and main side.
@@ -322,6 +397,26 @@ class Engine {
   std::uint32_t cycles_max_ = 0;
   std::uint32_t clipped_ = 0;
   BlockContext ctx_;
+
+  // Audio in and stems. Main loop writes, render reads (one word each, relaxed): gate_open_, monitor_, peaks_on_, stem_mask_. The peaks are shared by
+  // an atomic max (the render, compare-and-swap, as the bits of a non-negative float, which order like integers) and an exchange (the main loop).
+  std::atomic<bool> gate_open_{true};
+  std::atomic<float> monitor_{0.0f};
+  std::atomic<bool> peaks_on_{false};
+  std::atomic<std::uint32_t> stem_mask_{0};
+  std::atomic<std::uint32_t> peak_bits_[2] = {};
+  static_assert(std::atomic<bool>::is_always_lock_free && std::atomic<float>::is_always_lock_free && std::atomic<std::uint32_t>::is_always_lock_free,
+                "the input controls are plain words on the target");
+  // Render only.
+  float gate_gain_ = 1.0f;       // 0 or 1: where the gate stood at the end of the last block
+  float monitor_gain_ = 0.0f;    // reached at the end of the last block
+  std::uint32_t stem_valid_ = 0; // the slots whose fader_gain was reached by the last block (a slot not staged starts from its target)
+  bool stem_live_ = false;       // the last block staged at least one source: stem_table_ is its
+  FeatureWork work_;
+  static constexpr unsigned kStemBufs = kMaxSlots + 4;  // slots, Master L, Master R, Send A, Send B
+  alignas(4) std::int16_t stem_buf_[kStemBufs][kMaxBlockFrames] = {};
+  static_assert(kMaxBlockFrames % 2 == 0, "a stem block is a whole number of words");
+  const std::int16_t* stem_table_[kStemSources] = {};
 
   // MIDI, render side. The engine's own tempo is kept apart from the transport's, which a master's overwrites while it is followed.
   core::ClockFrame follow_in_;      // follow()'s frame for the next render()
