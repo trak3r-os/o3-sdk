@@ -37,7 +37,15 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WARNING_RE = re.compile(r"warning[:(]|CMake (Deprecation )?Warning", re.IGNORECASE)  # tools/ci.sh counts the same
 LINK_RE = re.compile(r"region `?\S+'? overflowed|undefined reference|cannot find -l|multiple definition", re.IGNORECASE)
 REGION_RE = re.compile(r"^\s*(FLASH|SRAM_L|SRAM_U|SDRAM):\s+(\d+ [KM]?B)\s+(\d+ [KM]?B)\s+([\d.]+%)\s*$")
-DEFAULT_ARM = os.path.join(ROOT, "..", "track3r-os", ".toolchains", "arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi")
+
+def default_arm(*roots):
+    """The toolchain when neither --arm nor ARM_GNU_ROOT is given, as tools/ci.sh and cmake/arm-none-eabi-toolchain.cmake look: the one
+    tools/fetch_toolchain.py unpacked into .toolchains/ of each root (the app's, then o3sdk's), else track3r-os's next to this checkout."""
+    for root in roots:
+        for found in sorted(glob.glob(os.path.join(root, ".toolchains", "arm-gnu-toolchain-15.3.rel1-*-arm-none-eabi"))):
+            if os.access(os.path.join(found, "bin", "arm-none-eabi-gcc"), os.X_OK):
+                return found
+    return os.path.join(ROOT, "..", "track3r-os", ".toolchains", "arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi")
 CANNOT_PROVE = [
     "that the image boots at all on this unit, the clock tree and the SDRAM bring-up (it is track3r-os's, proven there)",
     "the screen by eye, real presses of pads, buttons and the encoder, the pad LEDs by eye, the sound on the analogue outputs by ear",
@@ -192,7 +200,7 @@ def build(root, kind, sdk, arm, jobs, app, tag, prefix):
 def main(argv):
     parser = argparse.ArgumentParser(prog="gate.py", description="The mechanical half of the release gate for one app's image.")
     parser.add_argument("app", nargs="?", help="the app's name (hello, o3_303, myapp): the target <app>, its image <app>.ptf")
-    parser.add_argument("--arm", default=os.environ.get("ARM_GNU_ROOT") or DEFAULT_ARM, help="the Arm GNU Toolchain directory (holds bin/)")
+    parser.add_argument("--arm", default=os.environ.get("ARM_GNU_ROOT") or default_arm(ROOT, os.environ.get("O3SDK_DIR") or os.path.join(ROOT, "..", "o3-sdk")), help="the Arm GNU Toolchain directory (holds bin/)")
     parser.add_argument("--sdk", default=os.environ.get("O3SDK_DIR") or os.path.join(ROOT, "..", "o3-sdk"), help="an app repository: the o3-sdk checkout")
     parser.add_argument("--prefix", default="build-gate", help="build directory prefix: <prefix>-a and <prefix>-b (must start with build-gate)")
     parser.add_argument("--jobs", type=int, default=4)

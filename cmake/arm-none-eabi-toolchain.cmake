@@ -5,7 +5,9 @@
 # Where the compiler is found, first match wins:
 #   1. the CMake variable ARM_GNU_ROOT (-DARM_GNU_ROOT=/path/to/arm-gnu-toolchain-...; the directory that holds bin/),
 #   2. the environment variable ARM_GNU_ROOT, then O3_ARM_TOOLCHAIN (same meaning),
-#   3. arm-none-eabi-gcc on PATH.
+#   3. .toolchains/arm-gnu-toolchain-15.3.rel1-*-arm-none-eabi in the project being built, then in o3sdk (tools/fetch_toolchain.py puts it
+#      there; the directory is git-ignored),
+#   4. arm-none-eabi-gcc on PATH.
 # No path of a particular machine is written in this tree. CLAUDE.md ("Build and test") shows the cross build and
 # platform/mk66/README.md names the Arm GNU Toolchain release (15.3.rel1) that the project is built and tested with.
 set(CMAKE_SYSTEM_NAME Generic)
@@ -21,6 +23,17 @@ if(NOT ARM_GNU_ROOT)
   elseif(DEFINED ENV{O3_ARM_TOOLCHAIN} AND NOT "$ENV{O3_ARM_TOOLCHAIN}" STREQUAL "")
     set(ARM_GNU_ROOT "$ENV{O3_ARM_TOOLCHAIN}")
   endif()
+endif()
+if(NOT ARM_GNU_ROOT)
+  foreach(_base IN ITEMS "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_LIST_DIR}/..")
+    file(GLOB _found "${_base}/.toolchains/arm-gnu-toolchain-15.3.rel1-*-arm-none-eabi")
+    foreach(_dir IN LISTS _found)
+      if(NOT ARM_GNU_ROOT AND EXISTS "${_dir}/bin/arm-none-eabi-gcc")
+        get_filename_component(ARM_GNU_ROOT "${_dir}" ABSOLUTE)
+        message(STATUS "arm-none-eabi toolchain: ${ARM_GNU_ROOT} (from .toolchains/)")
+      endif()
+    endforeach()
+  endforeach()
 endif()
 if(ARM_GNU_ROOT)
   set(_arm_hints HINTS "${ARM_GNU_ROOT}/bin")

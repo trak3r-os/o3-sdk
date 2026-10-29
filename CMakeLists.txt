@@ -79,3 +79,11 @@ endif()
 if(O3SDK_BUILD_TESTS)
   add_subdirectory(templates)
 endif()
+
+# The tools' self-tests (python, standard library only, offline; label `tools`): tools/o3install.py against a fake console (no device is
+# ever touched) and tools/fetch_toolchain.py against fake archives and a loopback server (no network).
+if(O3SDK_BUILD_TESTS)
+  add_test(NAME o3install_selftest COMMAND ${O3SDK_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/tools/o3install.py --self-test)
+  add_test(NAME fetch_toolchain_selftest COMMAND ${O3SDK_PYTHON} -I ${CMAKE_CURRENT_SOURCE_DIR}/tools/fetch_toolchain.py --self-test)
+  set_tests_properties(o3install_selftest fetch_toolchain_selftest PROPERTIES TIMEOUT 120 LABELS tools)
+endif()

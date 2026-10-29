@@ -37,7 +37,7 @@ add_custom_command(
 
 o3sdk_library(ui
   SOURCES src/renderer.cpp src/assets.cpp src/themes.cpp src/components.cpp "${_font_gen}" "${_icon_gen}"
-          src/boot_screen.cpp src/boot_logo_data.cpp
+          src/boot_screen.cpp src/boot_logo_data.cpp src/list_view.cpp src/keyboard.cpp
   DEPENDS eve)
 
 # OS-003f, the boot logo: logo/o3.png (at the root of o3-sdk, the maintainer's O3 logo: the one source, no copy) is the kit's default;

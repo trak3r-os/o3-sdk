@@ -15,8 +15,9 @@
 # Nothing is copied out of the build directory: CI produces no candidate image (those go through fw-gate-check and the maintainer).
 #
 # Environment:
-#   ARM_GNU_ROOT       mk66: the Arm GNU Toolchain 15.3.Rel1 directory (the one that holds bin/);
-#                      default ../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi
+#   ARM_GNU_ROOT       mk66: the Arm GNU Toolchain 15.3.Rel1 directory (the one that holds bin/); default: the one in .toolchains/
+#                      (python3 -I tools/fetch_toolchain.py puts it there), else
+#                      ../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi
 #   O3SDK_DIR          an app only: the o3sdk checkout to build against (default ../o3-sdk)
 #   O3SDK_CI_TESTS     <regex>: only the ctests whose name matches (ctest -R). Letters, digits and _ . | ^ $ * + ? ( ) - only
 #   O3SDK_CI_KEEP=1    keep the build directory (incremental; it can hide a warning in a file that is up to date); default: fresh
@@ -50,7 +51,16 @@ else
   SDK_ARGS=("-DO3SDK_DIR=$SDK")
 fi
 
-ARM_DIR=${ARM_GNU_ROOT:-$ROOT/../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi}
+# The cross toolchain: ARM_GNU_ROOT when given; else the one tools/fetch_toolchain.py unpacked into .toolchains/ (this checkout's, then
+# o3sdk's, whichever host's archive is there); else track3r-os's, next to this checkout.
+find_arm() {
+  local d
+  for d in "$ROOT"/.toolchains/arm-gnu-toolchain-15.3.rel1-*-arm-none-eabi "$SDK"/.toolchains/arm-gnu-toolchain-15.3.rel1-*-arm-none-eabi; do
+    if [ -x "$d/bin/arm-none-eabi-gcc" ]; then echo "$d"; return; fi
+  done
+  echo "$ROOT/../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi"
+}
+ARM_DIR=${ARM_GNU_ROOT:-$(find_arm)}
 JOBS=${O3SDK_CI_JOBS:-4}
 case "$JOBS" in ""|*[!0-9]*) die "O3SDK_CI_JOBS must be a number" ;; esac
 if [ "${O3SDK_CI_NICE:-1}" = 1 ]; then renice -n 10 -p $$ > /dev/null 2>&1 || true; fi
@@ -142,7 +152,7 @@ for mode in "$@"; do
       run_mode host ${HOST_ARGS[@]+"${HOST_ARGS[@]}"}
       ;;
     mk66)
-      [ -x "$ARM_DIR/bin/arm-none-eabi-gcc" ] || die "mk66: no arm-none-eabi-gcc in $ARM_DIR/bin (set ARM_GNU_ROOT to the Arm GNU Toolchain 15.3.Rel1 directory)"
+      [ -x "$ARM_DIR/bin/arm-none-eabi-gcc" ] || die "mk66: no arm-none-eabi-gcc in $ARM_DIR/bin (set ARM_GNU_ROOT to the Arm GNU Toolchain 15.3.Rel1 directory, or run python3 -I tools/fetch_toolchain.py)"
       echo "== ci.sh mk66: $("$ARM_DIR/bin/arm-none-eabi-gcc" --version | sed -n 1p)"
       run_mode mk66 -DO3SDK_PLATFORM=mk66 "-DARM_GNU_ROOT=$ARM_DIR"
       ;;
