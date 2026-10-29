@@ -7,6 +7,8 @@
 #include <o3sdk/app/context.h>
 #include <o3sdk/app/widgets.h>
 
+#include <cstddef>
+
 namespace @APP_ID@ {
 
 using namespace o3sdk;
@@ -15,10 +17,49 @@ using ui::Color;
 using ui::Face;
 using ui::Rect;
 
+namespace {
+
+// "C#4" for a MIDI note (60 is C4), into `out`; a rest is "-".
+void note_name(int note, char (&out)[5]) noexcept {
+  static constexpr char kLetters[12] = {'C', 'C', 'D', 'D', 'E', 'F', 'F', 'G', 'G', 'A', 'A', 'B'};
+  static constexpr bool kSharp[12] = {false, true, false, true, false, false, true, false, true, false, true, false};
+  std::size_t n = 0;
+  if (note <= 0) {
+    out[n++] = '-';
+  } else {
+    out[n++] = kLetters[note % 12];
+    if (kSharp[note % 12]) {
+      out[n++] = '#';
+    }
+    out[n++] = static_cast<char>('0' + (note / 12 > 0 ? note / 12 - 1 : 0) % 10);  // the notes below 12 (octave -1) show as 0
+  }
+  out[n] = '\0';
+}
+
+// The card as the files service sees it (Files::card()), in the words the screen uses.
+const char* card_text(const app::Files& files) noexcept {
+  if (!files.available()) {
+    return "NO CARD";
+  }
+  switch (files.card()) {
+    case app::Files::Card::None: return "NO CARD";
+    case app::Files::Card::Ready: return "READY";
+    case app::Files::Card::ReadOnly: return "WRITE PROTECTED";
+    case app::Files::Card::Unsupported: return "NOT SUPPORTED";
+    case app::Files::Card::OnComputer: return "ON COMPUTER";
+    case app::Files::Card::InUse: return "UPDATE RUNNING";
+  }
+  return "";
+}
+
+}  // namespace
+
 void PlayScreen::init(dsp::UnitId voice) noexcept {
   // setup() can run again on the same app object (every test starts a fresh simulator on the one o3sdk_app() instance): start from scratch.
   voice_ = voice;
   octave_ = 0;
+  pattern_ = Pattern{};
+  note_ = nullptr;
   page_ = app::ParamPage{"VOICE", voice, {Voice::Wave, Voice::Decay, Voice::Level, 0, 0, 0, 0, 0}, Voice::kParamCount};
   keys_.set_pages(&page_, 1);  // the table must outlive the helper: it is a member
   for (auto& n : held_) {
@@ -30,13 +71,19 @@ void PlayScreen::input(app::Context& ctx, const app::Input& in) noexcept {
   if (keys_.input(ctx, in)) {  // F1..F8 and the encoder
     return;
   }
-  if (in.press(Button::Left) || in.press(Button::Right)) {
+  if (in.press(Button::Delete)) {
+    pattern_.clear();
+    note_ = nullptr;
+    ctx.redraw();
+  } else if (in.press(Button::Left) || in.press(Button::Right)) {
     octave_ = clamp_octave(octave_ + (in.press(Button::Left) ? -1 : 1));
     ctx.redraw();
   } else if (in.pad_press()) {
     const int note = key_note(in.pad(), octave_);
     if (note >= 0) {
       held_[in.pad()] = note;
+      pattern_.record(note);  // the pattern is what the pads played; FILE saves it
+      ctx.redraw();
       (void)ctx.engine().note_on(voice_, static_cast<std::uint8_t>(note), 110);
     }
   } else if (in.pad_release()) {
@@ -81,8 +128,35 @@ void PlayScreen::draw(app::Context& ctx, ui::Renderer& r, const Rect& area) noex
   r.text(rx, area.y + 12, "OUT", Color::TextDim, Face::Label);
   const dsp::EngineStats s = ctx.engine().stats();
   app::level_meter(r, Rect{rx + 40, area.y + 14, rw - 40, 10}, s.peak_l > s.peak_r ? s.peak_l : s.peak_r);
+  // The card and the last file job (Context::files(), polled: the screen never waits for the card). The kit's strip shows the same result
+  // for a few seconds; this line stays.
+  const app::Files& files = ctx.files();
+  const app::Files::Status fs = files.status();
+  r.text(rx, area.y + 48, "CARD", Color::TextDim, Face::Label);
+  r.text(rx + 48, area.y + 48, card_text(files), files.available() && files.card() == app::Files::Card::Ready ? Color::Play : Color::Text, Face::Label);
+  r.text(rx, area.y + 68, "FILE", Color::TextDim, Face::Label);
+  r.text(rx + 48, area.y + 68, note_ != nullptr ? note_ : (fs.phase == app::Files::Status::Idle ? "-" : fs.text),
+         note_ != nullptr || fs.phase == app::Files::Status::Failed ? Color::Accent : Color::Text, Face::Label);
   const int hy = map_y + static_cast<int>(app::kPadRows) * cell_h + 18;
   r.text(16, hy, "PADS play   F1-F3 pick a value   ENCODER turn it (SHIFT coarse)   LEFT/RIGHT octave", Color::TextDim, Face::Label);
+
+  // The pattern: 16 steps, the cursor framed.
+  r.text(16, hy + 20, "PATTERN: pads record   DELETE clear   FILE save   SAMPLE LOAD load", Color::TextDim, Face::Label);
+  const int step_w = 40;
+  for (unsigned i = 0; i < kPatternSteps; ++i) {
+    const Rect c{16 + static_cast<int>(i) * step_w, hy + 38, step_w - 4, 26};
+    if (pattern_.note[i] != 0) {
+      r.panel(c, Color::Empty);
+    } else {
+      r.frame(c, Color::Empty);
+    }
+    if (i == pattern_.cursor) {
+      r.frame(c, Color::Accent);
+    }
+    char name[5];
+    note_name(pattern_.note[i], name);
+    r.text(c.x + 4, c.y + 6, name, Color::Text, Face::Micro);
+  }
 
   // Eight cells above the soft keys: name, value and a bar (the kit's widget).
   app::knob_strip(r, Rect{0, area.y + area.h - app::kKnobStripH, ui::kScreenW, app::kKnobStripH}, ctx.engine(), keys_);

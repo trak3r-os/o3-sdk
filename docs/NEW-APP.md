@@ -55,10 +55,10 @@ What you get, laid out like o3-303:
 ```
 myapp-repo/
   CMakeLists.txt            uses ../o3-sdk (add_subdirectory); -DO3SDK_DIR=<path> or $O3SDK_DIR elsewhere
-  app/                      the app: CMakeLists.txt (o3sdk_app), src/app.cpp, src/play_screen.{h,cpp}, include/myapp/pad_map.h
-  app/scenarios/boot.txt    a simulator scenario (screens as PNG, audio as WAV)
+  app/                      the app: CMakeLists.txt (o3sdk_app), src/app.cpp, src/play_screen.{h,cpp}, include/myapp/{pad_map,pattern}.h
+  app/scenarios/            boot.txt and files.txt, simulator scenarios (screens as PNG, audio as WAV; files.txt on the simulator's card)
   units/voice/              one unit (DSP): voice.h, voice.cpp, CMakeLists.txt (o3sdk_unit)
-  tests/                    doctest: voice_test (the unit against the engine), pad_map_test (pure logic), app_test (the app in the simulator)
+  tests/                    doctest: voice_test (the unit against the engine), pad_map_test and pattern_test (pure logic, the file format), app_test (the app in the simulator, with a card)
   tools/ci.sh, remote_ci.sh, gate.py   the CI scripts and the release gate, identical to o3-sdk's (docs/ci.md)
   .claude/                  the agent harness (agents, skills, hooks), copied from o3-sdk
   CLAUDE.md, AGENTS.md      for the agents that work in this repository; README.md; LICENSE (GPL-3.0-or-later)
@@ -86,7 +86,7 @@ through. `tools/ci.sh`, `remote_ci.sh` and `gate.py` are not part of it (copy th
 ```sh
 cmake -S . -B build-host
 cmake --build build-host -j4
-ctest --test-dir build-host --output-on-failure           # app_test, pad_map_test, voice_test
+ctest --test-dir build-host --output-on-failure           # app_test, pad_map_test, pattern_test, voice_test
 mkdir -p /tmp/myapp && build-host/app/myapp_sim --scenario app/scenarios/boot.txt --out /tmp/myapp
 ```
 
@@ -270,8 +270,8 @@ arm-none-eabi-nm build-mk66/app/<id>.elf | grep ' __aeabi_d'          # must pri
 arm-none-eabi-size -A build-mk66/app/<id>.elf
 ```
 
-The template's image is about 180 KB of flash (17 % of 1 MiB; 36 KB of it is the default boot logo), 78 KB of SRAM_U (39 % of 192 KiB, the kit's console and audio buffers included)
-and 64 KB of SDRAM. The image carries the build identity of both trees (`strings build-mk66/app/<id>.bin | grep o3sdk`): `<app git id> / o3sdk
+The template's image is about 257 KB of flash (25 % of 1 MiB; 36 KB of it is the default boot logo), 102 KB of SRAM_U (53 % of 192 KiB, the kit's console and audio buffers included)
+and 84 KB of SDRAM (2026-10-29, with the file API; the kit's files service is most of the growth). The image carries the build identity of both trees (`strings build-mk66/app/<id>.bin | grep o3sdk`): `<app git id> / o3sdk
 <kit git id>`, `unknown` without a commit and `-dirty` with changed tracked files. **Commit before an image you will install**, so that it can be traced.
 
 ### The boot logo
@@ -391,7 +391,7 @@ matter for an instrument today:
 
 | Missing | Means | Workaround |
 |---|---|---|
-| Saving and loading (the card from an app) | built (M2c slice FA, host only until the unit session): `ctx.files()` saves, loads and lists in `Apps/<id>/`; every call is a job of the main loop and a refused call says why (`status().text`, the strip) | save with `Files::save`, poll `status()`, keep the buffer unchanged until Done; `formats/chunk_file.h` for a versioned format; see `docs/FRAMEWORK.md` "Files on the card" |
+| Saving and loading (the card from an app) | built (M2c slice FA, host only until the unit session; the template does it: FILE and SAMPLE LOAD, the pattern and the octave, `app/src/app.cpp` and `pattern.h`): `ctx.files()` saves, loads and lists in `Apps/<id>/`; every call is a job of the main loop and a refused call says why (`status().text`, the strip) | save with `Files::save`, poll `status()`, keep the buffer unchanged until Done; `formats/chunk_file.h` for a versioned format; see `docs/FRAMEWORK.md` "Files on the card" |
 | MIDI in/out on the unit | the kit's MIDI is host-tested; the DIN and USB drivers are built and have not run on a unit | none yet; in the simulator, `--midi` and the `midi` and `clock` scenario lines |
 | The on-screen firmware switcher's final INSTALL | the FIRMWARE section opened and worked on a unit (2026-10-26, reported); the final F1 INSTALL needs a finger and is not verified | install over USB (section 11) |
 | Power switch shutdown on the unit | the shutdown is built and host-tested; it has not run on a unit (the pin's pull and polarity, the VLPR wake are open) | `power off dry` over USB (the stages, then a restart) |

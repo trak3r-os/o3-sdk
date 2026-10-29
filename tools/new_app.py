@@ -7,7 +7,7 @@
     python3 -I tools/new_app.py --self-test
 
 <dest-dir> is the new repository (it must not exist: nothing is ever overwritten; its parent is created if missing). <app-id> is the
-app's identifier: lower case letters, digits and underscores, starting with a letter, 2 to 24 characters. It becomes the CMake project
+app's identifier: lower case letters, digits and underscores, starting with a letter, 2 to 15 characters (the card folder Apps/<id>/ is at most 15 bytes). It becomes the CMake project
 and the image (`<id>.ptf`), the simulator (`<id>_sim`), the C++ namespace and an include directory, so it must also be a valid C++
 identifier that does not collide with o3-sdk's own names (a refused id says why). --name is the name the screen shows (upper case
 letters, digits, space and '-', at most 16 characters; default: the id in upper case, '_' as '-').
@@ -48,7 +48,7 @@ import tempfile
 SDK_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TEMPLATE = os.path.join(SDK_ROOT, "templates", "app")
 
-ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,23}$")
+ID_RE = re.compile(r"^[a-z][a-z0-9_]{1,14}$")
 NAME_RE = re.compile(r"^[A-Z0-9][A-Z0-9 \-]{0,15}$")
 
 # Words an id may not be: C++ keywords (the id is a namespace), the names of o3-sdk's namespaces and CMake targets (the id is a
@@ -67,7 +67,7 @@ CMAKE_RESERVED = set("all clean help install test package package_source edit_ca
 def check_id(app_id):
     """None when `app_id` is acceptable, else the reason it is not."""
     if not ID_RE.match(app_id):
-        return "must be 2 to 24 characters: a lower case letter, then lower case letters, digits or '_'"
+        return "must be 2 to 15 characters (the card folder Apps/<id>/ takes 15): a lower case letter, then lower case letters, digits or '_'"
     if "__" in app_id or app_id.endswith("_"):
         return "must not contain '__' or end with '_' (a C++ identifier rule, and the file names built from it)"
     if app_id in CXX_KEYWORDS:
@@ -479,9 +479,9 @@ def self_test():
         if not cond:
             failures.append(what)
 
-    for good in ("tracker", "my_synth", "acid2", "ab", "a" * 24):
+    for good in ("tracker", "my_synth", "acid2", "ab", "a" * 15):
         expect(check_id(good) is None, "good id refused: " + good)
-    for bad in ("", "a", "A", "1abc", "my-synth", "my synth", "a__b", "ab_", "a" * 25, "class", "int", "core", "app", "o3sdk", "test", "all",
+    for bad in ("", "a", "A", "1abc", "my-synth", "my synth", "a__b", "ab_", "a" * 16, "class", "int", "core", "app", "o3sdk", "test", "all",
                 "hello", "ünï", "../x", "x/y"):
         expect(check_id(bad) is not None, "bad id accepted: " + repr(bad))
     for good in ("TRACKER", "MY-SYNTH", "O3 303", "A"):

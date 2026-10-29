@@ -5,8 +5,9 @@
     check_template.py host --sdk <o3-sdk dir> --work <dir> [--cmake CMAKE] [--ctest CTEST] [--jobs N] [--ccache]
     check_template.py mk66 --sdk <o3-sdk dir> --work <dir> --arm <toolchain dir> --nm <arm-none-eabi-nm> [--jobs N] [--ccache] ...
 
-host: tools/new_app.py into <work>/app/demo_app, configure and build it against --sdk (warnings are failures), run its three ctests
-(app_test, pad_map_test, voice_test) and its scenario in the simulator (exit 0, pictures and the WAV written, no frame refused).
+host: tools/new_app.py into <work>/app/demo_app, configure and build it against --sdk (warnings are failures), run its four ctests
+(app_test, pad_map_test, pattern_test, voice_test) and its two scenarios in the simulator (exit 0, pictures and the WAV written, no frame
+refused): boot.txt, and files.txt on the simulator's card (a fresh directory), which saves, reboots and loads, and leaves its files.
 mk66: the same instance, cross-built with -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=<--arm>, then its image ctests (demo_app_image,
 _flashconfig, _ramfunc and _usb), the image files, and no software double (__aeabi_d) in the ELF.
 
@@ -97,7 +98,7 @@ def check_host(args):
     build = os.path.join(work, "build-host")
     configure_and_build(args, src, build, sdk, [])
     out = run([args.ctest, "--test-dir", build, "--output-on-failure"], what="ctest (the instance's host tests)")
-    passed(out, ["app_test", "pad_map_test", "voice_test"])
+    passed(out, ["app_test", "pad_map_test", "pattern_test", "voice_test"])
     sim_out = os.path.join(work, "sim-out")
     shutil.rmtree(sim_out, ignore_errors=True)
     os.makedirs(sim_out)
@@ -109,6 +110,20 @@ def check_host(args):
         path = os.path.join(sim_out, name)
         if not os.path.isfile(path) or os.path.getsize(path) < 1000:
             raise Failure("the scenario did not write %s" % name)
+    # The file API: the scenario saves the pattern, reboots and loads it back on the simulator's card (a directory, fresh for this run).
+    card = os.path.join(work, "sim-card")
+    shutil.rmtree(card, ignore_errors=True)
+    os.makedirs(card)
+    text = run([os.path.join(build, "app", APP + "_sim"), "--scenario", os.path.join(src, "app", "scenarios", "files.txt"), "--card", card,
+                "--out", sim_out], what="the simulator, files.txt on a card")
+    if "0 refused" not in text or "0 events dropped" not in text:
+        raise Failure("the simulator summary is not clean:\n" + text[-400:])
+    for name in ("01_saved.png", "04_after_reboot.png"):
+        if not os.path.isfile(os.path.join(sim_out, name)):
+            raise Failure("the files scenario did not write %s" % name)
+    for name in ("pattern.o3a", "pattern.o3a.bak", "config.o3a"):
+        if not os.path.isfile(os.path.join(card, "Apps", APP, name)):
+            raise Failure("the files scenario left no %s on the card" % name)
 
 
 def check_mk66(args):

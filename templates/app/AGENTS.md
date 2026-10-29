@@ -21,6 +21,7 @@ Everything here is written in English.
 | Pure logic (pad maps, sequencer arithmetic, formats) | headers in `app/include/@APP_ID@/`, a doctest in `tests/` |
 | A scenario | `app/scenarios/*.txt` (commands: `../o3-sdk/sim/README.md`); `tests/app_test.cpp` runs every one |
 | A sequencer or arpeggiator | a `dsp::Clocked` hook added with `engine.add_hook()` (an example: `../o3-sdk/apps/hello/src/hello_app.cpp`, `Riff`) |
+| Files on the card (save, load, a setting) | `Context::files()` in `app/src/app.cpp` (`update`, `input`), the bytes in `app/include/@APP_ID@/pattern.h`; the API is `../o3-sdk/kit/app/include/o3sdk/app/files.h` |
 | Console state and commands | `App::describe_state`, `App::diag_commands` in `app/src/app.cpp` |
 | Something the kit lacks (a driver, an API, a widget) | **not here**: a change in `../o3-sdk`, under its rules, then this repository builds against it |
 

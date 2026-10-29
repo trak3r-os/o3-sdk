@@ -1,0 +1,65 @@
+# The card, from the app (o3-sdk kit/app/include/o3sdk/app/files.h): the pattern the pads recorded is saved and loaded back, the octave keeps
+# itself, a reboot brings both back, and a missing card is said, not ignored. Needs the simulator's card, which is a directory:
+#
+#   mkdir <dir> <card> && <build dir>/app/@APP_ID@_sim --scenario app/scenarios/files.txt --card <card> --out <dir>
+#
+# The files are <card>/Apps/@APP_ID@/pattern.o3a (and .bak) and config.o3a. The scenario stops at the first `expect` that is wrong. Start from an
+# empty card directory (tests/app_test.cpp gives each scenario a fresh one).
+wait 100
+expect state card=ready
+expect nofile Apps/@APP_ID@/pattern.o3a
+expect state steps=0
+snap 00_card_ready
+
+# RECORD and SAVE. Three pads write three steps; FILE saves them; the strip says SAVED and the FILE line of the screen too.
+pad 36 50
+pad 40 50
+pad 43 50
+expect state steps=3
+tap file
+wait 60
+expect state files=done
+expect file Apps/@APP_ID@/pattern.o3a
+snap 01_saved
+
+# The setting saves itself a moment after it changes (an octave down): no key, no strip line.
+tap left
+wait 60
+expect state octave=-1
+expect file Apps/@APP_ID@/config.o3a
+
+# The second save keeps the first as the backup.
+pad 38 50
+tap file
+wait 60
+expect file Apps/@APP_ID@/pattern.o3a.bak
+expect state steps=4
+
+# CLEAR (DELETE), then LOAD: the saved pattern is back.
+tap delete
+expect state steps=0
+snap 02_cleared
+tap sampleload
+wait 60
+expect state steps=4
+snap 03_loaded
+
+# REBOOT: the runtime and the app are made again; the pattern and the octave come back from the card with no key pressed.
+reboot
+wait 200
+expect state octave=-1
+expect state steps=4
+snap 04_after_reboot
+
+# No card: a save is refused at once and says NO CARD; the card back and it goes through.
+card out
+wait 20
+tap file
+wait 20
+expect state files=failed
+snap 05_no_card
+card in
+wait 100
+tap file
+wait 60
+expect state files=done
