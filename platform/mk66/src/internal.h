@@ -12,6 +12,9 @@
 
 #include <cstdint>
 
+namespace o3sdk::app {
+class Files;  // (slice FA: the app file API the card claim, the power-off and the firmware update path ask about)
+}  // namespace o3sdk::app
 namespace o3sdk::dsp {
 class Engine;
 }
@@ -110,8 +113,11 @@ void audio_closed() noexcept;
 void stop_transport() noexcept;
 // OS-007o: the card is in use by the app: a project is loading or a save job is running. The firmware update path (`fw put|rm|arm|update`) refuses while it is true,
 // and the save layer refuses to start while the update path holds the card (SaveService::attach_claim): FatFs on the volume is not re-entrant and a hand-over to the
-// bootloader must not cut a save. Main loop only.
+// bootloader must not cut a save. Main loop only. (o3-sdk: the files service's job: app::Files::busy(); the service is bound by bind_files below. The other direction is the Platform's
+// card_claim, which main.cpp points at firmware_update_active().)
 bool storage_in_use() noexcept;
+// The app file API (app/files.h) the three of them above and the power_save_* hooks below answer through: console::attach hands it over, from the runtime's context.
+void bind_files(app::Files& files) noexcept;
 
 // ---- console slice (docs/M2B-PLAN.md section 5): the image's own, defined with the others in console/src/appimg.cpp ----------------------------------------------------------
 // The composition root gives the console the engine whose transport stop_transport() stops (console::attach does, from the Runtime's context).

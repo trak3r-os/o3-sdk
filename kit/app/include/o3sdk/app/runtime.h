@@ -56,6 +56,15 @@ struct Platform {
   // the rest to App::midi(), and the MIDI section of the system Config. Null (a test rig, an image without MIDI): none of it, and the runtime
   // behaves as it did before MIDI existed.
   hal::midi::Device* midi = nullptr;
+  // The SD card as the app's files (files.h, docs/M2C-PLAN.md section 3): `storage` reads it, `writer` writes it (hal/storage_write.h: only the files service, the writers and the
+  // platform's main name that header), `files_work` is the jobs' memory (files_work.h; the unit's image places it in the SDRAM), `app_id` the folder name of Apps/<id>/ (null: o3sdk_app_id(),
+  // which the app's build generates), `card_claim` says that something else holds the card (the firmware update path) while it returns true. Any of the first three null: no files, every
+  // call of Context::files() is refused with "NO CARD", and the kit's settings are not kept (a test rig, an image without a card).
+  hal::storage::Storage* storage = nullptr;
+  hal::storage::StorageWriter* writer = nullptr;
+  Files::Work* files_work = nullptr;
+  const char* app_id = nullptr;
+  bool (*card_claim)() noexcept = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).
@@ -94,9 +103,11 @@ class Runtime {
   // `playing` is the last Play/Stop the main loop asked for, `tempo` is in milli-BPM (120000 = 120.0), `cpu` the render's load of the
   // last block in percent (0 without a cycle counter), `frames` the frames drawn. Spaces in a name become '_'. NUL terminated, cut
   // at a pair when `cap` is short; returns the length. Main loop only.
-  //   ... frames=<n> sys=0|1 section=<firmware|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing> [<the app's pairs>]
-  // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase. `tempo` and
-  // `playing` are the master's while the engine follows a MIDI clock (Engine::tempo).
+  //   ... frames=<n> sys=0|1 section=<firmware|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>
+  //       card=<none|ready|readonly|unsupported|computer|inuse> files=<idle|running|done|failed> [<the app's pairs>]
+  // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase, `card` the
+  // files service's view of the card (files.h Card; `none` also without a card capability) and `files` the phase of its last job (Files::Status).
+  // `tempo` and `playing` are the master's while the engine follows a MIDI clock (Engine::tempo).
   std::size_t state_line(char* out, std::size_t cap) const noexcept;
 
   // ---- The system layer (system_config.h) -----------------------------------------------------------------------------------------
@@ -111,7 +122,14 @@ class Runtime {
   void lock_input(bool on) noexcept { locked_ = on; }
   bool input_locked() const noexcept { return locked_; }
   // The card was taken out or put in (the platform's card watch): a firmware list that is not past INSTALL is closed and cancelled.
-  void card_changed() noexcept { sys_.card_changed(ctx_); }
+  void card_changed() noexcept {
+    sys_.card_changed(ctx_);
+    ctx_.files_.card_changed();
+  }
+  // At boot, once the card is mounted (after start(): App::setup has set the app's defaults): reads the kit's settings from Apps/<app>/system.o3s and applies them over those defaults, the
+  // theme and the MIDI settings (docs/formats/o3sdk-settings.md). One bounded read. A missing, damaged or newer-major file leaves the defaults. From then on a change is written 1.5 s after the
+  // last one (and at once when the power-off begins); nothing is written for what the app set in setup(). Without a card capability: Unavailable, and nothing is kept.
+  Files::SettingsLoad load_settings() noexcept;
 
  private:
   static void render_block(void* user, const hal::audio::BlockIo& io) noexcept;
@@ -122,6 +140,7 @@ class Runtime {
   void draw_header(ui::Renderer& r) noexcept;
   void draw_keys(ui::Renderer& r) noexcept;
   void update_leds() noexcept;
+  KitValues kit_values() const noexcept;
 
   App& app_;
   dsp::Engine& engine_;

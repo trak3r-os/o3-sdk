@@ -71,3 +71,6 @@ class App {
 
 // Defined by the app (exactly one per image).
 o3sdk::app::App& o3sdk_app() noexcept;
+// The app's id: the folder `Apps/<id>/` of its files and the name its settings are kept under (app/files.h). the CMake function o3sdk_app() (cmake/O3sdkTargets.cmake) generates it from the CMake id
+// (`o3sdk_app(hello ...)`: "hello"); an app of another build defines it itself, or the files service is off. At most 15 bytes of letters, digits, '_', '-' and ' ', no '.'.
+const char* o3sdk_app_id() noexcept;

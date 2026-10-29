@@ -20,6 +20,13 @@
 //                             (in sixteenths) and Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in
 //                             the system Config's MIDI section (or the app set it)
 //
+//   card out|in               the SD card out of its slot (every card call answers NO CARD, a file being written stays torn) and back in (mounted at once)
+//   card protect on|off       the card's write-protect switch
+//   reboot                    the unit restarted on the same card: the runtime and the engine made again, App::setup, the kit's settings read from the card
+//   expect file <path>        the card holds the file `path` (relative to its root, "Apps/hello/riff.o3a"); `expect nofile <path>` it does not
+//   expect state <text>       the console's `state` line holds `text` ("files=done", "card=none", "section=display"); a scenario that fails an expect fails with its line
+// `card` and `expect file` need a card (<app>_sim --card DIR, or a Harness given one); `reboot` works without one (and keeps nothing).
+//
 // `midi` and `clock` need a MIDI device (Harness(app, firmware, &fake_midi); the simulator makes one when the scenario uses them or with
 // --midi). Each command that touches the panel is followed by one millisecond, so that the runtime sees events in order.
 

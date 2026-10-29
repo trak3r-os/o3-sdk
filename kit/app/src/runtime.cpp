@@ -61,6 +61,28 @@ void format_percent(std::uint32_t pct, char* out) noexcept {
   out[o] = '\0';
 }
 
+const char* card_name(Files::Card c) noexcept {
+  switch (c) {
+    case Files::Card::None: return "none";
+    case Files::Card::Ready: return "ready";
+    case Files::Card::ReadOnly: return "readonly";
+    case Files::Card::Unsupported: return "unsupported";
+    case Files::Card::OnComputer: return "computer";
+    case Files::Card::InUse: return "inuse";
+  }
+  return "none";
+}
+
+const char* files_phase_name(Files::Status::Phase p) noexcept {
+  switch (p) {
+    case Files::Status::Idle: return "idle";
+    case Files::Status::Running: return "running";
+    case Files::Status::Done: return "done";
+    case Files::Status::Failed: return "failed";
+  }
+  return "idle";
+}
+
 // The render's load of the last block in percent (the header's number).
 std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
   return static_cast<std::uint32_t>(static_cast<std::uint64_t>(s.cycles) * 100u / hal::audio::kCyclesPerBlock);
@@ -73,6 +95,26 @@ Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
   ctx_.midi_.bind(platform_.midi, &engine_);
+  ctx_.files_.bind(platform_.storage, platform_.writer, platform_.files_work, platform_.app_id != nullptr ? platform_.app_id : o3sdk_app_id(), platform_.card_claim);
+}
+
+// What the kit keeps for the app (settings.h) as it is now, and putting loaded ones in place.
+KitValues Runtime::kit_values() const noexcept {
+  KitValues v;
+  v.theme = ctx_.theme_;
+  v.midi = ctx_.midi_.config();
+  return v;
+}
+
+Files::SettingsLoad Runtime::load_settings() noexcept {
+  KitValues v = kit_values();  // (the app's defaults: App::setup has run)
+  const Files::SettingsLoad result = ctx_.files_.load_settings(v);
+  if (result == Files::SettingsLoad::Loaded || result == Files::SettingsLoad::FromBackup) {
+    ctx_.theme_ = v.theme;
+    ctx_.midi_.set_config(v.midi);
+    ctx_.redraw_ = true;
+  }
+  return result;
 }
 
 bool Runtime::start() noexcept {
@@ -159,6 +201,19 @@ void Runtime::poll() noexcept {
   }
   switch_screen();
   sys_.update(ctx_);
+
+  // The card's jobs (files.h): a slice of this pass, the kit's settings after their quiet, and the strip line of a save or a load.
+  ctx_.files_.poll(platform_.clock, Files::kJobBudgetUs, kit_values());
+  KitValues loaded;
+  if (ctx_.files_.take_loaded(loaded)) {  // the settings of a card put in after the boot, read by the service: applied as load_settings() applies them
+    ctx_.theme_ = loaded.theme;
+    ctx_.midi_.set_config(loaded.midi);
+    ctx_.redraw_ = true;
+  }
+  Files::Strip line;
+  if (!locked_ && ctx_.files_.strip(line)) {
+    system_strip(line.text, line.progress, line.result ? SystemConfig::kNoticeMs : SystemConfig::kStripMs);
+  }
 
   const std::uint32_t since = core::tick_elapsed(ctx_.now_, next_frame_ - kFrameUs);
   if (core::tick_reached(ctx_.now_, next_frame_) || (ctx_.redraw_ && since >= kMinFrameUs)) {
@@ -274,6 +329,8 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
   w.flag("sys", sys_.open());
   w.str("section", sys_.section_name());
   w.str("fw", firmware_phase_name(sys_.firmware().phase));
+  w.str("card", card_name(ctx_.files_.card()));
+  w.str("files", files_phase_name(ctx_.files_.status().phase));
   std::size_t n = w.size();
   // The app's pairs go after a space; the room is what the kit's pairs left (the separator, one character and the terminator at least).
   if (w.complete() && n + 3u <= cap) {

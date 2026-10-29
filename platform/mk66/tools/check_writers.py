@@ -6,7 +6,7 @@
     check_writers.py --self-test            (also --selftest)
 
 Adapted from track3r-os tools/check_layers.py, rules 6 to 8 (OS-006c, OS-007n; docs/M2C-PLAN.md, section 3): the update path and the app save layer
-are the card's two writers, with disjoint paths (update/path_guard.h and hal/app_guard.h), and this check keeps the list of who may name what; the bench's rules
+are the card's two writers. Their paths do not overlap: Firmware/ is the update path's, with its own guard (update/path_guard.h) and nothing in common with the other; the save layer's writer answers through hal/app_guard.h, which is a superset of track3r-os's guard (it admits Projects/, Settings/, instruments/ and AppExport/ as well), and the kit's files service narrows it to Apps/<id>/ and Samples/ with its own ScopedWriter (kit/app/files_work.h, tests/app_files_test.cpp). This check keeps the list of who may name what; the bench's rules
 (9 and 10 of track3r-os) are not here, o3sdk has no bench. It reads the first-party C and C++ sources under the root (comments and string literals
 removed, so a name in a comment is not a use) and fails when:
 
@@ -14,7 +14,7 @@ removed, so a name in a comment is not a use) and fails when:
      f_forward) or the open flags that write (FA_WRITE FA_CREATE_NEW FA_CREATE_ALWAYS FA_OPEN_APPEND FA_OPEN_ALWAYS: an `f_open`
      that writes names one of them) are named in any source but the two writers of the card, each of which applies its own path guard before
      every one of them: platform/mk66/update/src/fat_firmware_store.cpp (the update path, `fw`, under Firmware/) and
-     platform/mk66/save/src/fat_storage_writer.cpp (the app save layer, under Apps/ and Samples/, through hal/app_guard.h);
+     platform/mk66/save/src/fat_storage_writer.cpp (the app save layer, through hal/app_guard.h; the files service uses it under Apps/<id>/ and Samples/ only);
   2. `disk_write` or `disk_ioctl`, the FatFs glue to the block device, are named in any source but
      platform/mk66/storage/src/fat_storage.cpp, which defines them;
   3. `kBootloaderRequest`, the bootloader request pin (PTA1), is named in any source but platform/mk66/include/o3sdk/platform/mk66/
@@ -52,9 +52,9 @@ SAVE_WRITE_USERS = {
     "kit/hal/include/o3sdk/hal/storage_write.h", "kit/hal/include/o3sdk/hal/save_guard.h", "kit/hal/include/o3sdk/hal/app_guard.h",
     "platform/mk66/save/include/o3sdk/platform/mk66/save/fat_storage_writer.h", "platform/mk66/save/src/fat_storage_writer.cpp",
     "kit/app/include/o3sdk/app/atomic_save.h", "kit/app/src/atomic_save.cpp",
-    "kit/app/include/o3sdk/app/files.h", "kit/app/src/files.cpp",  # the kit's files service (a later slice)
+    "kit/app/include/o3sdk/app/files.h", "kit/app/src/files.cpp",  # the kit's files service (slice FA)
     "platform/host/include/o3sdk/platform/host/dir_card.h", "platform/host/src/dir_card.cpp",
-    "platform/host/include/o3sdk/platform/host/host_card.h",
+    "platform/host/include/o3sdk/platform/host/host_card.h", "platform/host/include/o3sdk/platform/host/protect_card.h",
     "platform/host/fat/include/o3sdk/platform/host/fat_fs_storage.h", "platform/host/fat/src/fat_fs_storage.cpp",
     "platform/mk66/usb/include/o3sdk/platform/mk66/usb/screenshot_service.h", "platform/mk66/usb/src/screenshot_service.cpp",  # a later slice
     "platform/mk66/src/main.cpp",

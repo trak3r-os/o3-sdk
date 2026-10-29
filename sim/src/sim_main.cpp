@@ -2,7 +2,7 @@
 //
 // <app>_sim: runs the app this executable is linked with (o3sdk_app(), cmake/O3sdkTargets.cmake) headless on the host.
 //
-//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi]
+//   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--card DIR]
 //
 // Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
@@ -10,22 +10,28 @@
 // gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
 // read or written, no flash exists); without it the screen has no FIRMWARE section. --midi gives the app a fake MIDI device
 // (platform/host/fake_midi.h: the MIDI section of the system Config, the routes, the clock); a scenario that has a `midi` or `clock` line gets
-// one without the option, and an app run without one sees the platform it had before MIDI existed.
+// one without the option, and an app run without one sees the platform it had before MIDI existed. --card DIR makes the directory (created when it is not there) the app's SD card
+// (platform/host/dir_card.h): Context::files() saves and loads there, under DIR/Apps/<app>/, the kit keeps the theme and the MIDI settings in DIR/Apps/<app>/system.o3s, and a scenario may
+// pull the card, protect it and reboot (scenario.h). Without it the app has no card ("NO CARD") and the kit keeps nothing; DIR is the user's, nothing outside Apps/<app>/ and Samples/ is
+// written in it.
 #include <o3sdk/app/app.h>
+#include <o3sdk/platform/host/dir_card.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
+#include <memory>
 #include <sstream>
 #include <string>
 
 namespace {
 
 void usage(const char* argv0) {
-  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi]\n", argv0);
+  std::fprintf(stderr, "usage: %s [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--card DIR]\n", argv0);
 }
 
 // Does the scenario text have a `midi` or `clock` command (the first word of a line)?
@@ -58,6 +64,7 @@ int main(int argc, char** argv) {
   std::string out = ".";
   std::string wav;
   std::string firmware_dir;
+  std::string card_dir;
   bool midi = false;
   long ms = 500;
   for (int i = 1; i < argc; ++i) {
@@ -71,6 +78,8 @@ int main(int argc, char** argv) {
       wav = argv[++i];
     } else if (std::strcmp(a, "--firmware-dir") == 0 && has_value) {
       firmware_dir = argv[++i];
+    } else if (std::strcmp(a, "--card") == 0 && has_value) {
+      card_dir = argv[++i];
     } else if (std::strcmp(a, "--midi") == 0) {
       midi = true;
     } else if (std::strcmp(a, "--ms") == 0 && has_value) {
@@ -102,7 +111,17 @@ int main(int argc, char** argv) {
     scenario_text = text.str();
   }
   o3sdk::platform::host::FakeMidi fake_midi;
-  o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware, (midi || uses_midi(scenario_text)) ? &fake_midi : nullptr);
+  std::unique_ptr<o3sdk::platform::host::DirCard> card;
+  if (!card_dir.empty()) {
+    std::error_code ec;
+    std::filesystem::create_directories(card_dir, ec);
+    if (!std::filesystem::is_directory(card_dir, ec)) {
+      std::fprintf(stderr, "--card: not a directory: %s\n", card_dir.c_str());
+      return 2;
+    }
+    card = std::make_unique<o3sdk::platform::host::DirCard>(card_dir);
+  }
+  o3sdk::sim::Harness h(app, firmware_dir.empty() ? nullptr : &firmware, (midi || uses_midi(scenario_text)) ? &fake_midi : nullptr, card.get());
   if (!h.start()) {
     // start() has printed the refused setup calls, if there were any (Engine::setup_errors()); the display is the other cause.
     if (h.engine().setup_errors() != 0u) {
@@ -143,6 +162,11 @@ int main(int argc, char** argv) {
     } else {
       std::printf("wav %s (%zu frames)\n", wav.c_str(), h.audio().size() / 2u);
     }
+  }
+
+  if (card != nullptr && card->violations() != 0u) {  // a change the write guard refused: a bug of the files service, never input
+    std::fprintf(stderr, "the card's write guard refused %u change(s)\n", card->violations());
+    status = 1;
   }
 
   const o3sdk::dsp::EngineStats s = h.engine().stats();

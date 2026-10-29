@@ -34,6 +34,7 @@
 //   shot       the screen as framed base64 lines (usb/shot_stream.h): CMD_SNAPSHOT2 into the spare RAM_G, read back over the SPI a few lines a pass of the main loop
 //   leds       the pad LED levels the driver holds, one line. A read.
 //   cache      the LMEM code cache: `cache` shows the state, `cache on|off` switches it (PCCCR only), `cache inv` invalidates it.
+//   files      slice FA (o3-sdk's own): the app file API's state and cost (console/files_command.h), and `files crc <path>`, the CRC-32 of a file of the card. A read.
 //   midi       slice MD (o3-sdk's own): the MIDI service's snapshot and the DIN and USB drivers' counters (console/midi_report.h says each word). A read.
 //   power      OS-POWER P1 (docs/M2B2-PLAN.md, slice P): the Power switch (PTC3): `power` the pin in the three pulls, the hold's state and counters, the shutdown's stages; `power press|release|pin` feed the hold
 //              in place of the pin (a scripted hold needs no finger); `power off [dry]` runs the shutdown (stages 0 to F: USB off, the lights out, then, after the release of Power, the VLPR off of OS-POWER P2:
@@ -52,6 +53,7 @@
 #include <o3sdk/platform/mk66/console/attach.h>
 #include <o3sdk/platform/mk66/console/commands.h>
 #include <o3sdk/platform/mk66/console/core.h>
+#include <o3sdk/platform/mk66/console/files_command.h>
 #include <o3sdk/platform/mk66/console/inject_commands.h>
 #include <o3sdk/platform/mk66/console/mem_report.h>
 #include <o3sdk/platform/mk66/console/midi_report.h>
@@ -476,6 +478,7 @@ void cmd_sd(shell::Shell& sh, const shell::Args& a) {
       return;
     }
     ls_release(storage::device::storage());  // a listing that a key press ended
+    files_release(storage::device::storage());  // and a `files crc` that one ended: its handle would be stale after the remount, and could close a slot the service reused
     appimg::service_while_blocked(true);
     const hal::storage::Status s = storage::device::mount();
     appimg::service_while_blocked(false);
@@ -489,6 +492,16 @@ void cmd_sd(shell::Shell& sh, const shell::Args& a) {
 
 // `ls [path]`: the card's directory, a few lines a pass (storage/ls_command.h). Never writes: hal/storage.h has no write call.
 void cmd_ls(shell::Shell& sh, const shell::Args& a) { run_ls_command(sh, storage::device::storage(), a); }
+
+// `files [crc <path>]` (slice FA, o3-sdk's own): the app file API's state and cost, and the CRC-32 of a card file (console/files_command.h). A read.
+const app::Files* g_files = nullptr;
+void cmd_files(shell::Shell& sh, const shell::Args& a) {
+  if (g_files == nullptr) {
+    sh.out().text("files: not in this image\n");
+    return;
+  }
+  run_files_command(sh, *g_files, storage::device::storage(), a);
+}
 
 // ---- OS-HIL: input injection (console/inject_commands.h), the screen, the pad LEDs ------------------------------------------------------------
 // The scanner's queue is the one the key chips feed, both ends in the main loop, and so is the console: the injector's pushes never race the scan.
@@ -832,6 +845,8 @@ void attach(app::Runtime& runtime) noexcept {
     return;  // once
   }
   appimg::bind_engine(runtime.context().engine());
+  appimg::bind_files(runtime.context().files());
+  g_files = &runtime.context().files();
   g_commands.assemble(runtime.context().app(), &log);
   shell::CommandFn kit[kKitCommandCount] = {};
   kit[static_cast<unsigned>(Cmd::Help)] = &help_command;
@@ -860,6 +875,7 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Power)] = &cmd_power;
   kit[static_cast<unsigned>(Cmd::Guard)] = &cmd_guard;
   kit[static_cast<unsigned>(Cmd::Midi)] = &cmd_midi;
+  kit[static_cast<unsigned>(Cmd::Files)] = &cmd_files;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));

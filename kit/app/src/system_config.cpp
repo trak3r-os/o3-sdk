@@ -33,6 +33,10 @@ const char* tab_label(Section s) noexcept {
   return "";
 }
 
+// What stops a firmware update now: the files service's job (the update path and a save exclude each other on the card, docs/M2C-PLAN.md section 3; the strip says SAVING first), then
+// whatever the app says (App::update_blocker).
+const char* update_blocker(const Context& ctx) noexcept { return ctx.files().busy() ? "SAVING" : ctx.app().update_blocker(ctx); }
+
 constexpr int kMargin = 16;
 constexpr int kTabH = 28;
 constexpr int kTabGap = 8;
@@ -112,7 +116,7 @@ void SystemConfig::leave_section() noexcept {
 
 void SystemConfig::open_list(Context& ctx) noexcept {
   const char* said = nullptr;
-  if (!firmware_open(view_, sink_, ctx.app().update_blocker(ctx), said) && said != nullptr) {
+  if (!firmware_open(view_, sink_, update_blocker(ctx), said) && said != nullptr) {
     strip(said, -1, kNoticeMs, ctx.now());
   }
 }
@@ -196,7 +200,7 @@ bool SystemConfig::firmware_input(Context& ctx, const Input& in) noexcept {
       return false;
     case Phase::List: {
       if (f1) {
-        return firmware_go(view_, sink_, ctx.app().update_blocker(ctx));
+        return firmware_go(view_, sink_, update_blocker(ctx));
       }
       int dir = 0;
       if (in.turn()) {
@@ -215,7 +219,7 @@ bool SystemConfig::firmware_input(Context& ctx, const Input& in) noexcept {
     }
     case Phase::AskUpdate:
     case Phase::AskInstall:
-      return f1 && firmware_go(view_, sink_, ctx.app().update_blocker(ctx));
+      return f1 && firmware_go(view_, sink_, update_blocker(ctx));
     case Phase::Checking:
     case Phase::Installing:
       return true;  // (the check has F8 only; the hand-over is not reached here)

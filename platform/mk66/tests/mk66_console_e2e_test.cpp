@@ -321,7 +321,7 @@ TEST_CASE("console e2e: state is the kit's pairs, then the app's, on one line") 
   USB_REQUIRE(rig.enumerate());
   Console& c = fresh_console(rig);
   const std::string reply = c.say("state");
-  CHECK(has(reply, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed f1=0 pad=-1\r\n"));
+  CHECK(has(reply, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle f1=0 pad=-1\r\n"));
 }
 
 TEST_CASE("console e2e: an app command runs with its words; an unknown command and a refused app row get the shell's reply") {
@@ -414,7 +414,7 @@ TEST_CASE("console e2e: once the shutdown has begun the shell answers ERR poweri
   CHECK(has(c.say("version"), "Track3r o3sdk, build e2e-test\r\n"));
   const std::string state = c.say("state");
   CHECK(has(state, "app=E2E screen=MAIN playing=0 tempo=120000 cpu=0 frames="));  // (the frame count has moved on: the runtime polled all the while)
-  CHECK(has(state, " sys=0 section=display fw=closed f1=1 pad=-1\r\n"));
+  CHECK(has(state, " sys=0 section=display fw=closed card=none files=idle f1=1 pad=-1\r\n"));
   CHECK(has(c.say("power"), "ERR not in this image\r\n"));  // a read: the gate lets it through (to the fixture's unbound row)
   const std::string help = c.say("help");
   CHECK(has(help, "power   power [press|release|pin|off [dry]]: the Power switch and the shutdown\r\n"));

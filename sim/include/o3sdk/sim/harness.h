@@ -18,6 +18,8 @@
 #include <o3sdk/platform/host/fake_firmware.h>
 #include <o3sdk/platform/host/fake_midi.h>
 #include <o3sdk/platform/host/fakes.h>
+#include <o3sdk/platform/host/host_card.h>
+#include <o3sdk/platform/host/protect_card.h>
 #include <o3sdk/sim/eve_raster.h>
 #include <o3sdk/sim/raster_display.h>
 
@@ -53,14 +55,18 @@ class FakeLeds final : public hal::Leds {
 class Harness {
  public:
   // `firmware`: the update path the system Config screen lists (a platform::host::FakeFirmwareSink; null: no FIRMWARE section). `midi`: the
-  // MIDI device of the platform (a platform::host::FakeMidi; null: none, no MIDI section, the runtime as it was before MIDI). Both must
-  // outlive the harness.
-  explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr, platform::host::FakeMidi* midi = nullptr);
+  // MIDI device of the platform (a platform::host::FakeMidi; null: none, no MIDI section, the runtime as it was before MIDI). `card`: the SD
+  // card of the platform (a platform::host::DirCard over a directory, or any HostCard; null: none, so Context::files() says "NO CARD" and the
+  // kit keeps no settings); the harness puts a write-protect switch in front of it (card_protect). `app_id`: the folder name of Apps/<id>/ when
+  // the app's build gave none (a test app; null: o3sdk_app_id()). All of them must outlive the harness.
+  explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr, platform::host::FakeMidi* midi = nullptr,
+                   platform::host::HostCard* card = nullptr, const char* app_id = nullptr);
   ~Harness();
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
 
-  // Runtime::start(): the assets, App::setup, the engine. false: the display refused the assets, or the app's setup had a call that
+  // Runtime::start(): the assets, App::setup, the engine; then, with a card, the card is mounted (as the unit's main does after the boot) and the kit's
+  // settings are read from it (Runtime::load_settings). false: the display refused the assets, or the app's setup had a call that
   // the engine refused (Engine::setup_errors() != 0: an attach, a route or a hook it did not take). Then setup_report() says which,
   // and start() has also written it to stderr, so a test that REQUIREs start() shows why it failed.
   bool start();
@@ -89,6 +95,17 @@ class Harness {
   const std::vector<std::int16_t>& audio() const { return audio_; }
   bool write_wav(const std::string& path) const;
 
+  // The card: the slot's switch (`card out` and `card in` in a scenario; a card put back is mounted at once, as the platform's watch does after its delay, and the runtime told, as
+  // Runtime::card_changed), the write-protect switch (`card protect on|off`), and the one the platform sees (null without a card).
+  platform::host::ProtectCard* card() { return protect_.get(); }
+  void card_out();
+  void card_in();
+  void card_protect(bool on);
+  // A restart of the unit on the same card (`reboot`): the card is power-cycled (a file being written stays torn, as a power cut leaves it), the engine and the runtime are made again from
+  // nothing and started as at boot (App::setup, then the settings read from the card). The app object is the same one (it keeps what it holds in memory), as every test starts a fresh
+  // simulator on the one o3sdk_app(). Time goes on. false: as start().
+  bool reboot();
+
   // The fake MIDI device the harness was given (null without one), and the timeline sample "now" is (the samples due at the engine's rate by
   // the simulated time): what a scripted `midi` line is stamped with, so it lands in the block that renders next.
   platform::host::FakeMidi* midi() { return midi_; }
@@ -105,9 +122,15 @@ class Harness {
  private:
   void push(core::InputKind kind, std::uint8_t id, std::int16_t value);
   void render_due();
+  void make_runtime();
 
   app::App& app_;
   platform::host::FakeMidi* midi_;
+  hal::firmware::FirmwareSink* firmware_;
+  platform::host::HostCard* inner_card_;
+  const char* app_id_;
+  std::unique_ptr<platform::host::ProtectCard> protect_;
+  std::unique_ptr<app::Files::Work> files_work_;
   std::unique_ptr<EveRaster> raster_;
   std::unique_ptr<RasterDisplay> display_;
   platform::host::FakeInput input_;

@@ -52,7 +52,7 @@ constexpr app::DiagCommand row(const char* name, const char* help = "does someth
 }
 
 const char* const kKitNames[] = {"help", "version", "stage", "cpu", "mem",  "crash", "usb",  "log",  "input", "peek",  "poke",  "rot",   "sd",
-                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard", "midi"};
+                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard", "midi",  "files"};
 
 std::string help_of(const CommandTable& t) {
   Capture c;
@@ -114,7 +114,7 @@ class BareApp final : public app::App {
 }  // namespace
 
 TEST_CASE("kit commands: the names are the ones in scope, in table order, and each row obeys the app rules") {
-  static_assert(console::kKitCommandCount == 26, "the kit's commands");
+  static_assert(console::kKitCommandCount == 27, "the kit's commands");
   REQUIRE(console::kKitCommandCount == sizeof kKitNames / sizeof kKitNames[0]);
   for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
     const console::CommandInfo& c = console::kCommandInfo[i];
@@ -464,7 +464,7 @@ TEST_CASE("state: the kit's pairs, then the app's, on one line") {
   Capture c;
   app::DiagOut out(app::DiagSink{&capture_write, &c});
   console::write_state(runtime, out);
-  CHECK(c.text == "app=FAKE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed steps=16 pattern=A_1\n");
+  CHECK(c.text == "app=FAKE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle steps=16 pattern=A_1\n");
 
   // The same text as the runtime gives, one line.
   char buf[console::kStateBuffer];
@@ -485,7 +485,7 @@ TEST_CASE("state: an app with no pairs adds nothing") {
   Capture c;
   app::DiagOut out(app::DiagSink{&capture_write, &c});
   console::write_state(runtime, out);
-  CHECK(c.text == "app=BARE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed\n");
+  CHECK(c.text == "app=BARE screen=MAIN playing=0 tempo=120000 cpu=0 frames=0 sys=0 section=display fw=closed card=none files=idle\n");
 }
 
 TEST_CASE("key: a button by name in either case, or by decimal code 0..32; anything else is -1") {

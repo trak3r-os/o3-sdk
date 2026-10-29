@@ -36,7 +36,7 @@ the MK66 platform and never by an app); a unit depends on `dsp` only; an app on 
 | `core` | rings, fixed containers, input events, ticks, the gesture recogniser, parameter descriptors and their maths (`param.h`), placement (`placement.h`). No heap. |
 | `hal` | contracts only: `Display`, `Input`, `Leds`, `Clock`, `audio::Device` and the block callback, storage, cycles. |
 | `eve` | FT81x display-list encoders and the frame builder. |
-| `ui` | the immediate-mode renderer, colour tokens and themes, the four faces, the components (strip, badge, soft keys, bar, meter), plots. |
+| `ui` | the immediate-mode renderer, colour tokens and themes, the four faces, the components (strip, badge, soft keys, bar, meter), the list and the on-screen keyboard, plots. |
 | `dsp` | the unit contract, events, the transport, the engine. |
 | `app` | the panel, inputs, screens, pad LEDs, the F-key + encoder convention, shared widgets, the runtime, the console's hooks (`diag.h`). |
 | `usb` | the portable USB device library: descriptors, control pipe, CDC, the `diag` shell, the log ring, USB audio. The MK66 platform links it; an app reaches the console only through `App::describe_state` and `diag_commands`. |
@@ -151,6 +151,13 @@ Each slot and the master have up to `kMaxInserts` = 4 inserts in series (an unus
   `fn(frame, step)` for each step that starts in the block; `Transport::started` and `stopped` mark the first block after Play and Stop.
 - **Statistics** (`stats()`): peaks, the render's cycles (with a counter: the unit), dropped events, clips, the transport position;
   read through a sequence counter, so a snapshot is always one block's.
+- **The input and the stems** (M2c slice SE, host only): `set_input_gate(bool)` fades the codec input in or out over one block for the
+  units, the hooks, the monitor and the peaks; `set_input_monitor(gain)` adds the gated input to the master bus before the master
+  inserts (0 by default, clamped to 0..1.5); `set_input_peaks(true)` and `input_peaks()` read and clear the input's peak per channel;
+  `set_stem_slots(mask)` stages slots T1..T8, the master pair and the sends as 64-frame mono int16 blocks, and `stem_block()` hands that
+  table to the platform's `StemTap` (null when nothing is staged). Off, each costs a relaxed load and a branch per block, and a render
+  is bit-identical to one without them (`dsp_input_test`, `dsp_stems_test`); `feature_work()` counts the frames each one did. Their
+  cost when on is measured on the unit by the AI and U slices.
 
 ## 5. Apps
 
@@ -183,6 +190,37 @@ The kit's apps share one way to edit values, so the hand learns it once:
 
 `knob_strip()` (`widgets.h`) draws the eight cells above the soft keys: name, value with unit, a bar, the focused cell highlighted.
 
+### The list and the keyboard (`kit/ui`: `list_view.h`, `keyboard.h`)
+
+For anything an app picks by name (a file list, project names) and for typing one. Both draw immediate-mode from plain arguments, hold no heap, and
+are linked only by an app that uses them (they sit in the `ui` archive's own objects).
+
+```cpp
+struct Files final : ui::ListSource {                       // the caller's items: count and text at an index, nothing copied
+  unsigned count() const noexcept override { return n_; }
+  void name(unsigned i, char* out, unsigned cap) const noexcept override { std::snprintf(out, cap, "%s", names_[i]); }
+  void value(unsigned i, char* out, unsigned cap) const noexcept override { std::snprintf(out, cap, "%u KB", kb_[i]); }  // optional
+  ...
+};
+ui::ListView view(ui::ListView::rows_in(r.theme(), area));      // the window's height in rows
+// input:  view.move(files, encoder_delta); view.pad(files, pad); view.page(files, +-1); view.home/end(files); after a rescan: view.fit(files)
+// draw:   view.draw(r, area, files, {"NO FILES", "put .wav files in Samples/"});   // the cursor on the Sel bar, values right, a scroll mark, the empty state
+```
+
+The cursor clamps at the ends (no wrap) and the window scrolls the least that keeps it in view; pad `p` is the `p`-th visible row. A full window of 18 rows
+of 40-glyph names with values is about 900 display-list words (`ui_list_test`).
+
+```cpp
+app::TextEntry entry;  entry.begin("PATTERN", 15, app::TextEntry::Filter::FileName);   // kit/app: the state machine that edits the name
+// input:  encoder turn = entry.move(+-1, 0); press = entry.confirm_key(); pad p = entry.pad(p); up/down = entry.move(0, +-1); delete = entry.backspace()
+ui::KeyboardKeys keys;                                                                  // label storage on the stack
+ui::keyboard(r, {0, 0, 800, 480}, ui::keyboard_view(entry, app::kTextPadKey, keys, "PATTERN NAME"));   // a dialog, centred, about 500 words
+```
+
+The keyboard is the pads' grid (12 x 4, one cell a pad): the focused key an Accent block, refused keys (the file-name filter's `@` and `+`) dim, the caps key
+inverted while on, the name selected until the first key. `ui` sits below `app`, so the widget takes what it shows as a `KeyboardView`;
+`keyboard_view()` builds one from any `TextEntry`-shaped object. A file picker and a name entry that join `Files` and `TextEntry` to these come with the app Config pages.
+
 ### Diagnostics: the console's hooks (`diag.h`)
 
 The platform's USB console (`state`, and the commands an app adds) reaches an app through two optional `App` methods, so `kit/app`
@@ -198,8 +236,8 @@ and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the examp
 **Status: built (M2b, second round; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO, and MIDI when `Platform::midi`
 is set; host-tested, with the simulator scenario `apps/hello/scenarios/config.txt`. On a unit: a release image with this screen (o3-303 988318f on
 o3-sdk 20ccef1) was installed over USB on 2026-10-26, reported by the tester: Config's FIRMWARE, DISPLAY and INFO opened and worked over USB
-injection, cpu 35.5 and 37.1 %. Not verified: the final FIRMWARE INSTALL from the screen (F1, which needs a finger).** AUDIO, the settings on the card
-and the app's own pages are planned.
+injection, cpu 35.5 and 37.1 %. Not verified: the final FIRMWARE INSTALL from the screen (F1, which needs a finger).** AUDIO and the app's own
+pages are planned. The settings on the card are built (slice FA of M2c, host only: see "Files on the card" below).
 What follows is the maintainer's decision (2026-10-25) for what it is: the kit brings the machine up (clocks, SDRAM, display, input,
 LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
 the app's. "Por defecto config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
@@ -227,7 +265,9 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
   in every app, so any unit can always be switched to another engine and tell what it runs (confirmed by the maintainer, 2026-10-25).
-- The kit will store its settings and the app's Config values on the card (M2c, slice FA: `Apps/<app>/system.o3s`, `docs/M2C-PLAN.md`); until then they last until power-off.
+- The kit keeps its settings on the card for the app (M2c, slice FA, host only until the unit session): the theme and the MIDI settings in `Apps/<app>/system.o3s`, read at
+  boot over what `App::setup` set, written 1.5 s after the last change and at once when the power-off begins (`docs/formats/o3sdk-settings.md`). The app's own Config values
+  join them with the app pages. FIRMWARE says SAVING while a card job runs (`Files::busy()`).
 
 ### MIDI (`midi.h`)
 
@@ -244,6 +284,50 @@ without MIDI, and then nothing arrives and nothing leaves. Slice K, host only.
   from the main loop.
 - **Settings**: `ctx.midi().config()` and `set_config()` are the user's `hal::midi::Config`; an app that sets them in `setup()` sets the defaults.
 
+### Files on the card (`files.h`)
+
+`kit/app/include/o3sdk/app/files.h`, `Context::files()`. **Status: built (M2c, slice FA), host-tested and run in the simulator (`apps/hello/scenarios/files.txt`); not yet run on a unit.**
+An app saves and loads its own files in `Apps/<id>/` of the SD card (`<id>` is the CMake id, `o3sdk_app(<id> ...)`, at most 15 bytes), with one level of project folders:
+
+```cpp
+app::Files& files = ctx.files();
+files.save("", "riff.o3a", buf, n);                    // returns at once; `buf` stays as it is until Done or Failed
+// ... a later pass:
+const app::Files::Status st = files.status();          // Idle, Running (permille), Done, Failed; st.text: "SAVED", "CARD IS FULL", ...
+files.load("Song 1", "pat.o3a", dst, sizeof dst);      // the whole file (the .bak when the file is gone); files.loaded() bytes when Done
+files.list("", entries, 32);                           // files and project folders, sorted, with sizes; files.listed() when Done
+files.save_wav("Samples", pcm, frames, 2, 44100, "take");   // NewOnly take_001.wav, take_002.wav ...
+files.remove_folder("Song 1");                         // DELETE: a `.deleted` marker, nothing is removed, the listing hides the folder
+```
+
+- **Names.** `folder` is "" (the app's folder) or one project folder (`valid_name` with no `.`); `name` is `<stem>.<ext>` with the extension one of `o3a` (the app's own data), `o3s`,
+  `wav`, `mid`, `syx`, `txt`, `json`, `csv`. The guard (`hal/app_guard.h`) refuses anything else: no firmware, no foreign project, nothing outside `Apps/<id>/` and `Samples/`.
+  Settings are `system.o3s` in the app's folder (below). A call that is refused returns false and sets `status()` (and the strip) with the reason: BAD NAME, NO CARD, CARD WRITE PROTECTED,
+  CARD ON COMPUTER - EJECT FIRST, FIRMWARE UPDATE RUNNING, NOTHING TO SAVE. A call made while a job runs is refused with no change of the status.
+- **Never blocking.** A call only records a request. The runtime's `poll()` runs `Files::poll` once a pass: it starts the job and gives it `kJobBudgetUs` (2000) of the pass; a write
+  is 512 .. 8192 bytes a step, a read-back 2 KiB, a load 16 KiB, a directory operation one step (`core::JobRunner`). One card job runs at a time. The render never sees the card.
+  A FAT sync can take longer than the budget: `files` on the console prints the longest step.
+- **Never a half-written file.** A save writes `_o3save.tmp`, reads it back and checks its size and CRC, and only then renames it over the old file, which stays as `<name>.bak`
+  (`kit/app/atomic_save.h`, ported from track3r-os, has the sequence and what a cut at each step leaves). A power cut, a pulled card or a failing write leaves the old file or the new
+  one. A card pulled and put back fails the save (the writer pins the card the save began on); the next save of that file heals the name. `NewOnly` never replaces.
+- **Cards.** `card()` is None, Ready, ReadOnly (write protected: loads and listings work), Unsupported (exFAT), OnComputer or InUse (the firmware update path holds it);
+  `generation()` moves when it changes, a load or listing in progress then fails with CARD CHANGED, and `Runtime::card_changed()` is the platform's card watch. `set_quiet(true)`
+  silences the strip for the app's jobs. `cancel()` repairs at once.
+- **Streams.** `save(folder, name, SaveSource&, mode)` writes from a source of your own (`atomic_save.h`; `save_sources.h` has the buffer and the WAV ones), `load(..., ByteSink&)`
+  pushes a file into a sink 2 KiB at a time. `formats/chunk_file.h` is an optional container (an IFF-style `FORM`, chunks, a CRC: `docs/formats/o3sdk-chunk-file.md`) for an app that
+  wants versioned data.
+- **The kit's settings** are kept in `Apps/<id>/system.o3s` by the same service (`docs/formats/o3sdk-settings.md`): read at boot by `main.cpp` (`Runtime::load_settings`) and again whenever a card is put in,
+  written only for a card whose file was read (or found missing), after 1.5 s of quiet and at once at the power-off, silent, and stepping aside for an app's save. A file of a newer major version
+  is never overwritten (the session keeps its values, the strip says so).
+- **No card.** `Platform::storage`, `writer` or `files_work` null (a test rig, an image without a card, `O3SDK_MK66_CONSOLE=OFF`): `available()` is false, every call is refused with
+  NO CARD, nothing is kept, and the app runs. An app that never calls `files()` pays nothing in the render. The jobs' memory is a `Files::Work` (about 16 KB, `files_work.h`) the
+  platform places in the SDRAM (`O3SDK_BIG`); the `Files` object in the runtime is a few hundred bytes.
+- **The writers.** The card has two writers that never run at once: the update path (`Firmware/`, `update/path_guard.h`, nothing in common with the other) and the files service (`Apps/<id>/`,
+  `Samples/`). The writer's guard (`hal/app_guard.h`) is a superset of track3r-os's (it also admits `Projects/`, `Settings/`, `instruments/`, `AppExport/`), so the service goes through a `ScopedWriter` that refuses any change outside `Apps/<id>/` and `Samples/` (`system.o3s` of the app's folder is the kit's: an app's save of it is RESERVED NAME). `platform/mk66/tools/check_writers.py` keeps the list of who may name the write calls and include the write contract. The service refuses while the
+  update path holds the card (`Platform::card_claim`), and the update path refuses while the service has a job (`appimg::storage_in_use`).
+- **Console**: `files` prints the card, the last job, the jobs' cost (`max-step`, the write speed of the last save) and what the settings read found; `files crc <path>` is the CRC-32 of
+  a card file, to compare with the simulator's; `state` has `card=<state> files=<phase>`.
+
 ### Pad LEDs (`pad_leds.h`)
 
 Monochrome, one level a pad. Shared levels give the same meaning on every screen: `kLedDim` (something is here), `kLedLow` (a second
@@ -257,7 +341,7 @@ kind), `kLedMid` (selected), `kLedOn` (now: the playhead, a held pad). `PadLeds:
 Runtime rt(o3sdk_app(), engine, platform);
 rt.start();                                // the UI's bitmaps, App::setup, Engine::start
 audio_device.start(rt.block_callback());   // the render context calls the engine once per block (int16 in and out)
-for (;;) rt.poll();                        // input -> app -> screen; a frame every 33 ms (or sooner after redraw()); LEDs
+for (;;) rt.poll();                        // input -> app -> screen; the card's job a slice; a frame every 33 ms (or sooner after redraw()); LEDs
 ```
 
 A frame is the header strip (app name, screen title, tempo, transport, the render's load on the unit), the screen's content and the
@@ -273,7 +357,9 @@ not the unit's. Its PNGs are 800 x 697 (the screen above the pads); the unit's `
 `press`, `pad_down`, `turn`, `audio`, `leds`, `runtime().state_line()`), as `templates/app/tests/app_test.cpp` and `tests/sim_hello_test.cpp` do.
 `Harness::start()` and the `<app>_sim` runner fail on an app whose setup had a call the engine refused (section 4, "Setup").
 `--midi` gives the app a fake MIDI device (`platform/host/fake_midi.h`, `hal::midi::Device`); a scenario with a `midi <din|usb> <hex...>` or a
-`clock <bpm> start|stop|continue|off` line gets one without the option (`sim/README.md`).
+`clock <bpm> start|stop|continue|off` line gets one without the option (`sim/README.md`). `--card DIR` gives it an SD card (`platform/host/dir_card.h` over the directory):
+`Context::files()` works, the kit keeps its settings there, and a scenario may `card out`, `card in`, `card protect on|off`, `reboot` and `expect file|nofile|state`; `Harness` takes
+any `HostCard` (a `MemCard` cut at every write, in the tests).
 
 ## 8. Rules
 
@@ -319,7 +405,7 @@ machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driv
 | Crash record, status LED | noinit SRAM, PTC19 | platform | a blink code and the record of the last crash | **Host only** (M2): the images boot without a blink code, but a crash or a code was never provoked on the unit, so the record's survival of a reset is not verified |
 | USB console and update | USB0 device, CDC | `hal::firmware` | `diag` over USB: version, state, cpu, log, leds, screenshot, input injection, `fw put/arm/update`; an app adds its own state and commands (`App::describe_state`, `diag_commands`) | **Verified on the unit** (M2b-R): images put, installed and read back; the way back to track3r-os v1.0.0 in about 45 s |
 | USB audio out | USB0 device, isochronous, 44.1 kHz, 16-bit, composite with the console | platform, every app | the master streamed to the computer as a class-compliant interface (channels 7-8 of 8; 1-6 are silent, kept for an app's stems) | **Verified on the unit** (M2b-R): AUDIO set, profile 8, 8 out / 2 in, configured, recorded. Stems beyond the master and the computer's return stream into the engine: planned |
-| SD card | SDHC, FAT (FatFs) | `hal::storage` (read-only) | the card is mounted and read; `fw put` writes `Firmware/` | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **An app has no file API**: `hal::storage` is read-only by contract, `hal::storage_write` is declared with no implementation, and the update path is the card's only writer (`check_writers.py`). Saving patterns, kits and settings: **planned** |
+| SD card | SDHC, FAT (FatFs) | `hal::storage` (read), `Context::files()` (`app::Files`) | the card is mounted and read; `fw put` writes `Firmware/`; an app saves, loads and lists its files in `Apps/<id>/` and the kit keeps its settings there | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **The app file API** (M2c slice FA) is **host only**: built and tested on the host (an in-memory card cut at every write, a FAT32 image through the unit's FatFs writer, the simulator's directory card), the image carries it, but no save has run on a unit. `hal::storage` stays read-only by contract; the writer is `hal::storage_write` through `platform/mk66/save` and the guard `hal/app_guard.h`; the card has two writers with disjoint paths, the update path (`Firmware/`) and the files service (`Apps/<id>/`, `Samples/`), kept apart by the card claims (`check_writers.py`). Still to check on a unit: `files` after a HELLO save (bytes, `max-step`, write speed), `files crc` against the simulator's file, 0 underruns and 0 sheds over 20 scripted saves, `fw put` refused during a save, the theme kept after `reset`, and by hand a card pulled mid-save, the write-protect switch and the Power switch held during a save |
 | Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, asks twice (F1 each), stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Verified on the unit** in part (M2b round 2, slice F): the FIRMWARE section opened and worked over USB injection on 2026-10-26 (reported by the tester). **Host only** for the flow and its two questions (a fake sink, `config.txt`). Not verified: the final F1 INSTALL from the screen (it needs a finger); the path behind it is the USB console row |
 | System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Verified on the unit** in part (M2b round 2, slices F and K): FIRMWARE, DISPLAY and INFO opened and worked over USB injection on 2026-10-26 (reported by the tester; no `docs/hw` file yet). **Host only**: the MIDI section (when `Platform::midi` is set). **Planned**: AUDIO and an app's pages |
 | MIDI | DIN in/out (UART), USB MIDI | kit `hal::midi::Device`, `app::Midi`, console `midi` | notes into the engine through routes, every other message to `App::midi`, clock followed and sent on the transport; MIDI learn is planned | **Host only** (M2b round 2, slices MC, K, MD): the MIDI core is ported from track3r-os (`platform/mk66/midi`, 1104b85); the kit API, routes, clock follow and `FakeMidi` are host-tested (slice K); the MK66 service, the DIN and USB drivers and console `midi` are built and host-tested (slice MD, 5937691: host ctest 147/147, ASan 147/147, mk66 25/25). HELLO's image grows by 19.4 KB of flash. Not run on a unit. Owed: the MD row of `docs/M2B2-PLAN.md` section 6, last column; the ISR latency and the render cost of MIDI |

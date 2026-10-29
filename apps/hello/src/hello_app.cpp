@@ -11,6 +11,9 @@
 //   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, MIDI, DISPLAY (the theme), INFO
 //   MIDI          notes on the channel the user chose in the Config's MIDI section (any, by default) play SYNTH, frame-accurate; with FOLLOW on
 //                 there, the riff and the tempo follow a MIDI clock on DIN or USB (the riff is a clocked hook; it needs nothing to do so)
+//   INSERT        the riff up a semitone (SHIFT: down), so that there is something to save; DELETE puts the default riff back
+//   FILE          SAVE the riff to the card, Apps/hello/riff.o3a (Context::files(): a job of the main loop, never a pause of the sound or the screen)
+//   SAMPLE LOAD   LOAD it back (a riff that is not there says so on the strip). The card, the file and the last job show on the screen.
 //
 // One instrument (SYNTH) on slot 0, a DELAY on send A.
 
@@ -21,6 +24,7 @@
 #include <o3sdk/app/widgets.h>
 #include <o3sdk/core/placement.h>
 #include <o3sdk/dsp/engine.h>
+#include <o3sdk/formats/chunk_file.h>
 #include <o3sdk/ui/components.h>
 #include <o3sdk/units/delay/delay.h>
 #include <o3sdk/units/synth/synth.h>
@@ -28,6 +32,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace {
 
@@ -40,14 +45,83 @@ using ui::Rect;
 // ---- The demo riff: a clocked hook ------------------------------------------------------------------------------------------
 
 constexpr unsigned kRiffSteps = 16;
-constexpr std::uint8_t kRiff[kRiffSteps] = {36, 36, 48, 36, 0, 39, 36, 46, 36, 0, 43, 36, 48, 0, 41, 43};  // 0: a rest
+constexpr std::uint8_t kDefaultRiff[kRiffSteps] = {36, 36, 48, 36, 0, 39, 36, 46, 36, 0, 43, 36, 48, 0, 41, 43};  // 0: a rest
 constexpr std::uint16_t kRiffAccents = (1u << 0) | (1u << 6) | (1u << 12);
 
 class Riff final : public dsp::Clocked {
  public:
+  Riff() noexcept { reset(); }
   void set_unit(dsp::UnitId unit) noexcept { unit_ = unit; }
   int step() const noexcept { return step_.load(std::memory_order_relaxed); }
   int note() const noexcept { return note_.load(std::memory_order_relaxed); }
+  // The note of step `s` (0: a rest). The render reads the notes while the main loop changes them (transpose, load): each is one atomic byte, so a block sees a step as it was or as it is now.
+  std::uint8_t note_at(unsigned s) const noexcept { return notes_[s % kRiffSteps].load(std::memory_order_relaxed); }
+
+  // The riff up or down by semitones (rests stay rests; a note stays inside 1..127). Main loop.
+  void transpose(int semitones) noexcept {
+    for (unsigned i = 0; i < kRiffSteps; ++i) {
+      const int n = notes_[i].load(std::memory_order_relaxed);
+      if (n != 0) {
+        const int t = n + semitones;
+        notes_[i].store(static_cast<std::uint8_t>(t < 1 ? 1 : (t > 127 ? 127 : t)), std::memory_order_relaxed);
+      }
+    }
+  }
+  // The default riff again. Main loop.
+  void reset() noexcept {
+    for (unsigned i = 0; i < kRiffSteps; ++i) {
+      notes_[i].store(kDefaultRiff[i], std::memory_order_relaxed);
+    }
+  }
+  // How far the riff is from the default, as a transposition: the first note against the default's (the console's `state`).
+  int shift() const noexcept { return static_cast<int>(note_at(0)) - static_cast<int>(kDefaultRiff[0]); }
+
+  // The riff as a file (formats/chunk_file.h, type "HRIF"): one chunk RIFF of u16 version (0x0100), u8 steps, the notes and u16 accents. The size, or 0 when `cap` is too small.
+  std::size_t write(std::uint8_t* out, std::size_t cap) const noexcept {
+    std::uint8_t notes[kRiffSteps];
+    for (unsigned i = 0; i < kRiffSteps; ++i) {
+      notes[i] = note_at(i);
+    }
+    formats::chunk::Writer w(out, cap, "HRIF");
+    if (!w.begin("RIFF") || !w.u16(0x0100) || !w.u8(kRiffSteps) || !w.bytes(notes, sizeof notes) || !w.u16(kRiffAccents) || !w.end()) {
+      return 0;
+    }
+    return w.finish();
+  }
+  // A riff from such a file: false (nothing changed) when it is damaged, of a newer major version or not 16 steps. A newer minor is read as far as this version knows it.
+  bool read(const std::uint8_t* data, std::size_t n) noexcept {
+    formats::chunk::Reader r;
+    formats::chunk::Chunk c{};
+    if (r.open(data, n, "HRIF") != formats::chunk::Error::None) {
+      return false;
+    }
+    while (r.next(c)) {
+      if (!formats::chunk::id_is(c, "RIFF")) {
+        continue;  // (a chunk of a newer version of the file)
+      }
+      formats::chunk::Fields f(c);
+      const std::uint16_t version = f.u16();
+      const unsigned steps = f.u8();
+      std::uint8_t notes[kRiffSteps] = {};
+      if (steps != kRiffSteps || (version >> 8) != 1u) {
+        return false;
+      }
+      for (std::uint8_t& note : notes) {
+        note = f.u8();
+        if (note > 127u) {
+          return false;
+        }
+      }
+      if (!f.ok()) {
+        return false;
+      }
+      for (unsigned i = 0; i < kRiffSteps; ++i) {
+        notes_[i].store(notes[i], std::memory_order_relaxed);
+      }
+      return true;
+    }
+    return false;
+  }
 
   // Render context.
   void block(dsp::BlockContext& ctx) noexcept override {
@@ -64,7 +138,7 @@ class Riff final : public dsp::Clocked {
     }
     // A 50 % gate: each note ends half a sixteenth after it starts.
     dsp::for_each_step(t, dsp::kTicksPerSixteenth, dsp::kTicksPerSixteenth / 2u, 0u, [&](std::uint32_t frame, std::uint64_t k) {
-      const std::uint8_t n = kRiff[k % kRiffSteps];
+      const std::uint8_t n = note_at(static_cast<unsigned>(k % kRiffSteps));
       if (n != 0u) {
         (void)ctx.emit(unit_, dsp::note_off(n, static_cast<std::uint16_t>(frame)));
         pending_off_ = -1;
@@ -73,7 +147,7 @@ class Riff final : public dsp::Clocked {
     });
     dsp::for_each_step(t, dsp::kTicksPerSixteenth, 0u, 0u, [&](std::uint32_t frame, std::uint64_t k) {
       const auto s = static_cast<unsigned>(k % kRiffSteps);
-      const std::uint8_t n = kRiff[s];
+      const std::uint8_t n = note_at(s);
       if (n != 0u) {
         const std::uint8_t vel = (kRiffAccents >> s & 1u) != 0u ? 127u : 96u;
         (void)ctx.emit(unit_, dsp::note_on(n, vel, 0u, static_cast<std::uint16_t>(frame)));
@@ -89,6 +163,7 @@ class Riff final : public dsp::Clocked {
   int pending_off_ = -1;
   std::atomic<int> step_{-1};
   std::atomic<int> note_{-1};
+  std::atomic<std::uint8_t> notes_[kRiffSteps];  // written by the main loop (transpose, load), read by the render: one byte each
 };
 
 // ---- The screen -------------------------------------------------------------------------------------------------------------
@@ -96,6 +171,18 @@ class Riff final : public dsp::Clocked {
 constexpr bool is_natural(unsigned note) noexcept {
   const unsigned pc = note % 12u;
   return pc == 0 || pc == 2 || pc == 4 || pc == 5 || pc == 7 || pc == 9 || pc == 11;
+}
+
+const char* card_name(app::Files::Card c) noexcept {
+  switch (c) {
+    case app::Files::Card::None: return "NO CARD";
+    case app::Files::Card::Ready: return "READY";
+    case app::Files::Card::ReadOnly: return "WRITE PROTECTED";
+    case app::Files::Card::Unsupported: return "NOT SUPPORTED";
+    case app::Files::Card::OnComputer: return "ON COMPUTER";
+    case app::Files::Card::InUse: return "UPDATE RUNNING";
+  }
+  return "?";
 }
 
 class PlayScreen final : public app::Screen {
@@ -116,6 +203,8 @@ class PlayScreen final : public app::Screen {
 
   // For the console's `state` (HelloApp::describe_state).
   int octave() const noexcept { return octave_; }
+  // A line of the app's own about the last file job, shown in place of the files service's text ("BAD FILE": the load worked and the file was not a riff). nullptr: none.
+  void set_note(const char* note) noexcept { note_ = note; }
   const app::ParamKeys& keys() const noexcept { return keys_; }
 
   void input(app::Context& ctx, const app::Input& in) noexcept override {
@@ -187,7 +276,7 @@ class PlayScreen final : public app::Screen {
            Face::Label);
     std::uint32_t on = 0;
     for (unsigned s = 0; s < kRiffSteps; ++s) {
-      on |= kRiff[s] != 0u ? 1u << s : 0u;
+      on |= riff_ != nullptr ? (riff_->note_at(s) != 0u ? 1u << s : 0u) : (kDefaultRiff[s] != 0u ? 1u << s : 0u);
     }
     app::step_row(r, Rect{rx, area.y + 34, rw, 22}, kRiffSteps, on, riff_ != nullptr ? riff_->step() : -1, -1);
     r.text(rx, area.y + 70, "OUT", Color::TextDim, Face::Label);
@@ -199,6 +288,15 @@ class PlayScreen final : public app::Screen {
     r.text(16, hy, "PADS play   F1-F8 pick a value   ENCODER turn it (SHIFT coarse)   hold F + turn: for a moment", Color::TextDim,
            Face::Label);
     r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG system", Color::TextDim, Face::Label);
+    r.text(16, hy + 40, "INSERT riff +1 (SHIFT -1)   DELETE default riff   FILE save the riff   SAMPLE LOAD load it", Color::TextDim, Face::Label);
+    // The card and the last job of the files service (Context::files()): polled, never waited for.
+    const app::Files& files = ctx.files();
+    const app::Files::Status fs = files.status();
+    r.text(rx, area.y + 100, "CARD", Color::TextDim, Face::Label);
+    r.text(rx + 48, area.y + 100, !files.available() ? "NONE" : card_name(files.card()), files.card() == app::Files::Card::Ready ? Color::Play : Color::Text, Face::Label);
+    r.text(rx, area.y + 120, "FILE", Color::TextDim, Face::Label);
+    r.text(rx + 48, area.y + 120, note_ != nullptr ? note_ : (fs.phase == app::Files::Status::Idle ? "-" : fs.text),
+           note_ != nullptr || fs.phase == app::Files::Status::Failed ? Color::Accent : Color::Text, Face::Label);
 
     app::knob_strip(r, Rect{0, area.y + area.h - app::kKnobStripH, ui::kScreenW, app::kKnobStripH}, ctx.engine(), keys_);
   }
@@ -246,6 +344,7 @@ class PlayScreen final : public app::Screen {
   app::ParamPage pages_[2] = {};
   app::ParamKeys keys_;
   int octave_ = 0;
+  const char* note_ = nullptr;
   int held_[app::kPadCount] = {};
 };
 
@@ -291,7 +390,26 @@ class HelloApp final : public app::App {
     w.str("page", page != nullptr ? page->name : nullptr);
     w.num("focus", focus);
     w.str("value", value);
+    w.sint("riff", riff_.shift());
+    w.num("theme", static_cast<std::uint32_t>(ctx.theme()));
+    w.num("midich", ctx.midi().config().channel);
     return w.size();
+  }
+
+  // The riff's file jobs end here: a load that is Done puts the riff in place (the file is checked first: a damaged or foreign one changes nothing and says so).
+  void update(app::Context& ctx) noexcept override {
+    if (op_ == Op::None) {
+      return;
+    }
+    const app::Files::Status st = ctx.files().status();
+    if (st.phase != app::Files::Status::Done && st.phase != app::Files::Status::Failed) {
+      return;
+    }
+    if (op_ == Op::Loading && st.phase == app::Files::Status::Done) {
+      play_.set_note(riff_.read(load_buf_, ctx.files().loaded()) ? nullptr : "BAD FILE");
+    }
+    op_ = Op::None;
+    ctx.redraw();
   }
 
   bool input(app::Context& ctx, const app::Input& in) noexcept override {
@@ -299,6 +417,29 @@ class HelloApp final : public app::App {
     if (in.press(Button::Play)) {
       (void)(e.playing() ? e.stop() : e.play());
       ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::Insert) || in.press(Button::Delete)) {
+      if (in.press(Button::Delete)) {
+        riff_.reset();
+      } else {
+        riff_.transpose(in.shift ? -1 : 1);
+      }
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::File) || in.press(Button::SampleLoad)) {
+      app::Files& files = ctx.files();
+      if (!files.busy()) {  // (the buffers stay as they are while a job reads or writes them)
+        play_.set_note(nullptr);
+        if (in.press(Button::File)) {
+          const std::size_t n = riff_.write(save_buf_, sizeof save_buf_);
+          op_ = n != 0u && files.save("", "riff.o3a", save_buf_, n) ? Op::Saving : Op::None;
+        } else {
+          op_ = files.load("", "riff.o3a", load_buf_, sizeof load_buf_) ? Op::Loading : Op::None;
+        }
+        ctx.redraw();
+      }
       return true;
     }
     if (in.press(Button::Up) || in.press(Button::Down)) {
@@ -312,11 +453,19 @@ class HelloApp final : public app::App {
   }
 
  private:
+  enum class Op : std::uint8_t { None, Saving, Loading };
+
   units::Synth synth_;
   units::Delay delay_{g_delay_l, g_delay_r, kDelayCapacity};
   Riff riff_;
   PlayScreen play_;
+  Op op_ = Op::None;
+  // The riff's file (formats/chunk_file.h: about 80 bytes) and the buffer a load reads into: word aligned, declared.
+  alignas(4) std::uint8_t save_buf_[96] = {};
+  alignas(4) std::uint8_t load_buf_[96] = {};
 };
+
+static_assert(alignof(HelloApp) >= 4, "the riff's file buffers are word aligned");
 
 }  // namespace
 

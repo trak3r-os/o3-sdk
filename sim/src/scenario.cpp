@@ -207,6 +207,51 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
       } else {
         return fail("clock <bpm 20..300> start|stop, clock <bpm> continue <beats>, or clock off");
       }
+    } else if (cmd == "card") {
+      if (h.card() == nullptr) {
+        return fail("card: this harness has no card (<app>_sim --card DIR)");
+      }
+      if (w.size() == 2 && w[1] == "out") {
+        h.card_out();
+      } else if (w.size() == 2 && w[1] == "in") {
+        h.card_in();
+      } else if (w.size() == 3 && w[1] == "protect" && (w[2] == "on" || w[2] == "off")) {
+        h.card_protect(w[2] == "on");
+      } else {
+        return fail("card out | card in | card protect on|off");
+      }
+      h.run_ms(1);
+    } else if (cmd == "reboot") {
+      if (w.size() != 1) {
+        return fail("reboot");
+      }
+      if (!h.reboot()) {
+        return fail("reboot: the app did not start again (see stderr)");
+      }
+    } else if (cmd == "expect") {
+      // expect file <card path> | expect nofile <card path> | expect state <text the state line holds>
+      if (w.size() == 3 && (w[1] == "file" || w[1] == "nofile")) {
+        if (h.card() == nullptr) {
+          return fail("expect " + w[1] + ": this harness has no card (<app>_sim --card DIR)");
+        }
+        bool is_dir = false;
+        const bool there = h.card()->exists(w[2].c_str(), &is_dir) == hal::storage::Status::Ok && !is_dir;
+        if (there != (w[1] == "file")) {
+          return fail("expect " + w[1] + " " + w[2] + ": " + (there ? "it is there" : "it is not there"));
+        }
+      } else if (w.size() >= 3 && w[1] == "state") {
+        std::string want = w[2];
+        for (std::size_t i = 3; i < w.size(); ++i) {
+          want += " " + w[i];
+        }
+        char line[512];
+        (void)h.runtime().state_line(line, sizeof line);
+        if (std::string(line).find(want) == std::string::npos) {
+          return fail("expect state " + want + ": the state line is '" + line + "'");
+        }
+      } else {
+        return fail("expect file <card path> | expect nofile <card path> | expect state <text>");
+      }
     } else {
       return fail("unknown command '" + cmd + "'");
     }

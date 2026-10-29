@@ -8,6 +8,7 @@ build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/tour.txt --out /
 build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole run's audio
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out /tmp/hello
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out /tmp/hello    # notes and a master clock in (a fake MIDI device)
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/files.txt --card /tmp/hello-card --out /tmp/hello   # the file API on a card directory
 ```
 
 `--firmware-dir DIR` gives the system Config screen a fake update path (`platform/host/fake_firmware.h`) over the `*.ptf` files of `DIR`, in name
@@ -23,6 +24,16 @@ In a test, `sim::Harness(app, firmware, &fake_midi)` takes any `hal::midi::Devic
 The fake is also the reference model of what a real device promises the kit (`hal/midi.h`): input stamped with a frame, an ideal master clock (`clock_start`,
 `clock_continue`, `clock_stop`, `clock_tempo`, `clock_off`: Start at the next block, a quiet master flywheeled for 48 clocks), and the clock and transport
 the app sends captured with their sample (`FakeMidi::sent`).
+
+`--card DIR` gives the app an SD card: the directory `DIR` (made when it is not there) is its root (`platform/host/dir_card.h`: a `hal::storage::Storage` and
+`StorageWriter` that applies the real write guard, `hal/app_guard.h`, to every change). `Context::files()` saves and loads under `DIR/Apps/<app>/` (`<app>` is the CMake id: `hello`), the
+kit keeps the theme and the MIDI settings in `DIR/Apps/<app>/system.o3s` and reads them again at start, and a scenario can pull the card, protect it and restart the app on it (`card`,
+`reboot`, `expect`, below). Use a scratch directory: nothing outside `Apps/<app>/` and `Samples/` is written in it, but a file of yours there is replaced by a save of the same name.
+Without the option the app has no card: `Context::files()` says NO CARD and the kit keeps nothing. In a test, `sim::Harness(app, firmware, midi, &card, app_id)` takes any
+`platform::host::HostCard` (`DirCard`, `FatFsStorage`, or a wrapper over the in-memory `MemCard` of `tests/support`), behind a write-protect switch (`ProtectCard`); `Harness::card()`,
+`card_out()`, `card_in()`, `card_protect()` and `reboot()` are the commands' functions. `reboot()` makes the engine and the runtime again, power-cycles the card (a file being written stays
+torn, as after a power cut) and starts the app as the unit's `main` does: `App::setup`, then the settings read from the card. The app object is the same one (it keeps what it holds in
+memory), as every test starts a fresh simulator on the one `o3sdk_app()`.
 
 The executable is built in the binary directory of the CMake directory that calls `o3sdk_app()` (`build-host/apps/hello/` here;
 `build-host/app/o3_303_sim` in the sibling o3-303, which builds o3sdk from outside).
@@ -68,5 +79,13 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 | `wav <name>` | `<out>/<name>.wav`, what has been recorded so far |
 | `midi <din\|usb> <hex...>` | MIDI bytes arriving on a port now, `midi din 90 3c 64` (a note on, channel 1, middle C); channel messages only, with running status, so `midi din 90 30 64 34 64` is two notes; they land in the block that renders next |
 | `clock <bpm> start\|stop` | a MIDI master at `<bpm>` (20 .. 300, decimals allowed) sends Start or Stop; `clock <bpm> continue <beats>` is a song position (sixteenths) then Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in the Config's MIDI section |
+
+| `card out` / `card in` | the card out of its slot (every card call answers NO CARD, a file being written stays torn) and back (mounted at once, the runtime told as the platform's card watch does) |
+| `card protect on\|off` | the card's write-protect switch |
+| `reboot` | the unit restarted on the same card: the engine and the runtime made again, `App::setup`, the kit's settings read from the card |
+| `expect file <path>` / `expect nofile <path>` | the card holds (does not hold) the file `path`, relative to its root: `expect file Apps/hello/riff.o3a`. A wrong expectation fails the scenario with its line |
+| `expect state <text>` | the console's `state` line contains `text`: `expect state files=done`, `expect state card=none`, `expect state riff=3` (an app's pair) |
+
+`card` and `expect file` need a card (`--card`); `reboot` works without one.
 
 Each command that touches the panel is followed by one millisecond, so the runtime sees the events in order.

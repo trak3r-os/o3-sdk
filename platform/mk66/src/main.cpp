@@ -18,6 +18,9 @@
 //   -> loop { wfi; console::service(); input; display; rt.poll(); audio beat; the card slot; the outputs opened once after a clean run
 //   and never during a firmware update; LED }
 //
+// The app's files (docs/M2C-PLAN.md section 3, slice FA): the Runtime is given the card (Platform::storage, writer and files_work, the firmware update path's claim), its poll() runs the
+// files service's job a slice a pass, and once the card is mounted (and before USB starts) rt.load_settings() reads the kit's settings from Apps/<app>/system.o3s over the app's defaults.
+//
 // Without it (-DO3SDK_MK66_CONSOLE=OFF) this is M2's image. The console image also has the Power switch (docs/M2B2-PLAN.md, slice P): power::device::init() after the input, and the loop's power pass
 // (power_pass below, track3r-os's power_pass of app_main.cpp) between the key scan and the display: the hold of Power feeds the runtime's strip, and a completed hold (or `power off`) runs the shutdown
 // of platform/mk66/power (the engine stopped, the codec muted and the audio path stopped, the card released, USB off, the lights dark, then the VLPR off or a restart); from the latch of its first stage
@@ -27,7 +30,9 @@
 #include "o3sdk_build_info.h"  // generated: tools/gen_build_info.cmake
 
 #include <o3sdk/app/app.h>
+#include <o3sdk/app/files_work.h>
 #include <o3sdk/app/runtime.h>
+#include <o3sdk/core/placement.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/cycles.h>
 #include <o3sdk/platform/mk66/audio.h>
@@ -49,6 +54,7 @@
 #include <o3sdk/platform/mk66/console/attach.h>
 #include <o3sdk/platform/mk66/console/modules.h>
 #include <o3sdk/platform/mk66/power/power_device.h>
+#include <o3sdk/platform/mk66/save/fat_storage_writer.h>
 #include <o3sdk/platform/mk66/storage/device.h>
 #include <o3sdk/platform/mk66/update/fw_device.h>
 #include <o3sdk/platform/mk66/usb/boot_layout.h>
@@ -150,6 +156,15 @@ bool midi_usb_active(void*) noexcept {
 #endif
 }
 midi::MidiService g_midi(midi::MidiServiceHooks{&midi_heard_at, &midi_kick, &midi_isr_dropped, &midi_usb_active, nullptr, mk66::midi_cfg::kAudioLeadCycles});
+
+#if O3SDK_CONSOLE
+// The app's files (docs/M2C-PLAN.md section 3): the card's write side (FatFs's FIL, DIR and FILINFO of the save layer, about 1.5 KB) and the files service's jobs (the atomic save's read-back buffer,
+// the folder scan's sorted index, the settings buffer: about 16 KB) are SDRAM objects, as track3r-os places its save layer's: the render never touches them and SRAM_U keeps its room. They are zero
+// statics of `.sdram_bss` (kit/core placement.h), cleared by the reset sequence before the constructors, which give them their values here (the writer holds references to the volume, not yet
+// constructed in its own unit, and uses them only from the main loop, long after).
+O3SDK_BIG o3sdk::platform::mk66::save::FatStorageWriter g_writer(storage::device::fat(), storage::device::block());
+O3SDK_BIG o3sdk::app::Files::Work g_files_work;
+#endif
 
 // OS-POWER P1: the power-off latch (stage A of the shutdown, never cleared) and the end of its stage E (the display dark and held, the chip in power-down), from appimg (console/src/appimg.cpp).
 // An image without the console has no Power switch: neither is ever true.
@@ -373,7 +388,9 @@ int main() {
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
-  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi};
+  // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
+  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
+                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
   static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi};
@@ -456,12 +473,31 @@ int main() {
   if (sd_status != o3sdk::hal::storage::Status::Ok && storage::device::storage().card_present()) {
     note_fault(Fault::Sd);  // a card is in and did not mount: a fault (`stage` lists it); an empty slot is not
   }
-  // The card is in use from `fw put` to the end of `fw update`'s hand-over, and while a card put in waits for its mount (storage/card_claims.h): a hand-over to a computer, `sd mount`
+  // The card is in use from `fw put` to the end of `fw update`'s hand-over, while a card put in waits for its mount, and while the files service has a job (storage/card_claims.h): a hand-over to a computer, `sd mount`
   // and the like ask card_busy(). A refusal (table full) is logged, never dropped.
-  if (!storage::device::claim(&mk66::appimg::firmware_update_active) || !storage::device::claim(&card_mount_pending)) {
+  if (!storage::device::claim(&mk66::appimg::firmware_update_active) || !storage::device::claim(&card_mount_pending) || !storage::device::claim(&mk66::appimg::storage_in_use)) {
     console::log("boot: sd claim table full");
   }
+  g_writer.attach_owner(storage::device::swap());  // while the computer has the card (the disk mode) the writer's gate says Host
   mk66::set_module(0);
+
+  // ---- The kit's settings (docs/formats/o3sdk-settings.md): the theme and the MIDI settings the user chose, read once from Apps/<app>/system.o3s over what App::setup set, now that the card is mounted
+  // and before USB starts (one read of at most 2 KiB). A missing, damaged or newer-major file leaves the app's defaults. From the first pass of the loop on, a change is written 1.5 s after the last.
+  {
+    char line[56];
+    mk66::audio::diag::Text text(line, sizeof line);
+    text.str("boot: settings ");
+    switch (rt.load_settings()) {
+      case o3sdk::app::Files::SettingsLoad::Loaded: text.str("loaded"); break;
+      case o3sdk::app::Files::SettingsLoad::FromBackup: text.str("loaded from the backup"); break;
+      case o3sdk::app::Files::SettingsLoad::NoFile: text.str("none on the card, defaults"); break;
+      case o3sdk::app::Files::SettingsLoad::NoCard: text.str("no card, defaults"); break;
+      case o3sdk::app::Files::SettingsLoad::Refused: text.str("refused (").str(o3sdk::app::settings::result_name(rt.context().files().settings_error())).str("), defaults"); break;
+      case o3sdk::app::Files::SettingsLoad::Unavailable:
+      case o3sdk::app::Files::SettingsLoad::NotRead: text.str("not kept (no card capability)"); break;
+    }
+    console::log(line);
+  }
 
   // ---- The console and USB: the table (the app's commands included) and the shell first, then the port. USB starts last, after the audio path: enumeration happens at the USB priority,
   // below the audio DMA interrupt, and must never be able to delay its bring-up. The set of the first enumeration is track3r-os's default one, AUDIO with 8 channels out and the stereo

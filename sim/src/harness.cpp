@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <o3sdk/sim/harness.h>
 
+#include <o3sdk/app/files_work.h>
 #include <o3sdk/core/audio_clock.h>
 #include <o3sdk/hal/audio.h>
 #include <o3sdk/platform/host/png.h>
@@ -62,27 +63,80 @@ void put_u16(std::FILE* f, std::uint16_t v) {
 
 }  // namespace
 
-Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi)
+Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi, platform::host::HostCard* card, const char* app_id)
     : app_(app),
       midi_(midi),
+      firmware_(firmware),
+      inner_card_(card),
+      app_id_(app_id),
       raster_(std::make_unique<EveRaster>()),
       display_(std::make_unique<RasterDisplay>(*raster_)),
       engine_(std::make_unique<dsp::Engine>()) {
-  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware, "sim", midi});
-  runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
+  if (card != nullptr) {
+    protect_ = std::make_unique<platform::host::ProtectCard>(*card);
+  }
+  make_runtime();
   clock_.set(1000);  // not zero: a tick of 0 is a legal time, but starting elsewhere catches code that treats it as "never"
 }
 
 Harness::~Harness() = default;
 
+// The platform and the runtime over the engine in hand (the card's work memory is made afresh: a restart starts from nothing).
+void Harness::make_runtime() {
+  files_work_ = protect_ != nullptr ? std::make_unique<app::Files::Work>() : nullptr;
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr});
+  runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
+}
+
 bool Harness::start() {
   const bool ok = runtime_->start();
+  if (protect_ != nullptr) {
+    if (!protect_->mounted()) {
+      (void)protect_->mount();  // (the unit's main mounts the card after the boot, before the settings are read)
+    }
+    (void)runtime_->load_settings();
+  }
   runtime_->poll();
   const std::string refused = setup_report();
   if (!refused.empty()) {
     std::fputs(refused.c_str(), stderr);
   }
   return ok && refused.empty();
+}
+
+void Harness::card_out() {
+  if (protect_ != nullptr) {
+    protect_->set_present(false);
+    runtime_->card_changed();
+  }
+}
+
+void Harness::card_in() {
+  if (protect_ != nullptr) {
+    protect_->set_present(true);
+    (void)protect_->mount();
+    runtime_->card_changed();
+  }
+}
+
+void Harness::card_protect(bool on) {
+  if (protect_ != nullptr) {
+    protect_->set_protect(on);
+    runtime_->card_changed();
+  }
+}
+
+bool Harness::reboot() {
+  runtime_.reset();
+  platform_.reset();
+  if (protect_ != nullptr) {
+    protect_->set_present(false);  // the power goes: a file being written is left torn
+    protect_->set_present(true);
+    (void)protect_->mount();
+  }
+  engine_ = std::make_unique<dsp::Engine>();
+  make_runtime();
+  return start();
 }
 
 std::string Harness::setup_report() const {

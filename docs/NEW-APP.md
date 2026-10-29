@@ -11,18 +11,21 @@ references. `docs/FRAMEWORK.md` is the reference behind it.
 | 1 | create the repository | `python3 -I tools/new_app.py ../myapp myapp` |
 | 2 | build on the host, run the tests, look at the simulator | `cmake -S . -B build-host && cmake --build build-host -j4 && ctest --test-dir build-host` |
 | 3 | write the engine: units, screens, controls, scenarios, tests | sections 3 to 8 |
-| 4 | build the image | `cmake -S . -B build-mk66 -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=<toolchain>` then `cmake --build build-mk66 -j4` |
+| 4 | build the image | `cmake -S . -B build-mk66 -DO3SDK_PLATFORM=mk66` (`-DARM_GNU_ROOT=<toolchain>` unless `tools/fetch_toolchain.py` put it in `.toolchains/`) then `cmake --build build-mk66 -j4` |
 | 5 | the gate | `python3 -I tools/gate.py myapp --host-build build-host` |
-| 6 | install over USB, and the way back | section 11 |
+| 6 | install over USB, and the way back | `python3 -I ../o3-sdk/tools/o3install.py build-mk66/app/<id>.ptf --yes`, section 11 |
 
 ## 0. Before you start
 
 - **A computer**: Linux (the host tools assume it: `/dev/serial/by-id`, ALSA), CMake 3.24 or newer, a C++17 compiler, Python 3 (standard
   library only). `tools/ci.sh` uses `ccache` when it is installed.
-- **The cross toolchain**: the Arm GNU Toolchain 15.3.rel1 (`arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi`), unpacked anywhere, from Arm's
-  downloads page. Name it with `-DARM_GNU_ROOT=<dir that holds bin/>` at the configure, or export `ARM_GNU_ROOT`; `tools/ci.sh` looks for
-  it in `../track3r-os/.toolchains/` when neither is set. A different release may build, but this is the one the image is built and tested
-  with.
+- **The cross toolchain**: the Arm GNU Toolchain 15.3.rel1 (`arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi`). One command fetches it:
+  `python3 -I ../o3-sdk/tools/fetch_toolchain.py` downloads Arm's archive for this host (x86_64 or aarch64 Linux, macOS on Apple silicon), checks
+  its pinned SHA-256 and unpacks it into `.toolchains/` of o3-sdk (git-ignored); the cross build and `tools/ci.sh` find it there when
+  `ARM_GNU_ROOT` is not set (the app's own `.toolchains/` is looked at first). An archive downloaded by hand is checked and unpacked the same way with
+  `--from-dir <dir>`. Or unpack it anywhere and name it with `-DARM_GNU_ROOT=<dir that holds bin/>` at the configure, or export `ARM_GNU_ROOT`
+  (an explicit path always wins); as a last resort `tools/ci.sh` looks in `../track3r-os/.toolchains/`. A different release may build, but this is the
+  one the image is built and tested with.
 - **The framework**: o3-sdk checked out next to your app (`../o3-sdk`), used as it is. Your repository never edits it
   (`docs/FRAMEWORK.md` section 11); a change the app needs is made in o3-sdk, under its own rules.
 - **For the unit**: a Tracker whose running firmware has the USB console (track3r-os v1.0.0, or any o3-sdk image built with the default
@@ -209,8 +212,9 @@ Everything the user edits is a parameter of a unit: a row in its table. The engi
 block. A screen changes one with `engine().set_param(unit, id, value)` (clamped through the descriptor), reads it with `engine().param()`.
 Learn the descriptor fields from `kit/core/include/o3sdk/core/param.h`; copy a row of `units/synth/src/synth.cpp` and edit it.
 
-App-level settings that are not a unit's (a swing, a pattern length) are the app's own state, shown on a screen and read by the hook. The
-kit stores nothing on the card for an app yet (section 13).
+App-level settings that are not a unit's (a swing, a pattern length) are the app's own state, shown on a screen and read by the hook. To keep them, and patterns and kits,
+across a power-off, save them to the card with `ctx.files()` (`kit/app/files.h`, `docs/FRAMEWORK.md` "Files on the card"): your app's folder is `Apps/<id>/` with `<id>` the CMake
+id you gave `o3sdk_app()`, so choose it as a folder name (at most 15 characters of letters, digits, `_`, `-`, no dot). The kit already keeps the theme and the MIDI settings there for you.
 
 ## 7. A sequencer (a clocked hook)
 
@@ -314,6 +318,20 @@ were not. Your user must be allowed to open the unit's serial port (the `dialout
 **Before the first install** (once, by a person at the unit): the card holds a known-good image in `Firmware/` that the hidden reset button
 flashes (track3r-os's `o3os_1.0.0.ptf`, or the official image): that is the way back if your image does not boot. Back up the card.
 
+**One command** (`tools/o3install.py`, a script over `o3console.py`, which stays as it is): check, put, update, wait for the unit to come back, `version`.
+
+```sh
+python3 -I ../o3-sdk/tools/o3install.py build-mk66/app/<id>.ptf --yes [--port /dev/serial/by-id/...Track3r...] [--name <id>-0.1.ptf] [--expect-version TEXT]
+```
+
+It runs `check_image.py` first and never sends an image that fails it; reads `version` and `fw`; puts the file as `<id>-<crc32>.ptf` (the same build
+keeps its name, so a second run only updates the file already on the card; a name that is there with another size is refused); prints the way back
+(the other images on the card, and the card's first `.ptf`, which the hidden reset button flashes); runs the update and waits for `version` to
+contain the build label it read out of the image (`--expect-version` replaces it). It stops at the first failure with the console's exit status (below).
+Without `--yes` it only checks the image and prints what it would do: the update restarts the unit, so `--yes` is the maintainer's go.
+
+The same steps by hand, one console call each (what the tool does underneath):
+
 ```sh
 python3 -I $O3/o3console.py --list                                  # the unit: /dev/serial/by-id/*Track3r*
 python3 -I $O3/o3console.py version "fw"                            # what runs now; the card, and first-ptf (the reset button's target)
@@ -373,7 +391,7 @@ matter for an instrument today:
 
 | Missing | Means | Workaround |
 |---|---|---|
-| Saving and loading (the card from an app) | patterns, kits and settings do not survive power-off; `hal::storage` is read-only and the write side is the update path's | keep state in RAM; ship factory content in the image; plan the file format now |
+| Saving and loading (the card from an app) | built (M2c slice FA, host only until the unit session): `ctx.files()` saves, loads and lists in `Apps/<id>/`; every call is a job of the main loop and a refused call says why (`status().text`, the strip) | save with `Files::save`, poll `status()`, keep the buffer unchanged until Done; `formats/chunk_file.h` for a versioned format; see `docs/FRAMEWORK.md` "Files on the card" |
 | MIDI in/out on the unit | the kit's MIDI is host-tested; the DIN and USB drivers are built and have not run on a unit | none yet; in the simulator, `--midi` and the `midi` and `clock` scenario lines |
 | The on-screen firmware switcher's final INSTALL | the FIRMWARE section opened and worked on a unit (2026-10-26, reported); the final F1 INSTALL needs a finger and is not verified | install over USB (section 11) |
 | Power switch shutdown on the unit | the shutdown is built and host-tested; it has not run on a unit (the pin's pull and polarity, the VLPR wake are open) | `power off dry` over USB (the stages, then a restart) |

@@ -1,0 +1,88 @@
+# The app file API on HELLO (kit/app/files.h, docs/M2C-PLAN.md section 3): the riff saved to the card and loaded back, a card pulled in the middle of a
+# save and put back, the next save healing what the cut left, and the kit's own settings (the theme, the MIDI channel) kept across a reboot.
+#
+#   mkdir <dir> <card> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/files.txt --card <card> --out <dir>
+#
+# The simulator's card is the directory <card> (platform/host/dir_card.h): the files are Apps/hello/riff.o3a (and .bak) and Apps/hello/system.o3s. The
+# scenario fails at the first `expect` that is wrong. Start from an empty card directory (or none: the simulator makes it).
+wait 100
+expect state card=ready
+expect nofile Apps/hello/riff.o3a
+snap 00_card_ready
+
+# SAVE. INSERT moves the riff up a semitone, FILE saves it; the strip says SAVED and the screen's FILE line says it too.
+tap insert
+tap insert
+tap insert
+expect state riff=3
+tap file
+wait 60
+expect state files=done
+expect file Apps/hello/riff.o3a
+snap 01_saved
+# The second save keeps the first as the backup.
+tap insert
+tap file
+wait 60
+expect file Apps/hello/riff.o3a.bak
+expect state riff=4
+
+# The card pulled in the middle of a save: the save fails with NO CARD, the strip says so, the file on the card is the one before it.
+tap insert
+tap file 6
+card out
+wait 40
+expect state card=none
+expect state files=failed
+snap 02_card_out_mid_save
+# Another save with no card is refused at once.
+tap file
+wait 20
+snap 03_no_card
+# The card back: the next save heals what the cut left (a stale temporary file, the old file moved aside) and goes through.
+card in
+wait 100
+expect state card=ready
+expect file Apps/hello/_o3save.tmp
+tap file
+wait 100
+expect state files=done
+expect file Apps/hello/riff.o3a
+expect nofile Apps/hello/_o3save.tmp
+snap 04_healed
+
+# LOAD. Change the riff, then load: the saved one is back (5 was saved by the healed save).
+tap insert
+tap insert
+expect state riff=7
+tap sampleload
+wait 60
+expect state files=done
+expect state riff=5
+snap 05_loaded
+
+# The kit's settings: the theme (DISPLAY) and the MIDI channel (MIDI) are changed in the system Config; 1.5 s after the last change they are on the card.
+# (A note on DIN gives the app a MIDI device, which the MIDI section of the Config needs.)
+midi din 90 3c 64
+wait 200
+midi din 80 3c 00
+tap config
+wait 50
+turn 3
+tap right
+turn 1
+snap 06_config_black
+tap config
+wait 200
+expect nofile Apps/hello/system.o3s
+wait 1500
+expect file Apps/hello/system.o3s
+expect state midich=3
+expect state theme=1
+
+# REBOOT: the runtime and the engine are made again; the theme and the channel come back from the card.
+reboot
+wait 100
+expect state midich=3
+expect state theme=1
+snap 07_after_reboot
