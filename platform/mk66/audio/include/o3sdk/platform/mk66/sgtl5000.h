@@ -161,7 +161,7 @@ inline constexpr unsigned kMuteCount = sizeof(kMute) / sizeof(kMute[0]);
 
 // ---- The stop (OS-POWER P1) ---------------------------------------------------------------------------------------------------------------
 // What the stop of the audio path sends the codec before it stops the I2S and the DMA (the unit is powering off or restarting), click-free by construction and in this order.
-// (The Power-switch shutdown is milestone M2b: the M2 device has no stop yet, and this plan waits for it, tested.)
+// (o3sdk: `audio_stop()` in audio.h runs this plan; it came with the Power switch, slice P of M2b.)
 //   1. the DAC is muted through the chip's own soft ramp (kSoftMute: VOL_RAMP_EN is on in kAdcDacMuted) and the ramp is waited out, kDacRampWaitMs: the sound is gone before anything is switched,
 //      so the amplifier key's fall (which with sound playing could click: it is the one that mute() takes first, for the update path's quiet hand-over) is on silence;
 //   2. the amplifier key goes LOW (the caller's, a GPIO write);

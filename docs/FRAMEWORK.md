@@ -1,7 +1,7 @@
 # o3sdk: the framework guide
 
-Status (2026-10-25): the kit, the simulator and the MK66 platform exist, and HELLO and o3-303 were installed and run on a unit over USB the
-same day (`docs/hw/2026-10-25-usb.md`). Section 10 says, per capability, what is verified on the unit, what is done on the host only and what is
+Status (2026-10-29): the kit, the simulator and the MK66 platform exist, and HELLO and o3-303 were installed and run on a unit over USB the
+same day (`docs/hw/2026-10-25-usb.md`). M2b's second round is host-tested, with a unit run of the system Config screen reported on 2026-10-26; section 10 says, per capability, what is verified on the unit, what is done on the host only and what is
 planned. This file is the reference; `docs/NEW-APP.md` is the path for a new instrument (zero to an image on the unit), `AGENTS.md` the guide
 for coding agents.
 
@@ -126,6 +126,12 @@ Each slot and the master have up to `kMaxInserts` = 4 inserts in series (an unus
 - **Render**: `render()`, once per block, from the platform's audio callback (`Runtime::block_callback()`).
 - **Clocked hooks** (`Clocked::block(BlockContext&)`) run in the render context before the units and place events at any frame:
   sequencers, arpeggiators, a MIDI clock. Timing is sample-accurate.
+- **Clock follow and MIDI** (`follow()`, `inject()`, `midi_out()`, `block_frame()`, `following()`; slice K, host only). `follow(ClockFrame)`
+  takes the block's transport from a master's clock, in the render context before `render()`: the engine's own advance is parked, every
+  clocked hook follows with no change, and `tempo()` and `playing()` report the master's. While following, `play()` and `stop()` are requests
+  for the device (`take_transport_request()`), and `set_tempo()` is kept for when the master is let go. `inject(unit, event)` places the notes
+  a MIDI route sends into a unit's events for the block; `midi_out()` and `block_frame()` hand the block's outgoing messages and transport back
+  to the device (`hal/midi.h`).
 - **A hook writes the mixer** with `BlockContext::set_mix(slot, field, value)` (a motion lane, a slew; `field` is a `MixField`: Level,
   Pan, SendA, SendB, Mute). The value is clamped as `Engine::set_mix` clamps it, becomes the field's target at once, and the mixer
   ramps the gain to it across the block, from where the last block left it, as for a main-loop write: a jump never clicks. It costs a
@@ -189,8 +195,11 @@ and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the examp
 
 ### The system Config (the kit's, in every app)
 
-**Status: built (M2b, second round, slice F; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO; host-tested, with the
-simulator scenario `apps/hello/scenarios/config.txt`. Not yet run on a unit.** MIDI (slice K), AUDIO, the settings on the card and the app's own pages are planned.
+**Status: built (M2b, second round; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO, and MIDI when `Platform::midi`
+is set; host-tested, with the simulator scenario `apps/hello/scenarios/config.txt`. On a unit: a release image with this screen (o3-303 988318f on
+o3-sdk 20ccef1) was installed over USB on 2026-10-26, reported by the tester: Config's FIRMWARE, DISPLAY and INFO opened and worked over USB
+injection, cpu 35.5 and 37.1 %. Not verified: the final FIRMWARE INSTALL from the screen (F1, which needs a finger).** AUDIO, the settings on the card
+and the app's own pages are planned.
 What follows is the maintainer's decision (2026-10-25) for what it is: the kit brings the machine up (clocks, SDRAM, display, input,
 LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
 the app's. "Por defecto config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
@@ -200,7 +209,8 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   or pad pressed before still reaches it, so no note is left on), its screen goes on running and sounding underneath, and the pad LEDs are
   dark. `Runtime::lock_input(bool)` locks input altogether, `Runtime::system_strip(text, progress, hold_ms)` puts one line over the bottom of
   whatever is on screen (the platform's power-off hold feeds it), `Runtime::card_changed()` is the platform's card watch.
-- Sections, in this order: FIRMWARE (hidden when `Platform::firmware` is null), DISPLAY (the theme), INFO (the app's name and version, the
+- Sections, in this order: FIRMWARE (hidden when `Platform::firmware` is null), MIDI (hidden when `Platform::midi` is null: the user's
+  `hal::midi::Config` and the device's status; see "MIDI" below), DISPLAY (the theme), INFO (the app's name and version, the
   build id, the uptime). Keys: LEFT / RIGHT change section, F8 is BACK (one level up; the last closes the screen), CONFIG closes it.
   FIRMWARE: the `Firmware/*.ptf` list is read in one pass when the section opens (UP / DOWN or the encoder choose), F1 asks "UPDATE
   TO name?", F1 again starts the sliced check, F1 once more at "IMAGE OK, length, CRC" installs; any other control takes a question back, F8
@@ -209,7 +219,7 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`).
 - An app can refuse for a moment with `App::update_blocker(ctx)` (a text, or null: asked when the list opens and at INSTALL), for
   example while it records. `App::config_pages()` (default 0) is declared for the pages an app will add; the kit draws none yet.
-- The remaining plan (the maintainer, 2026-10-25): AUDIO (USB audio out and the outputs), MIDI (channel, clock in and out, DIN and USB),
+- The remaining plan (the maintainer, 2026-10-25): AUDIO (USB audio out and the outputs; planned, `docs/M2C-PLAN.md`; the MIDI section is built, above),
   brightness and the last crash record in INFO; a section whose driver does not exist yet is not shown. An app adds its own pages after
   the kit's: up to eight items each, a value (a parameter descriptor with get and set on the main loop) or an action (run after a
   confirming hold), and it reads the kit's settings (the theme, the MIDI channel) through `Context`.
@@ -217,7 +227,22 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
   in every app, so any unit can always be switched to another engine and tell what it runs (confirmed by the maintainer, 2026-10-25).
-- The kit will store its settings and the app's Config values on the card (M2b); until then they last until power-off.
+- The kit will store its settings and the app's Config values on the card (M2c, slice FA: `Apps/<app>/system.o3s`, `docs/M2C-PLAN.md`); until then they last until power-off.
+
+### MIDI (`midi.h`)
+
+`kit/app/include/o3sdk/app/midi.h`. The device is `hal::midi::Device`, given to the runtime as `Platform::midi`; null on a platform or a test rig
+without MIDI, and then nothing arrives and nothing leaves. Slice K, host only.
+
+- **Notes**: `ctx.midi().route(unit, channel)` makes a unit play the notes of a channel (0 is the channel the user chose in the system Config,
+  omni when that is 0). A note reaches the unit at the frame its arrival maps to, one block after it came in (about 1.5 ms, no jitter). At most
+  four routes, one unit each. All sound off and all notes off end the unit's notes.
+- **Everything else**: every channel message no route took (controllers, program changes, pitch bend, the notes of another channel) reaches
+  `App::midi(Context&, const core::MidiMessage&)` in the main loop, in order.
+- **Clock**: nothing to write. With FOLLOW on in the system Config, the engine's transport is the master's clock (section 4) and every clocked
+  hook follows. With the engine playing, the clock and the transport go out on the ports the user chose. `ctx.midi().send(m)` sends one message
+  from the main loop.
+- **Settings**: `ctx.midi().config()` and `set_config()` are the user's `hal::midi::Config`; an app that sets them in `setup()` sets the defaults.
 
 ### Pad LEDs (`pad_leds.h`)
 
@@ -247,6 +272,8 @@ not the unit's. Its PNGs are 800 x 697 (the screen above the pads); the unit's `
 `--out` directory must exist. The same app runs in tests through `sim::Harness` (`sim/include/o3sdk/sim/harness.h`: `start`, `run_ms`,
 `press`, `pad_down`, `turn`, `audio`, `leds`, `runtime().state_line()`), as `templates/app/tests/app_test.cpp` and `tests/sim_hello_test.cpp` do.
 `Harness::start()` and the `<app>_sim` runner fail on an app whose setup had a call the engine refused (section 4, "Setup").
+`--midi` gives the app a fake MIDI device (`platform/host/fake_midi.h`, `hal::midi::Device`); a scenario with a `midi <din|usb> <hex...>` or a
+`clock <bpm> start|stop|continue|off` line gets one without the option (`sim/README.md`).
 
 ## 8. Rules
 
@@ -262,7 +289,9 @@ not the unit's. Its PNGs are 800 x 697 (the screen above the pads); the unit's `
 sequence (clocks, SDRAM, caches, the crash record), the FT812 driver, the two TCA8418 key scanners and the encoder, the IS31FL3731 pad LEDs,
 the I2S + eDMA + SGTL5000 audio pipeline behind `hal::audio::Device`, the linker script (with `.sdram_bss` placed in the SDRAM, NOLOAD, cleared
 before the constructors), the USB console, USB audio, the SD card read path and the firmware update path (M2b-R), and `src/main.cpp`, the
-composition root that wires them to `Runtime`. `o3sdk_app()` links an app into an image (`<name>.elf`, `.hex`, `.bin`, `.ptf` behind the
+composition root that wires them to `Runtime`. The MIDI core (`platform/mk66/midi`, ported from track3r-os, slice MC) and its service (`MidiService`,
+the DIN driver and the USB binding, slice MD; not committed yet) implement `hal::midi::Device`; the Power switch (`platform/mk66/power`, slice P)
+is ported from track3r-os. Neither has run on a unit. `o3sdk_app()` links an app into an image (`<name>.elf`, `.hex`, `.bin`, `.ptf` behind the
 static checks; ctests `<name>_image`, `_flashconfig`, `_ramfunc`, `_usb`). Its boot path, memory map, blink codes, options and what is verified:
 `platform/mk66/README.md`; the host tools and static checks: `platform/mk66/tools/README.md`; the plans and who owned what: `docs/M2-PLAN.md`,
 `docs/M2B-PLAN.md`. The drivers are the ones the unit proved in track3r-os and stay as they are there (`AGENTS.md`, "Rules").
@@ -273,7 +302,7 @@ The kit's promise is that an app can use everything the unit has, through a cont
 machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driver in `platform/mk66`, a contract in `kit/hal`
 (or the kit layer that owns it), an API an app reaches through its `Context`, and a fake on the host so the simulator runs it.
 
-**State, as of 2026-10-25.** Three values, and nothing in between:
+**State, as of 2026-10-29.** Three values, and nothing in between:
 
 - **Verified on the unit**: run on a Tracker and read back or recorded over USB by the test session (`docs/hw/2026-10-25-usb.md`: HELLO and
   o3-303, installed over the console). Where a person is still needed (eyes, hands, ears) the row says so: that part is not verified.
@@ -291,10 +320,10 @@ machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driv
 | USB console and update | USB0 device, CDC | `hal::firmware` | `diag` over USB: version, state, cpu, log, leds, screenshot, input injection, `fw put/arm/update`; an app adds its own state and commands (`App::describe_state`, `diag_commands`) | **Verified on the unit** (M2b-R): images put, installed and read back; the way back to track3r-os v1.0.0 in about 45 s |
 | USB audio out | USB0 device, isochronous, 44.1 kHz, 16-bit, composite with the console | platform, every app | the master streamed to the computer as a class-compliant interface (channels 7-8 of 8; 1-6 are silent, kept for an app's stems) | **Verified on the unit** (M2b-R): AUDIO set, profile 8, 8 out / 2 in, configured, recorded. Stems beyond the master and the computer's return stream into the engine: planned |
 | SD card | SDHC, FAT (FatFs) | `hal::storage` (read-only) | the card is mounted and read; `fw put` writes `Firmware/` | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **An app has no file API**: `hal::storage` is read-only by contract, `hal::storage_write` is declared with no implementation, and the update path is the card's only writer (`check_writers.py`). Saving patterns, kits and settings: **planned** |
-| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, asks twice (F1 each), stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Host only** (M2b round 2): the flow and its two questions are tested on a fake sink and in `config.txt`; the path behind it is the one the USB console row drives, verified on the unit. Not yet run from the screen on a unit: the final F1 INSTALL needs a finger |
-| System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Host only** (M2b round 2): FIRMWARE, DISPLAY, INFO; MIDI, AUDIO and an app's pages are planned |
-| MIDI | DIN in/out (UART), USB MIDI | kit `midi` (new) | notes and CCs into the engine as events, clock in/out on the transport, MIDI learn | **Planned** (M2b): the USB descriptors keep the MIDI interfaces and the port is silent; DIN is not ported |
-| Power switch | PTC3 | `core::PowerHold` | a clean shutdown: silent, dark, card released | **Planned** (M2b): the pure logic is host-tested; no driver |
+| Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, asks twice (F1 each), stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Verified on the unit** in part (M2b round 2, slice F): the FIRMWARE section opened and worked over USB injection on 2026-10-26 (reported by the tester). **Host only** for the flow and its two questions (a fake sink, `config.txt`). Not verified: the final F1 INSTALL from the screen (it needs a finger); the path behind it is the USB console row |
+| System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Verified on the unit** in part (M2b round 2, slices F and K): FIRMWARE, DISPLAY and INFO opened and worked over USB injection on 2026-10-26 (reported by the tester; no `docs/hw` file yet). **Host only**: the MIDI section (when `Platform::midi` is set). **Planned**: AUDIO and an app's pages |
+| MIDI | DIN in/out (UART), USB MIDI | kit `hal::midi::Device`, `app::Midi`, console `midi` | notes into the engine through routes, every other message to `App::midi`, clock followed and sent on the transport; MIDI learn is planned | **Host only** (M2b round 2, slices MC, K, MD): the MIDI core is ported from track3r-os (`platform/mk66/midi`, 1104b85); the kit API, routes, clock follow and `FakeMidi` are host-tested (slice K); the MK66 service, the DIN and USB drivers and console `midi` are built and host-tested (slice MD, not committed yet: host ctest 147/147, ASan 147/147, mk66 25/25). HELLO's image grows by 18.9 KB of flash. Not run on a unit. Owed: the MD row of `docs/M2B2-PLAN.md` section 6, last column; the ISR latency and the render cost of MIDI |
+| Power switch | PTC3 | `core::PowerHold`, `platform/mk66/power` | a clean shutdown: silent, dark, card released | **Host only** (M2b round 2, slice P): the pure logic and the shutdown are ported from track3r-os's `platform/mk66/power` (11 files identical after the rename) and host-tested (`mk66_power_*`); console `power`, `power press/release/pin`, `power off [dry]`; `O3SDK_POWER_VLPR_OFF` ON as in track3r-os. Never run on a unit: the pin's pull and polarity, and the VLPR wake, are open |
 | Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (`in_l`, `in_r` of a unit; `BlockContext::input_l()` of a hook), input select and gain, recording into SDRAM | **Host only** for the input planes (the RX ring runs in the pipeline; line in on the unit is not verified). Input select, gain, microphone and recording: **planned** (M2c): `hal::capture` is a contract with no driver |
 | FM radio | Si4703 into the codec input | `hal::capture` | tune, seek, RDS; a source to sample | **Planned** (M2c): contract only |
 | Computer return stream | USB0 isochronous (UAC2) | platform | the computer's audio as an engine source | **Planned** (later) |

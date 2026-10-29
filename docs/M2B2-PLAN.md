@@ -210,6 +210,22 @@ Memory [est, from track3r-os]:
   - `midi/CLAUDE.md` names `platform/mk66/tools/midi_clock_tool.py`; the file is in `tools/hil/`.
   - The header of `docs/specs/OS-POWER.md` still says "no code yet".
 
+## As built
+
+Written after slices F, MC, K and P were committed (20ccef1, 1104b85, b9e96dc) and MD was built (not committed yet). Where the code
+differs from the sections above:
+
+- `midi.h` (the MK66 MIDI device and its `Platform::midi` wiring) is in the MIDI library, `platform/mk66/midi/include/o3sdk/platform/mk66/midi.h`,
+  not in `platform/mk66/include/` as section 6's MD row says.
+- Console `midi` (slice MD): one read, `midi:` lines for the follow state, the config, the counters, the clock and transport, and the DIN and
+  USB drivers. The words are formatted by `platform/mk66/console/include/o3sdk/platform/mk66/console/midi_report.h`; a host test pins them
+  (`mk66_console_midi_test.cpp`). The kit's console commands are 26 now.
+- `__aeabi_f2lz` is defined in the image (`platform/mk66/src/aeabi_f2lz.cpp`, `midi/f2lz.h`) with integer arithmetic. The ported `ClockDll`
+  converts float to int64, and the toolchain's own helper is built on software doubles; the override keeps it out of the link.
+- Tick ownership in `MidiService::make_clock` (`midi_service.h`): each block's increment lands the position on the DLL's value at the block's
+  end, held to +-25 % of the DLL's own increment, so `pos + inc * frames` is the next block's start exactly. `prev_inc_` keeps one block's
+  tick ownership apart from its neighbour's. A Start begins at position 0 on the block that sees it, about 4 ms behind the master.
+
 ## Open decisions
 
 - **D1** Where the MIDI core lives. Recommended: `platform/mk66/midi`, with the audio-move include rule (I plus the include move). The

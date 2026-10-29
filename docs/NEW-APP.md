@@ -338,6 +338,7 @@ python3 -I $O3/o3console.py --update <id>-0.1.ptf --crc <crc> --yes-update --exp
 ```sh
 python3 -I $O3/o3console.py version state cpu "log 40" usb leds      # your app's state pairs, the render's load, the log, USB audio, the LEDs
 python3 -I $O3/o3console.py --shot /tmp/<id>.png                      # the real screen, 800 x 480
+python3 -I $O3/o3console.py midi power                                 # MIDI in and out, the Power switch: reads only (neither run on a unit yet)
 python3 -I $O3/o3console.py "key play tap" "pad 12 down" leds "pad 12 up" "enc 3" state   # inject input, read it back
 python3 -I $O3/o3audio.py record --seconds 3 --channel 7 --not-silent # the master is on USB channels 7-8 (1-6 are silent, kept for stems)
 ```
@@ -373,11 +374,16 @@ matter for an instrument today:
 | Missing | Means | Workaround |
 |---|---|---|
 | Saving and loading (the card from an app) | patterns, kits and settings do not survive power-off; `hal::storage` is read-only and the write side is the update path's | keep state in RAM; ship factory content in the image; plan the file format now |
-| MIDI in/out | no notes or clock from outside | none; the engine accepts events from any source when the driver lands |
-| The system Config screen and the on-screen firmware switcher | the Config button is free but belongs to the kit; switching engine is done over the console | install over USB (section 11) |
-| Power switch shutdown | no clean shutdown (silent, dark, card released) | none |
+| MIDI in/out on the unit | the kit's MIDI is host-tested; the DIN and USB drivers are built and have not run on a unit | none yet; in the simulator, `--midi` and the `midi` and `clock` scenario lines |
+| The on-screen firmware switcher's final INSTALL | the FIRMWARE section opened and worked on a unit (2026-10-26, reported); the final F1 INSTALL needs a finger and is not verified | install over USB (section 11) |
+| Power switch shutdown on the unit | the shutdown is built and host-tested; it has not run on a unit (the pin's pull and polarity, the VLPR wake are open) | `power off dry` over USB (the stages, then a restart) |
 | Audio in (line, microphone), FM radio | units receive `in_l`/`in_r` planes but input select, gain and recording are contract-only | none |
 | Header and transport are fixed | an app with no sequencer shows a tempo and a transport badge | none |
+
+**MIDI and the Power switch, for an app.** MIDI is `Context::midi()` and `App::midi()` (section 5, "MIDI"). An app that sets none of it
+gets the kit's defaults (notes in on any channel, out on channel 1, clock and transport out on both ports while playing, FOLLOW off) and the
+MIDI section of the system Config. The Power switch needs nothing from the app: the platform runs the hold and the shutdown, and the screen
+sees only the strip (`Runtime::system_strip`) and the locked input (`Runtime::lock_input`).
 
 ## 14. When it goes wrong
 

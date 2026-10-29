@@ -25,7 +25,7 @@ Unofficial; not affiliated with or endorsed by Polyend. "Tracker" is used only t
 | Display | FT812, 800×480, no frame buffer: a display list of at most 2048 words per frame |
 | Audio | SGTL5000 codec, I2S + eDMA, 44.1 kHz, 64-frame blocks (261,224 cycles each); line in and microphone on the codec; USB audio out |
 | Controls | 48 pads in 4 rows of 12, one monochrome LED each, no velocity; 33 buttons without LEDs; one encoder without a push |
-| Other | SD card (FAT), USB device (console and audio on the same port), DIN MIDI (not yet driven), FM receiver (not yet driven) |
+| Other | SD card (FAT), USB device (console and audio on the same port), DIN MIDI (driver built, not yet run on a unit), FM receiver (not yet driven) |
 
 ## What is verified on the unit
 
@@ -105,8 +105,8 @@ inspects. `docs/NEW-APP.md` explains each one.
 |---|---|---|
 | M1 | The kit (core, hal, eve, ui, dsp, app), the simulator, two example units, the HELLO app | done, host-tested; the libraries cross-build for the Cortex-M4F |
 | M2 | The MK66 platform: boot, display, input, LEDs, audio; a bootable `.ptf` image of an app | image built and statically gated; HELLO and o3-303 run on the unit over USB (2026-10-25, `docs/hw/2026-10-25-usb.md`); the eyes-and-hands card session is still pending (`docs/hw/2026-10-25.md`), so not closed |
-| M2b | USB console and install over USB, USB audio out, SD card (M2b-R); the on-screen firmware switcher (Config, FIRMWARE), MIDI (DIN and USB), Power switch | M2b-R built and verified on the unit over USB; the rest planned (`docs/FRAMEWORK.md` section 10) |
-| M2c | Audio in (line, microphone), FM radio, recording into SDRAM | planned |
+| M2b | USB console and install over USB, USB audio out, SD card (M2b-R); the system Config screen and the on-screen firmware switcher (F), the MIDI core and service with DIN and USB (MC, K, MD), the Power switch (P) | M2b-R verified on the unit over USB; F verified in part on the unit (2026-10-26, reported: Config opened and worked; the final INSTALL from the screen needs a finger); MC, K, P, MD built and host-tested (MD not committed yet); the unit round pending for MIDI and Power (`docs/FRAMEWORK.md` section 10) |
+| M2c | The rest of the SDK: app files, audio in (line, microphone), recording, FM radio, USB stems and the computer's return stream, the Config pages | planned; `docs/M2C-PLAN.md` |
 | M3 | o3-303 on the kit | in progress; its own repository `../o3-303` (`../o3-303/docs/DESIGN-303.md`) |
 | M4 | The HOOKS device (sample launcher, synced sampling) | planned |
 | M5 | A port (Plaits is the obvious candidate) to prove the unit API | planned |

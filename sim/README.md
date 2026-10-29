@@ -18,7 +18,7 @@ check allowed never ends, as on the unit. In a test, `sim::Harness(app, &sink)` 
 
 `--midi` gives the app a fake MIDI device (`platform/host/fake_midi.h`, `hal::midi::Device`): the MIDI section of the system Config, the app's routes
 of notes to units, `App::midi()`, the clock followed or sent. A scenario that has a `midi` or `clock` line gets one without the option. Without a device
-(the default, and what the unit has until its MIDI service is in the image) the platform is the one that existed before MIDI: no MIDI section, no traffic.
+(the default) the platform is the one that existed before MIDI: no MIDI section, no traffic.
 In a test, `sim::Harness(app, firmware, &fake_midi)` takes any `hal::midi::Device`; `Harness::midi()` is the fake, `due_samples()` the timeline sample "now".
 The fake is also the reference model of what a real device promises the kit (`hal/midi.h`): input stamped with a frame, an ideal master clock (`clock_start`,
 `clock_continue`, `clock_stop`, `clock_tempo`, `clock_off`: Start at the next block, a quiet master flywheeled for 48 clocks), and the clock and transport
