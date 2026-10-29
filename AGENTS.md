@@ -43,7 +43,7 @@ templates/app, tools/new_app.py     the starter for a new app           tests/  
 cmake/                              o3sdk_app, o3sdk_unit, o3sdk_test_suite, o3sdk_app_test_suite, the toolchain files
 ```
 
-Layering is enforced by link dependency, not by convention: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- usb` (linked by
+Layering is enforced by link dependency, not by convention: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- formats <- app`, `core <- usb` (linked by
 the MK66 platform, never by an app). A **unit depends on `dsp` only**; an **app depends on `app` and its units**. `platform/*` and `sim`
 implement the HAL contracts (`kit/hal`). A public header lives in `<layer>/include/o3sdk/<layer>/` and compiles alone (the `<layer>_hdrcheck`
 targets). A path inside o3-sdk is `O3SDK_ROOT` in CMake, never `PROJECT_SOURCE_DIR`.

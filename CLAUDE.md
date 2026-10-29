@@ -41,7 +41,7 @@ exit 3 or 255 means run `tools/ci.sh` locally (`docs/ci.md`).
 
 ## Engineering standards
 
-- Layering by link dependency: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- usb` (linked by the MK66 platform, never by an
+- Layering by link dependency: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- formats <- app`, `core <- usb` (linked by the MK66 platform, never by an
   app); units depend on `dsp` only; an app on `app` and its units.
 - Real-time paths (`Unit::process`, `Clocked::block`, `Engine::render`, ISRs): no allocation, no SD I/O, no blocking, bounded loops.
 - No heap, no RTTI, no exceptions, no `double` in the kit, units or apps (`-fsingle-precision-constant`; check the cross build for

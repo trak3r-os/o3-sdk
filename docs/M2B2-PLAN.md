@@ -166,7 +166,7 @@ power and mdrv. At most two agents at a time, with no shared file:
 | F | `app sim o3sdk_tests hello_sim`; `hello_sim` on `config.txt` (Config opens and closes, the list from a fake folder, the two questions, a failed check, BACK) | `hello`, `ctest -L mk66` | `key config`, `shot`, `state` (`sys=1 section=firmware`); the list matches `fw`; a check to IMAGE OK (`fw=ask_install`) and BACK; the final F1 INSTALL is a finger (injection refused by design), then `o3console.py version` shows the other image; the way back with `--update` |
 | MC | `platform_mk66_midi(_hdrcheck) mk66_midi_tests`, ASan too | `platform_mk66_midi` | none |
 | K | `core hal dsp app sim platform_host o3sdk_tests hello_sim`; `dsp_follow_test` (a scripted ClockFrame: an o3-303-like hook's steps land on the master's ticks within 1 sample; Start, Continue at SPP, Stop, a quiet master); `app_midi_test` (routes to frames, the rest to `App::midi`, the MIDI section); `sim_midi_test`, `midi.txt` (notes sound in the WAV; `clock 140` gives tempo 140) | `hello` (MIDI null: the image unchanged) | none |
-| P | `platform_mk66_power(_hdrcheck) mk66_power_tests mk66_console_tests` | + `platform_mk66_power_hw`, `hello`, `ctest -L mk66` | `power` (the pin in three pulls: track3r-os's open M4, pull and polarity); `power press`, 2.5 s, `shot` (the bar), `power release`; `power off dry` (the stages in `log`, re-enumeration, `version`); a real hold, the VLPR off and the wake: the maintainer at the unit (USB is down while off) |
+| P | `platform_mk66_power(_hdrcheck) mk66_power_tests mk66_console_tests` | + `platform_mk66_power_hw`, `hello`, `ctest -L mk66` | `power` (the pin in three pulls: track3r-os's open M4, pull and polarity); `hil/hello_power.json` through `o3hil.py` (a 1.0 s press, released in a `finally`, never 2 s or more: the hold commits the real switch-off at `kHoldMs` = 2000 and USB goes down with it, which would strand a remote unit), the bar read as `line N/1000`; `power off dry` (the stages in `log`, re-enumeration, `version`); a real hold, the VLPR off and the wake: the maintainer at the unit (USB is down while off) |
 | MD | `platform_mk66_midi mk66_midi_service_test mk66_usb_tests mk66_console_tests`, `midi_clock_tool.py --self-test` | `hello`, `ctest -L mk66` (`hello_ramfunc`, `_usb`) | the computer as the far end of USB MIDI: notes in, then `o3audio.py record --not-silent`; `midi_clock_tool.py send DEV --profile 120:10,140:10 --start`, then `midi` reports locked and `state` tempo follows within 0.1 BPM; `measure DEV` with HELLO playing gives 24 ppqn at its tempo; `cpu` with and without; DIN: a loopback cable (out to in) placed once by the maintainer, then `midi` counters show the loop with 0 framing errors |
 
 ## 7. Integration
@@ -212,7 +212,7 @@ Memory [est, from track3r-os]:
 
 ## As built
 
-Written after slices F, MC, K and P were committed (20ccef1, 1104b85, b9e96dc) and MD was built (not committed yet). Where the code
+Written after slices F, MC, K and P were committed (20ccef1, 1104b85, b9e96dc) and MD (5937691). Where the code
 differs from the sections above:
 
 - `midi.h` (the MK66 MIDI device and its `Platform::midi` wiring) is in the MIDI library, `platform/mk66/midi/include/o3sdk/platform/mk66/midi.h`,
