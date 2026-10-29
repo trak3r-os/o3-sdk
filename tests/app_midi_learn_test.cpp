@@ -10,12 +10,15 @@
 #include <o3sdk/app/app.h>
 #include <o3sdk/app/context.h>
 #include <o3sdk/app/screen.h>
+#include <o3sdk/app/settings.h>
 #include <o3sdk/platform/host/dir_card.h>
 #include <o3sdk/platform/host/fake_midi.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/units/synth/synth.h>
 
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
 #include <memory>
 #include <string>
 #include <vector>
@@ -222,4 +225,124 @@ TEST_CASE("learn: the bindings are kept in the settings and come back at boot, a
   r.cc(5, 11, 127);  // JUMP: it works without being picked up first
   CHECK(r.norm(Synth::Sustain) == doctest::Approx(1.0f).epsilon(0.001));
   CHECK(r.state().find("setup_errors=0") != std::string::npos);
+}
+
+// ---- Stale bindings: a file that is older than the build, and CLEAR LEARN ---------------------------------------------------------------------------------------------------------------
+
+namespace {
+
+// A unit of two parameters: 0 is an ordinary value, 1 is one that applies on a confirmation (kParamApply: never learnable).
+constexpr core::ParamDesc kTwo[2] = {
+    {"LEVEL", "", nullptr, nullptr, 0.0f, 1.0f, 0.5f, 100, 10, 0, core::ParamUnit::NormPct, core::ParamCurve::Linear, core::kParamLearnable, 0},
+    {"APPLY", "", nullptr, nullptr, 0.0f, 1.0f, 0.0f, 2, 1, 0, core::ParamUnit::Int, core::ParamCurve::Linear, core::kParamApply, 0},
+};
+
+class TwoUnit final : public dsp::Unit {
+ public:
+  TwoUnit() : info_{"TWO", dsp::UnitKind::Instrument, kTwo, 2, nullptr, 0} {}
+  const dsp::UnitInfo& info() const noexcept override { return info_; }
+  void prepare(float) noexcept override {}
+  void process(const dsp::ProcessArgs& a) noexcept override {
+    for (std::uint32_t i = 0; i < a.frames; ++i) {
+      a.out_l[i] = 0.0f;
+      a.out_r[i] = 0.0f;
+    }
+  }
+  dsp::UnitInfo info_;
+};
+
+class TwoApp final : public app::App {
+ public:
+  const app::AppInfo& info() const noexcept override {
+    static constexpr app::AppInfo kInfo{"LEARN", "1"};
+    return kInfo;
+  }
+  void setup(app::Context& ctx) noexcept override {
+    id = ctx.engine().attach(unit);
+    ctx.show(screen);
+  }
+  bool midi(app::Context&, const core::MidiMessage& m) noexcept override {
+    heard.push_back(m);
+    return true;
+  }
+  TwoUnit unit;
+  Blank screen;
+  dsp::UnitId id = dsp::kNoUnit;
+  std::vector<core::MidiMessage> heard;
+};
+
+}  // namespace
+
+TEST_CASE("learn: a binding the build no longer has (a missing unit or parameter, a kParamApply one) is dropped at boot and takes no slot; take_cc and learn agree") {
+  platform::host::ScratchDir dir("learn-stale");
+  NEED(dir.ok());
+  std::filesystem::create_directories(dir.path() + "/Apps/learn");
+  app::KitValues v;
+  const auto bind = [](unsigned unit, unsigned field, unsigned cc) {
+    core::LearnBinding b;
+    b.param = core::param_id(core::ParamKind::Unit, unit, field);
+    b.cc = static_cast<std::uint8_t>(cc);
+    b.channel = 1;
+    b.mode = 1;
+    b.flags = 0;
+    return b;
+  };
+  unsigned n = 0;
+  for (unsigned i = 0; i < 12; ++i) {
+    v.learn[n++] = bind(0, 9 + i, 20 + i);  // parameters this unit does not have
+  }
+  v.learn[n++] = bind(5, 0, 40);  // a unit slot this build does not have
+  v.learn[n++] = bind(0, 1, 41);  // a parameter that is kParamApply now
+  v.learn[n++] = bind(0, 0, 42);  // good
+  v.learn[n++] = bind(0, 3, 43);
+  std::vector<std::uint8_t> file(app::settings::kMaxBytes);
+  const std::size_t size = app::settings::write(v, file.data(), file.size());
+  NEED(size != 0u);
+  {
+    std::ofstream f(dir.path() + "/Apps/learn/system.o3s", std::ios::binary);
+    f.write(reinterpret_cast<const char*>(file.data()), static_cast<std::streamsize>(size));
+  }
+  platform::host::DirCard card(dir.path());
+  TwoApp app;
+  FakeMidi midi;
+  sim::Harness h(app, nullptr, &midi, &card, "learn");
+  NEED(h.start());
+  h.run_ms(20);
+  app::Midi& api = h.runtime().context().midi();
+  CHECK(api.bindings() == 1u);  // only the good one; the 15 stale ones took no slot
+  std::uint8_t cc = 0;
+  std::uint8_t ch = 0;
+  CHECK(api.bound(app.id, 0, cc, ch));
+  CHECK(cc == 42u);
+  CHECK_FALSE(api.bound(app.id, 1, cc, ch));
+  CHECK_FALSE(api.learn(app.id, 1));  // an apply parameter is refused
+  // A controller that was a stale binding's goes to the app.
+  midi.in(Port::Usb, cc_status(0), 41, 64);
+  h.run_ms(6);
+  CHECK(app.heard.size() == 1u);
+
+  // CLEAR LEARN: the MIDI section's last row, F1 twice. (The section the screen opens on: no firmware or audio here.)
+  const auto tap = [&](Button b) {
+    h.press(b);
+    h.run_ms(1);
+    h.release(b);
+    h.run_ms(1);
+  };
+  tap(Button::Config);
+  CHECK(h.runtime().system().section() == app::SystemConfig::Section::Midi);
+  for (unsigned i = 0; i < 8; ++i) {
+    tap(Button::Down);
+  }
+  tap(Button::F1);
+  CHECK(api.bindings() == 1u);  // asked, not done
+  tap(Button::Up);              // another control takes the question back
+  tap(Button::Down);
+  tap(Button::F1);
+  CHECK(api.bindings() == 1u);
+  tap(Button::F1);
+  CHECK(api.bindings() == 0u);
+  h.run_ms(2500);  // and the settings keep it
+  NEED(h.reboot());
+  h.run_ms(20);
+  CHECK(h.runtime().context().midi().bindings() == 0u);
 }

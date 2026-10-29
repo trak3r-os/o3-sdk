@@ -23,7 +23,7 @@
 // Keys. CONFIG opens and closes it; LEFT / RIGHT change section (not while a question or a check is up); F8 is BACK (one level up, and
 // the last level closes the screen); in FIRMWARE: UP / DOWN and the encoder choose a file, F1 asks (UPDATE, YES, INSTALL), any other
 // control takes a question back; in AUDIO: UP / DOWN choose a row, the encoder and F1 change its value (SHIFT: coarse; the USB set's rows ask F1 again), F5 / F6 seek down / up while the radio is the
-// input (F5 retries a receiver that failed or did not answer); in MIDI: UP / DOWN choose a row, the encoder and F1 change its value; in DISPLAY: with one row (the theme only) the encoder, UP / DOWN
+// input (F5 retries a receiver that failed or did not answer); in MIDI: UP / DOWN choose a row, the encoder and F1 change its value (the last row, CLEAR LEARN, takes F1 twice and unbinds every learned controller); in DISPLAY: with one row (the theme only) the encoder, UP / DOWN
 // and F1 change the theme, with more UP / DOWN choose a row and the encoder and F1 change it; in an app's page: UP / DOWN choose a row, the encoder and F1 change a value (SHIFT: coarse),
 // F1 on an action asks and the next F1, within kAskMs, runs it. Past INSTALL no key acts and CONFIG does not close it.
 //
@@ -131,7 +131,7 @@ class SystemConfig {
   std::uint8_t app_row_ = 0;      // and its cursor (an index among the page's valid items)
   std::uint16_t ask_key_ = 0;     // Ask::Action: the item that waits for its second F1
   // A change that waits for its second F1: the USB layout (the proposal is want_*), or the card's share or eject.
-  enum class Ask : std::uint8_t { None, Layout, Share, Eject, Action };
+  enum class Ask : std::uint8_t { None, Layout, Share, Eject, Action, Learn };
   Ask ask_ = Ask::None;
   core::Tick ask_until_ = 0;
   bool want_audio_ = true;

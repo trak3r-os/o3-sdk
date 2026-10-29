@@ -766,7 +766,11 @@ TEST_CASE("midi: the MIDI section of the system Config edits the settings, row b
   r.tap(Button::Down);  // TRANSPORT IN
   r.tap(Button::F1);
   CHECK_FALSE(r.config().transport_in);
-  r.tap(Button::Down);  // (the last row: stays)
+  r.tap(Button::Down);  // CLEAR LEARN, the last row (slice CP): F1 only asks, and it stays there
+  r.tap(Button::F1);
+  r.tap(Button::Down);
+  CHECK_FALSE(r.config().transport_in);
+  r.tap(Button::Up);  // TRANSPORT IN again
   r.tap(Button::F1);
   CHECK(r.config().transport_in);
 

@@ -237,6 +237,17 @@ bool screenshot_has_card() noexcept { return g_shot != nullptr && g_shot->servic
 bool screenshot_active() noexcept { return g_shot != nullptr && g_shot->service.active(); }
 #endif
 
+// What the files service waits for (Platform::card_claim): the card is held by the system, not the app's: the firmware update path, or a screenshot with its file open. Without it a settings autosave or
+// an app's save could start in the middle of a capture and the card's one open file would be fought over.
+bool card_held_by_system() noexcept {
+#if O3SDK_CONSOLE && !O3SDK_AUDIO_TEST
+  if (screenshot_has_card()) {
+    return true;
+  }
+#endif
+  return mk66::appimg::firmware_update_active();
+}
+
 // OS-POWER P1: the power-off latch (stage A of the shutdown, never cleared) and the end of its stage E (the display dark and held, the chip in power-down), from appimg (console/src/appimg.cpp).
 // An image without the console has no Power switch: neither is ever true.
 bool powering_off() noexcept {
@@ -500,9 +511,9 @@ int main() {
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
-  // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
+  // The card: the files service reads through the volume and writes through g_writer; while the system holds the card (the firmware update path, a screenshot being saved: card_held_by_system) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
-                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture,
+                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &card_held_by_system, &capture,
                                        recorder, usb_device, &set_backlight, g_crash_line};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.

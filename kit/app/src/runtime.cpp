@@ -135,7 +135,9 @@ Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
   ctx_.files_.bind(platform_.storage, platform_.writer, platform_.files_work, platform_.app_id != nullptr ? platform_.app_id : o3sdk_app_id(), platform_.card_claim);
 }
 
-// What the kit keeps for the app (settings.h) as it is now, and putting loaded ones in place.
+// What the kit keeps for the app (settings.h) as it is now, and putting loaded ones in place. Built every pass for the files service (it compares it with what it last saved): 368 bytes of stores
+// and one config_get() for each value item of the app's pages (at most 32; HELLO has 3), about 0.5 us on the unit by estimate (not measured: it runs once a pass of the main loop, not in the render).
+// An app's config_get() can change without telling the kit, so there is no dirty flag to keep it from being asked.
 KitValues Runtime::kit_values() const noexcept {
   KitValues v;
   v.theme = ctx_.theme_;
@@ -205,6 +207,9 @@ void Runtime::apply_kit_audio(const KitValues& v) noexcept {
 }
 
 Files::SettingsLoad Runtime::load_settings() noexcept {
+  if (!started_) {
+    return Files::SettingsLoad::NotRead;  // the app's units and pages are not there until start(): the learn bindings and the page values could not be checked against them
+  }
   KitValues v = kit_values();  // (the app's defaults: App::setup has run)
   const Files::SettingsLoad result = ctx_.files_.load_settings(v);
   if (result == Files::SettingsLoad::Loaded || result == Files::SettingsLoad::FromBackup) {
@@ -426,7 +431,7 @@ void Runtime::update_leds() noexcept {
     ctx_.screen_->leds(ctx_, leds_);
   }
   if (platform_.leds != nullptr) {
-    const unsigned lights = ctx_.pad_lights_;
+    const unsigned lights = platform_.backlight != nullptr ? ctx_.pad_lights_ : 2u;  // (the PAD LIGHTS row is there on the same condition: a platform with a backlight and pad LEDs)
     for (unsigned i = 0; i < kPadCount; ++i) {
       platform_.leds->set(i, lights >= 2u ? leds_.get(i) : scale_pad_level(leds_.get(i), lights));
     }

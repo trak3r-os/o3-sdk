@@ -38,11 +38,29 @@ class ScopedWriter final : public hal::storage::StorageWriter {
 
   hal::storage::WriteStatus gate() noexcept override { return inner_->gate(); }
   hal::storage::WriteStatus make_dir(const char* path) noexcept override { return allow(path) ? inner_->make_dir(path) : hal::storage::WriteStatus::BadPath; }
-  hal::storage::WriteStatus create(const char* path) noexcept override { return allow(path) ? inner_->create(path) : hal::storage::WriteStatus::BadPath; }
+  hal::storage::WriteStatus create(const char* path) noexcept override {
+    if (!allow(path)) {
+      return hal::storage::WriteStatus::BadPath;
+    }
+    const hal::storage::WriteStatus s = inner_->create(path);
+    opened_ = s == hal::storage::WriteStatus::Ok;  // (a refused create opens nothing: the file open on the writer is somebody else's)
+    return s;
+  }
   hal::storage::WriteStatus write(const void* src, std::size_t n) noexcept override { return inner_->write(src, n); }
-  hal::storage::WriteStatus finish() noexcept override { return inner_->finish(); }
-  void abandon() noexcept override { inner_->abandon(); }
-  bool writing() const noexcept override { return inner_->writing(); }
+  hal::storage::WriteStatus finish() noexcept override {
+    const hal::storage::WriteStatus s = inner_->finish();
+    opened_ = false;
+    return s;
+  }
+  // Closes only a file this scope opened: two scopes share one writer (the files service's and the screenshot's), and neither may close the other's file. `writing()` is the same: it says whether
+  // *this* scope's file is open, so a job that finds the writer busy with another's file has nothing of its own to repair.
+  void abandon() noexcept override {
+    if (opened_) {
+      inner_->abandon();
+      opened_ = false;
+    }
+  }
+  bool writing() const noexcept override { return opened_ && inner_->writing(); }
   hal::storage::WriteStatus rename(const char* from, const char* to) noexcept override {
     return allow(from) && allow(to) ? inner_->rename(from, to) : hal::storage::WriteStatus::BadPath;
   }
@@ -61,6 +79,7 @@ class ScopedWriter final : public hal::storage::StorageWriter {
   hal::storage::StorageWriter* inner_ = nullptr;
   const char* id_ = "";
   Scope scope_ = Scope::App;
+  bool opened_ = false;  // this scope's create() succeeded and the file is not finished or abandoned
   unsigned refused_ = 0;
 };
 

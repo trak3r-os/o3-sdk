@@ -101,7 +101,7 @@ hal::midi::Config midi_step(hal::midi::Config c, unsigned row, int steps, bool w
   return hal::midi::sanitized(c);
 }
 
-void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row) noexcept {
+void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row, unsigned bindings, bool asking) noexcept {
   const ui::Theme& t = r.theme();
   const ui::Metrics& m = t.metrics;
   const int x = grid.x;
@@ -120,8 +120,25 @@ void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Conf
     r.text(value_x, ui::caps_y(t, Face::Data, y_of(static_cast<int>(i)), pitch), text.c_str(), on ? Color::SelText : Color::Text, Face::Data);
   }
 
+  // CLEAR LEARN, the row after the config rows: how many controllers are bound, and what F1 does.
+  {
+    const bool on = row == kMidiRowCount;
+    const int y = y_of(static_cast<int>(kMidiRowCount));
+    if (on) {
+      r.highlight_row({x - m.pad, y, grid.w + 2 * m.pad, pitch});
+    }
+    r.text(x + m.pad, ui::caps_y(t, Face::Label, y, pitch), "CLEAR LEARN", on ? Color::SelText : Color::TextDim, Face::Label);
+    text.clear();
+    if (asking) {
+      text.assign("F1 AGAIN TO CLEAR ");
+    }
+    append_uint(text, bindings);
+    text.append(" BOUND");
+    r.text(value_x, ui::caps_y(t, Face::Data, y, pitch), text.c_str(), on ? Color::SelText : Color::Text, Face::Data);
+  }
+
   // The device under the rows: what it makes of the settings, and the traffic.
-  const int status_line = static_cast<int>(kMidiRowCount) + 1;
+  const int status_line = static_cast<int>(kMidiRowCount) + 2;
   text.clear();
   if (!c.follow) {
     text.assign("INTERNAL CLOCK");
@@ -148,7 +165,7 @@ void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Conf
   r.text(x + m.pad, ui::caps_y(t, Face::Label, y_of(status_line + 1), pitch), "TRAFFIC", Color::TextDim, Face::Label);
   r.text(value_x, ui::caps_y(t, Face::Data, y_of(status_line + 1), pitch), traffic.c_str(), Color::Text, Face::Data);
 
-  r.text(x, ui::caps_y(t, Face::Label, y_of(status_line + 3), pitch), "UP / DOWN choose a row. The encoder and F1 change it. Routed notes play the app's instrument.",
+  r.text(x, ui::caps_y(t, Face::Label, y_of(status_line + 2), pitch), "UP / DOWN choose a row. The encoder and F1 change it. CLEAR LEARN: F1 twice.",
          Color::TextDim, Face::Label);
 }
 

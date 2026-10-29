@@ -496,3 +496,15 @@ TEST_CASE("config pages: scenarios/config_pages.txt and picker.txt run as they a
   }
 }
 #endif
+
+TEST_CASE("config pages: pad scaling follows the PAD LIGHTS row's condition (no backlight, no scaling), and load_settings before start() does nothing") {
+  Rig r(false);  // no backlight: no PAD LIGHTS row
+  r.h->runtime().context().set_pad_lights(0);
+  r.h->run_ms(80);
+  CHECK(r.h->leds().level(0) == 255);  // the setting is not applied where the row that sets it is not shown
+
+  PagesApp a;
+  sim::Harness h(a);
+  CHECK(h.runtime().load_settings() == app::Files::SettingsLoad::NotRead);
+  REQUIRE(h.start());
+}

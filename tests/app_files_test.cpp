@@ -788,7 +788,7 @@ TEST_CASE("files: a protected, unsupported or computer-held card, and the update
   claim_flag = true;
   CHECK(rig.files.card() == Files::Card::InUse);
   CHECK_FALSE(rig.files.save("", "b.o3a", data.data(), data.size()));
-  CHECK(rig.failed("FIRMWARE UPDATE RUNNING"));
+  CHECK(rig.failed("CARD IN USE BY THE SYSTEM"));
   claim_flag = false;
   CHECK(rig.files.card() == Files::Card::Ready);
   REQUIRE(rig.files.save("", "b.o3a", data.data(), data.size()));

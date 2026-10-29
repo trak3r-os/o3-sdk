@@ -61,7 +61,7 @@ struct Platform {
   hal::midi::Device* midi = nullptr;
   // The SD card as the app's files (files.h, docs/M2C-PLAN.md section 3): `storage` reads it, `writer` writes it (hal/storage_write.h: only the files service, the writers and the
   // platform's main name that header), `files_work` is the jobs' memory (files_work.h; the unit's image places it in the SDRAM), `app_id` the folder name of Apps/<id>/ (null: o3sdk_app_id(),
-  // which the app's build generates), `card_claim` says that something else holds the card (the firmware update path) while it returns true. Any of the first three null: no files, every
+  // which the app's build generates), `card_claim` says that something else holds the card (the firmware update path, a screenshot being saved) while it returns true. Any of the first three null: no files, every
   // call of Context::files() is refused with "NO CARD", and the kit's settings are not kept (a test rig, an image without a card).
   hal::storage::Storage* storage = nullptr;
   hal::storage::StorageWriter* writer = nullptr;
@@ -159,7 +159,7 @@ class Runtime {
   }
   // At boot, once the card is mounted (after start(): App::setup has set the app's defaults): reads the kit's settings from Apps/<app>/system.o3s and applies them over those defaults, the
   // theme and the MIDI settings (docs/formats/o3sdk-settings.md). One bounded read. A missing, damaged or newer-major file leaves the defaults. From then on a change is written 1.5 s after the
-  // last one (and at once when the power-off begins); nothing is written for what the app set in setup(). Without a card capability: Unavailable, and nothing is kept.
+  // last one (and at once when the power-off begins); nothing is written for what the app set in setup(). Without a card capability: Unavailable, and nothing is kept. Call it after start() (the learn bindings and the page values are checked against the units and pages App::setup made); before it, it does nothing and returns NotRead.
   Files::SettingsLoad load_settings() noexcept;
 
  private:

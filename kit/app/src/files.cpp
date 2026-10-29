@@ -161,7 +161,7 @@ const char* Files::card_text(Card c, bool writes) noexcept {
   switch (c) {
     case Card::None: return "NO CARD";
     case Card::OnComputer: return "CARD ON COMPUTER - EJECT FIRST";
-    case Card::InUse: return "FIRMWARE UPDATE RUNNING";
+    case Card::InUse: return "CARD IN USE BY THE SYSTEM";
     case Card::ReadOnly: return writes ? "CARD WRITE PROTECTED" : nullptr;
     case Card::Unsupported: return writes ? "EXFAT CARD NOT SUPPORTED" : nullptr;
     case Card::Ready: return nullptr;

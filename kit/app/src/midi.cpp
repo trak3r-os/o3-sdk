@@ -190,8 +190,8 @@ Midi::Learned Midi::take_cc(const core::MidiMessage& m) noexcept {
     const auto unit = static_cast<dsp::UnitId>(core::param_index(b.param));
     const auto field = static_cast<std::uint16_t>(core::param_field(b.param));
     const core::ParamDesc* d = unit < engine_->unit_count() ? engine_->param_desc(unit, field) : nullptr;
-    if (d == nullptr) {
-      continue;  // a binding of a unit this build does not have: the controller goes to the app
+    if (d == nullptr || (d->flags & core::kParamApply) != 0u) {
+      continue;  // a binding of a unit or parameter this build does not have, or one that is never learnable: the controller goes to the app
     }
     moved = true;
     const float now = engine_->param(unit, field);
@@ -217,10 +217,24 @@ void Midi::fill(KitValues& v) const noexcept {
   }
 }
 
+// The bindings of the file over the running build's units: a binding whose unit or parameter this build does not have, or that is kParamApply now (the file is older than the unit), is dropped and
+// takes no slot; the rest keep their order. (The next save writes what is left.)
 void Midi::restore(const KitValues& v) noexcept {
+  unsigned n = 0;
   for (unsigned i = 0; i < kMaxBindings; ++i) {
-    slot_[i] = v.learn[i];
+    slot_[i] = core::LearnBinding{};
     state_[i] = core::LearnRuntime{};
+  }
+  for (unsigned i = 0; i < kMaxBindings; ++i) {
+    const core::LearnBinding& b = v.learn[i];
+    if (core::learn_empty(b)) {
+      continue;
+    }
+    const auto unit = static_cast<dsp::UnitId>(core::param_index(b.param));
+    const core::ParamDesc* d = engine_ != nullptr && unit < engine_->unit_count() ? engine_->param_desc(unit, static_cast<std::uint16_t>(core::param_field(b.param))) : nullptr;
+    if (d != nullptr && (d->flags & core::kParamApply) == 0u) {
+      slot_[n++] = b;
+    }
   }
 }
 

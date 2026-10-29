@@ -7,7 +7,9 @@
 
 #include "mk66_storage_need.h"
 
+#include <o3sdk/app/files.h>
 #include <o3sdk/app/files_work.h>
+#include <o3sdk/platform/host/fakes.h>
 #include <o3sdk/hal/screenshot_file.h>
 #include <o3sdk/platform/host/dir_card.h>
 #include <o3sdk/platform/mk66/usb/input_hold.h>
@@ -23,6 +25,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -673,4 +676,82 @@ TEST_CASE("screenshot service: through the kit's Screenshots scope the file is t
   CHECK(scope.make_dir("Apps/hello") == o3sdk::hal::storage::WriteStatus::BadPath);
   CHECK(scope.create("Samples/_o3save.tmp") == o3sdk::hal::storage::WriteStatus::BadPath);
   CHECK(scope.refused() == 2u);
+}
+
+// ---- The files service and the screenshot share the card's one open file: the service's claim holds while a capture has it, and neither scope closes the other's file -------------------------
+
+namespace {
+const ScreenshotService* g_claim_svc = nullptr;
+bool claim_while_capturing() noexcept { return g_claim_svc != nullptr && g_claim_svc->capturing(); }
+}  // namespace
+
+TEST_CASE("screenshot service: a settings save asked for during a capture waits for it, both files end whole, the save done after the screenshot") {
+  Rig r;
+  o3sdk::app::ScopedWriter shots;
+  shots.bind(&r.card, "hello", o3sdk::app::ScopedWriter::Scope::Screenshots);
+  r.svc.attach(r.hostx, r.card, shots, r.buf, kRegionAddr, kRegionBytes);
+  g_claim_svc = &r.svc;
+  auto work = std::make_unique<o3sdk::app::Files::Work>();
+  o3sdk::app::Files files;
+  files.bind(&r.card, &r.card, work.get(), "hello", &claim_while_capturing);
+  NEED(files.available());
+  host::FakeClock clock;
+  clock.set(1000);
+  o3sdk::app::KitValues values;
+  o3sdk::app::KitValues read = values;
+  (void)files.load_settings(read);  // (the settings are written only once read, or found missing)
+  const auto files_pass = [&] {
+    clock.advance(o3sdk::core::kTicksPerMs);
+    files.poll(clock, o3sdk::app::Files::kJobBudgetUs, values);
+  };
+  NEED(r.press_and_release());
+  // Run until the capture has the card, then change a setting and ask for the write at once.
+  for (unsigned i = 0; i < 20000 && !r.svc.capturing(); ++i) {
+    r.pass();
+    files_pass();
+  }
+  NEED(r.svc.capturing());
+  values.midi.channel = 7;
+  files.flush_settings();
+  const std::string settings_file = r.scratch.path() + "/Apps/hello/system.o3s";
+  bool saved_during = false;
+  for (unsigned i = 0; i < 20000 && r.svc.active(); ++i) {
+    r.pass();
+    files_pass();
+    saved_during = saved_during || (r.svc.capturing() && std::filesystem::exists(settings_file));
+  }
+  CHECK_FALSE(saved_during);  // nothing was written to the card while the screenshot had it
+  CHECK_FALSE(r.svc.active());
+  CHECK(r.svc.saved() == 1u);
+  CHECK(r.svc.failed() == 0u);
+  expect_image(r.file("SHOT_0001.bmp"));  // the picture was not closed under the capture
+  for (unsigned i = 0; i < 3000 && files.settings_pending(); ++i) {
+    files_pass();
+  }
+  CHECK_FALSE(files.settings_pending());
+  CHECK(std::filesystem::exists(settings_file));  // the save came, after the screenshot
+  CHECK(r.card.violations() == 0u);
+  g_claim_svc = nullptr;
+}
+
+TEST_CASE("screenshot service: a scope closes only the file it opened") {
+  host::ScratchDir dir("scope-own");
+  NEED(dir.ok());
+  host::DirCard card(dir.path());
+  NEED(card.mount() == o3sdk::hal::storage::Status::Ok);
+  o3sdk::app::ScopedWriter app_scope;
+  o3sdk::app::ScopedWriter shot_scope;
+  app_scope.bind(&card, "hello");
+  shot_scope.bind(&card, "hello", o3sdk::app::ScopedWriter::Scope::Screenshots);
+  using WS = o3sdk::hal::storage::WriteStatus;
+  CHECK(shot_scope.make_dir("Screenshots") == WS::Ok);
+  CHECK(shot_scope.create("Screenshots/_o3save.tmp") == WS::Ok);
+  CHECK(shot_scope.writing());
+  CHECK_FALSE(app_scope.writing());  // the file open on the writer is not this scope's
+  app_scope.abandon();               // a repair by the other side
+  CHECK(card.writing());             // the screenshot's file is still open
+  CHECK(shot_scope.writing());
+  shot_scope.abandon();
+  CHECK_FALSE(card.writing());
+  CHECK_FALSE(shot_scope.writing());
 }

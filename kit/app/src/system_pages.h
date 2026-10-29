@@ -28,7 +28,8 @@ inline constexpr unsigned kMidiRowCount = 8;
 // Row `row` (0 .. kMidiRowCount - 1) of `c` stepped by `steps` (positive or negative): a channel or the ports move by that many (clamped, or
 // wrapped round with `wrap`), a switch toggles for any step.
 hal::midi::Config midi_step(hal::midi::Config c, unsigned row, int steps, bool wrap) noexcept;
-void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row) noexcept;
+// One row after the config rows: CLEAR LEARN (the number of MIDI learn bindings, and F1 twice clears them). `bindings` and `asking` (the first F1 was pressed) are what it shows.
+void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row, unsigned bindings, bool asking) noexcept;
 
 // The AUDIO page (system_audio_page.cpp): INPUT, GAIN and MONITOR, then FREQ, REGION and SEEK while the radio is the input (a platform with a capture device), then USB AUDIO, PROFILE, RETURN
 // and RETURN LEVEL (a platform with a USB audio device).

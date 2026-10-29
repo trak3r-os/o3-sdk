@@ -64,7 +64,7 @@ const char* card_state_text(Files::Card c) noexcept {
     case Files::Card::ReadOnly: return "WRITE PROTECTED";
     case Files::Card::Unsupported: return "EXFAT: NOT SUPPORTED";
     case Files::Card::OnComputer: return "ON THE COMPUTER - EJECT FIRST";
-    case Files::Card::InUse: return "IN USE (FIRMWARE UPDATE)";
+    case Files::Card::InUse: return "IN USE BY THE SYSTEM";
   }
   return "";
 }
@@ -333,11 +333,29 @@ bool SystemConfig::firmware_input(Context& ctx, const Input& in) noexcept {
 
 // UP / DOWN move the cursor over the rows; the encoder steps the row's value (a channel by the detents, clamped), F1 steps it by one and wraps.
 bool SystemConfig::midi_input(Context& ctx, const Input& in) noexcept {
-  const int last = static_cast<int>(kMidiRowCount) - 1;
+  const int last = static_cast<int>(kMidiRowCount);  // (the row after them is CLEAR LEARN)
   int row = midi_row_;
   if (in.press(Button::Up) || in.press(Button::Down)) {
     row += in.press(Button::Down) ? 1 : -1;
     midi_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row > last ? last : row));
+    disarm();
+    return true;
+  }
+  if (midi_row_ == kMidiRowCount) {  // CLEAR LEARN: F1, then F1 again within kAskMs
+    if (!in.press(Button::F1) || in.shift) {
+      if (in.turn()) {
+        disarm();  // a turn takes the question back
+      }
+      return in.turn();
+    }
+    if (ask_ == Ask::Learn) {
+      disarm();
+      ctx.midi().unlearn_all();
+      strip("LEARNED CONTROLLERS CLEARED", -1, kNoticeMs, ctx.now());
+    } else {
+      ask_ = Ask::Learn;
+      ask_until_ = ctx.now() + core::ticks_from_ms(kAskMs);
+    }
     return true;
   }
   int steps = 0;
@@ -800,7 +818,7 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
       break;
     }
     case Section::Midi:
-      draw_midi_page(r, grid, ctx.midi().config(), ctx.midi().status(), midi_row_);
+      draw_midi_page(r, grid, ctx.midi().config(), ctx.midi().status(), midi_row_, ctx.midi().bindings(), ask_ == Ask::Learn);
       break;
     case Section::Display: {
       const unsigned rows = display_rows();
@@ -930,6 +948,10 @@ void SystemConfig::soft_keys(const Context& ctx, SoftKeys& keys) const noexcept 
       keys.label[7] = "CLOSE";
       break;
     case Section::Midi:
+      keys.label[0] = midi_row_ == kMidiRowCount ? (ask_ == Ask::Learn ? "CONFIRM" : "CLEAR") : "NEXT";
+      keys.hot = ask_ == Ask::Learn ? 1u : 0u;
+      keys.label[7] = "CLOSE";
+      break;
     case Section::Display:
       keys.label[0] = "NEXT";
       keys.label[7] = "CLOSE";
