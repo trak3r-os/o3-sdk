@@ -173,6 +173,7 @@ const char* Files::card_text(Card c, bool writes) noexcept {
 void Files::note_card() noexcept {
   const Card c = card();
   if (c == Card::None || c == Card::OnComputer) {
+    resume_ = c == Card::OnComputer && (resume_ || sread_ == SettingsRead::Writable);  // (a card that is out is another card when it comes back: it is read)
     sread_ = SettingsRead::NotRead;  // the card is gone: whatever comes next is read before anything is written to it
   }
   const std::uint32_t id = c == Card::None || c == Card::InUse ? 0u : writer_->card_id();
@@ -995,6 +996,9 @@ void Files::poll(const hal::Clock& clock, std::uint32_t budget_us, const KitValu
   note_card();
   const auto now_ms = static_cast<std::uint32_t>(clock.uptime_ms());
   track_settings(values, now_ms);
+  if (!(seen_ && sig_ != saved_) && kind_ != Kind::Settings) {
+    flush_ = false;
+  }
   reap();
   if (kind_ == Kind::Settings && pend_ != Kind::None && slot_ >= 0 && !w_->save.past_write()) {
     jobs_.cancel(static_cast<unsigned>(slot_));  // the settings give way to the app: they are asked again once it is done
@@ -1003,9 +1007,12 @@ void Files::poll(const hal::Clock& clock, std::uint32_t budget_us, const KitValu
   if (kind_ == Kind::None) {
     if (pend_ != Kind::None) {
       launch();
+    } else if (resume_ && sread_ == SettingsRead::NotRead && card() == Card::Ready && read_id_ == writer_->card_id() && seen_ && sig_ != saved_) {
+      sread_ = SettingsRead::Writable;  // the same card, back from the computer, with settings changed meanwhile: they are the newer, and go to it after the debounce
+      resume_ = false;
     } else if (sread_ == SettingsRead::NotRead || read_id_ != writer_->card_id()) {
       poll_settings_read(sig_);  // (before anything is written to this card, or after it was changed for another)
-    } else if (sread_ == SettingsRead::Writable && seen_ && sig_ != saved_ && !gave_up_ && (power_ || now_ms - moved_ms_ >= kSettingsDebounceMs) && card() == Card::Ready) {
+    } else if (sread_ == SettingsRead::Writable && seen_ && sig_ != saved_ && !gave_up_ && (power_ || flush_ || now_ms - moved_ms_ >= kSettingsDebounceMs) && card() == Card::Ready) {
       launch_settings();  // (a card that cannot be written now keeps them: they go when it can)
     }
   }
@@ -1136,6 +1143,7 @@ Files::SettingsLoad Files::read_settings_file(KitValues& values, bool& retry) no
     }
   }
   sread_ = protect ? SettingsRead::Protected : SettingsRead::Writable;
+  resume_ = false;
   read_id_ = writer_->card_id();
   settings_note_ = protect;
   if (result == SettingsLoad::Loaded || result == SettingsLoad::FromBackup || !seen_) {

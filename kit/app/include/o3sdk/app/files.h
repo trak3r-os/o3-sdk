@@ -173,6 +173,7 @@ class Files {
   // The card was taken out, put in or handed over (the platform's card watch): generation() moves.
   void card_changed() noexcept {
     ++generation_;
+    resume_ = resume_ || sread_ == SettingsRead::Writable;  // (the same card back from the computer with settings still due: poll() keeps them, see resume_)
     sread_ = SettingsRead::NotRead;  // a card put in: its settings are read before anything is written to it
   }
 
@@ -194,6 +195,14 @@ class Files {
 
   const Stats& stats() const noexcept { return stats_; }
   bool settings_dirty() const noexcept { return seen_ && sig_ != saved_; }
+  // The kit's settings are waiting for a write that will happen (changed since written, on a card that takes writes) or are being written: what CARD AS DISK waits out before it hands the card over.
+  bool settings_pending() const noexcept {
+    return kind_ == Kind::Settings || (seen_ && sig_ != saved_ && sread_ == SettingsRead::Writable && !gave_up_ && card() == Card::Ready);
+  }
+  // A job of the app (a save, a load, a listing, a request waiting to start), not the kit's own settings write.
+  bool app_busy() const noexcept { return (kind_ != Kind::None && kind_ != Kind::Settings) || pend_ != Kind::None; }
+  // The settings that are due are written in the next pass, without the rest of the 1.5 s of quiet.
+  void flush_settings() noexcept { flush_ = true; }
 
  private:
   enum class Kind : std::uint8_t { None, Save, SaveStream, Wav, Load, LoadStream, List, Marker, Settings };
@@ -319,12 +328,16 @@ class Files {
   enum class SettingsRead : std::uint8_t { NotRead, Writable, Protected };  // this card's file: not read yet, read (or none), or one that must not be overwritten
   SettingsRead sread_ = SettingsRead::NotRead;
   std::uint32_t read_id_ = 0;  // card_id() of the card the file was read from
+  // The card was Writable and went (to the computer, or out): when the SAME card is back (read_id_) and the values are still due (they changed since they were written: edits made while the
+  // computer had it), its file is not read over them: they are kept and written after the debounce (docs/M2C-PLAN.md section 7). Cleared by a read and when the card is gone.
+  bool resume_ = false;
   KitValues loaded_values_;
   bool loaded_pending_ = false;
   bool settings_note_ = false;  // the strip owes the user the word that their file is newer and will not be written
   bool seen_ = false;
   std::uint32_t moved_ms_ = 0;
   bool power_ = false;
+  bool flush_ = false;  // flush_settings(): cleared when nothing is due
   bool gave_up_ = false;
   SettingsLoad settings_load_ = SettingsLoad::NotRead;
   settings::Result settings_result_ = settings::Result::Ok;

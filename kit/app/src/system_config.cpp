@@ -527,7 +527,7 @@ bool SystemConfig::card_input(Context& ctx, const Input& in) noexcept {
         refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Unavailable);
       } else if (!d.card_present) {
         refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::NoCard);
-      } else if (d.busy || ctx.files().busy()) {
+      } else if (ctx.files().app_busy()) {  // (the kit's own settings write is waited for, not refused)
         refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Busy);
       } else if (u.changing()) {
         refused = hal::usb_audio::disk_refusal_text(hal::usb_audio::DiskRefusal::Layout);

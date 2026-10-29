@@ -297,7 +297,13 @@ void Runtime::poll() noexcept {
 
   poll_midi();
   ctx_.audio_in_.poll(ctx_.ms_);
-  ctx_.usb_audio_.poll();
+  ctx_.usb_audio_.poll(ctx_.ms_);
+  {
+    const hal::usb_audio::DiskRefusal refused = ctx_.usb_audio_.take_share_refusal();  // a share that waited for the settings and was then refused
+    if (refused != hal::usb_audio::DiskRefusal::None) {
+      system_strip(hal::usb_audio::disk_refusal_text(refused), -1, SystemConfig::kNoticeMs);
+    }
+  }
   if (platform_.recorder != nullptr) {  // the Input tap hears the line's channel map as the engine does (hal/record.h)
     platform_.recorder->set_line_map(static_cast<hal::record::LineMap>(ctx_.audio_in_.channel_map()));
   }

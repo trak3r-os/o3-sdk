@@ -12,8 +12,10 @@
 //   they are (1) the engine's input, replacing the codec's block, when the audio in's source is Usb (the app layer says so: route_return_to_input), so a unit, a hook or the recorder hears
 //   it, and (2) added to the output AFTER the app's block at return_level(), with saturation: outside the master inserts, and no take, stem or scope sees it. The pull happens whatever the
 //   source and the level, so the ring never overruns. A silenced block (kFlagSilence) gets no return.
-//   COST. Idle (no stream, no Usb source): two relaxed loads and a branch per block (one more when the engine's mask has to be put back), nothing else; active_blocks() counts the blocks
-//   that did more and a test holds it at 0. Stems on: Engine's staging (feature_work().stem_frames) plus the tap's sum, about 130 cycles a slot [est]; the return on: the pull (about 1,100) and
+//   COST. Idle (no stream, no Usb source): five relaxed loads (the tap's enable, the return flag, the Usb-source flag, the engine pointer, the engine's mask), their branches and one indirect call
+//   (the app's callback), under 50 cycles [est]; active_blocks() counts the blocks that did more and a test holds it at 0.
+//   THE SILENCED BLOCK. The stems come from the engine, which renders a block whatever the pipeline's flags say, while the main output is zeroed under kFlagSilence (an underrun's mute): the master
+//   channels of the stream keep carrying the engine's audio then, where the old master-only tap read io.out and carried the zeros. The return is not mixed into a silenced block. Stems on: Engine's staging (feature_work().stem_frames) plus the tap's sum, about 130 cycles a slot [est]; the return on: the pull (about 1,100) and
 //   the mix (about 1,000) [est, skill rt-optimize: measured on the unit later].
 //
 // Contexts (one writer per datum). Render (priority kRender): block(); it owns the tap's pool, the return planes and the gain's ramp. USB interrupt (64): streams_changed() (atomic stores
@@ -137,10 +139,10 @@ class UsbAudioService final : public hal::usb_audio::Device {
   std::atomic<usb::ReturnReader*> reader_{nullptr};
   std::atomic<bool> return_on_{false};
   std::atomic<bool> input_usb_{false};
-  std::atomic<std::int32_t> gain_q16_{65536};  // the return's level, Q16 (unity at the start: what the computer plays is heard)
+  std::atomic<std::int32_t> gain_q16_{0};  // the return's level, Q16 (0 at the start: the return is drained, not heard, until the user turns RETURN LEVEL up)
   hal::audio::BlockCallback inner_{nullptr, nullptr};
   // render only
-  std::int32_t gain_now_q16_ = 65536;  // where the ramp is (the level reached at the end of the last block)
+  std::int32_t gain_now_q16_ = 0;  // where the ramp is (the level reached at the end of the last block)
   alignas(4) std::int16_t ret_[2][hal::audio::kBlock] = {};
   alignas(4) std::int16_t in_[hal::audio::kBlockSamples] = {};  // the engine's input when it is the return
   std::atomic<std::uint32_t> active_{0};

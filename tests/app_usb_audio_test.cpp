@@ -70,10 +70,11 @@ class ProbeApp final : public app::App {
 };
 
 struct Rig {
-  explicit Rig(bool with_usb = true, bool with_card = true, bool with_capture = false, const char* tag = "app-usb", const std::string& dir = std::string())
+  explicit Rig(bool with_usb = true, bool with_card = true, bool with_capture = false, const char* tag = "app-usb", const std::string& dir = std::string(), bool fall_back = false)
       : own_dir(std::make_unique<host::ScratchDir>(tag)),
         card(dir.empty() ? own_dir->path() : dir),
         h(app, nullptr, nullptr, with_card ? &card : nullptr, nullptr, with_capture ? &cap : nullptr, with_usb ? &usb : nullptr) {
+    usb.fall_back(fall_back);
     started = h.start();
   }
   std::unique_ptr<host::ScratchDir> own_dir;
@@ -136,13 +137,14 @@ TEST_CASE("usb audio app: the image boots in AUDIO, P8, duplex with the master o
   CHECK(r.ua().audio());
   CHECK(r.ua().profile() == hu::Profile::P8);
   CHECK(r.ua().duplex());
-  CHECK(r.ua().return_level() == 100u);
+  CHECK(r.ua().return_level() == 0u);  // the return is drained, not heard, until the user raises it
+  CHECK(r.usb.device().return_level() == 0.0f);
   for (unsigned c = 0; c < 6u; ++c) {
     CHECK(r.ua().stem(c) == 0u);
   }
   CHECK(r.ua().stem(6) == hu::kSourceMasterL);
   CHECK(r.ua().stem(7) == hu::kSourceMasterR);
-  CHECK(r.has("usb=P8 dup=1 ret=100 strm=0 disk=idle"));
+  CHECK(r.has("usb=P8 dup=1 ret=0 strm=0 disk=idle"));
   r.tap(Button::Config);
   CHECK(r.has("section=audio"));
 }
@@ -204,10 +206,10 @@ TEST_CASE("usb audio app: RETURN LEVEL is a plain row (the encoder), kept per ce
   Rig r;
   REQUIRE(r.started);
   r.config_row(3);
-  r.h.turn(-30);
+  r.h.turn(30);
   r.h.run_ms(2);
-  CHECK(r.ua().return_level() == 70u);
-  CHECK(r.usb.device().return_level() == doctest::Approx(0.7f));
+  CHECK(r.ua().return_level() == 30u);
+  CHECK(r.usb.device().return_level() == doctest::Approx(0.3f));
   r.ua().set_return_level(250);
   CHECK(r.ua().return_level() == 100u);
   r.ua().set_return_level(0);
@@ -293,6 +295,7 @@ TEST_CASE("usb audio app: CARD AS DISK gives the card to the computer through tw
   CHECK(r.has("card=ready"));
   CHECK(r.has("disk=idle"));
   r.h.run_ms(2500);
+  CHECK(r.ctx().theme() == ui::ThemeId::White);  // what was changed while the card was out is kept, not read over from the card's older file
   CHECK_FALSE(r.ctx().files().settings_dirty());  // written after the eject
   CHECK(r.ctx().files().save("", "a.o3a", kData, 1));
   r.h.run_ms(100);
@@ -302,6 +305,59 @@ TEST_CASE("usb audio app: CARD AS DISK gives the card to the computer through tw
   r.tap(Button::F1);
   CHECK_FALSE(r.ua().read_only());
   CHECK(r.card.violations() == 0u);
+}
+
+TEST_CASE("usb audio app: a share asked within the debounce of a settings edit waits for the write, and the card is handed over with the file written (no rollback)") {
+  Rig r;
+  REQUIRE(r.started);
+  r.h.run_ms(20);
+  r.ctx().set_theme(ui::ThemeId::White);
+  r.h.run_ms(5);
+  CHECK(r.ctx().files().settings_dirty());
+  CHECK(r.ua().share_disk() == hu::DiskRefusal::None);  // taken: it waits
+  CHECK(r.ua().disk().phase == hu::DiskPhase::Working);
+  CHECK(r.usb.device().disk().phase == hu::DiskPhase::Idle);  // the port is not touched yet
+  CHECK(r.ua().share_disk() == hu::DiskRefusal::NotIdle);
+  for (unsigned i = 0; i < 300u && r.usb.device().disk().phase == hu::DiskPhase::Idle; ++i) {
+    r.h.run_ms(1);
+  }
+  CHECK(r.usb.device().disk().phase == hu::DiskPhase::Working);  // the hand-over began...
+  CHECK_FALSE(r.ctx().files().settings_dirty());                 // ...with the settings on the card
+  CHECK(r.ctx().files().app_busy() == false);
+  r.h.run_ms(host::FakeUsbAudio::kShareMs + 100u);
+  CHECK(r.has("disk=out"));
+  CHECK(r.ua().take_share_refusal() == hu::DiskRefusal::None);
+  // An app job that is running is still Busy, and a share that waited for the settings is dropped when one starts meanwhile.
+  CHECK(r.ua().eject_disk());
+  r.h.run_ms(host::FakeUsbAudio::kEjectMs + 100u);
+  r.ctx().set_theme(ui::ThemeId::Black);
+  r.h.run_ms(5);
+  REQUIRE(r.ua().share_disk() == hu::DiskRefusal::None);
+  std::vector<std::uint8_t> big(200000, 7);
+  REQUIRE(r.ctx().files().save("", "big.o3a", big.data(), big.size()));
+  r.h.run_ms(5);
+  CHECK(r.ua().disk().phase == hu::DiskPhase::Idle);  // the wait is over (the runtime put the refusal on the strip)
+  CHECK(r.usb.device().disk().phase == hu::DiskPhase::Idle);
+}
+
+TEST_CASE("usb audio app: slots saved for P10 are not applied to the boot profile a refused start fell back to") {
+  host::ScratchDir dir("app-usb-fallback");
+  {
+    Rig r(true, true, false, "unused", dir.path());
+    REQUIRE(r.started);
+    REQUIRE(r.ua().request(true, hu::Profile::P10, true));
+    r.h.run_ms(1200);
+    REQUIRE(r.ua().set_stem(1, hu::track_source(1) | hu::track_source(2)));
+    r.h.run_ms(2000);
+  }
+  Rig r(true, true, false, "unused", dir.path(), /*fall_back=*/true);
+  REQUIRE(r.started);
+  r.h.run_ms(20);
+  CHECK(r.ua().profile() == hu::Profile::P8);  // the port came up in the boot profile
+  for (unsigned c = 0; c < 6u; ++c) {
+    CHECK(r.ua().stem(c) == 0u);  // P10's slot 2 is not P8's channel 2
+  }
+  CHECK(r.ua().stem(6) == hu::kSourceMasterL);
 }
 
 TEST_CASE("usb audio app: a card in use is refused (a save running), so is no card, a disk already out and a hand-over under way") {

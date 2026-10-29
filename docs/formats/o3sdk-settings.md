@@ -33,7 +33,7 @@ At most 2,048 bytes (`settings::kMaxBytes`); the file of this version with only 
 | 15 | USB audio: the AUDIO set (1) or STANDARD (0) (slice U) | 0, 1 (the boot set is 1) |
 | 16 | USB audio profile (`hal::usb_audio::Profile`) | 0 P2, 1 P8 (the boot profile), 2 P10, 3 P11 |
 | 17 | USB audio: the return stream is part of the set | 0, 1 (the boot set has it) |
-| 18 | RETURN LEVEL, per cent | 0 .. 100 (100) |
+| 18 | RETURN LEVEL, per cent | 0 .. 100 (0: the return is drained, not heard) |
 | 19 | the edited stem slots below apply (else the profile's factory slots) | 0, 1 |
 | 31 | DISPLAY brightness (slice CP, `app/brightness.h`) | 0 low (backlight duty 20), 1 medium (50), 2 high (128, the hardware's own and the default) |
 | 32 | PAD LIGHTS | 0 low (a third of every pad level), 1 medium (two thirds), 2 high (as drawn); a lit pad never drops below level 16 |

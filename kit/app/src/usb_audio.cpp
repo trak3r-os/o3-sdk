@@ -61,29 +61,56 @@ hu::DiskRefusal UsbAudio::share_disk() noexcept {
   if (dev_ == nullptr) {
     return hu::DiskRefusal::Unavailable;
   }
-  if (files_ != nullptr && files_->busy()) {
+  if (share_wait_) {
+    return hu::DiskRefusal::NotIdle;
+  }
+  if (files_ != nullptr && files_->app_busy()) {
     return hu::DiskRefusal::Busy;  // a load, a save or a listing runs: the card is in use
+  }
+  if (files_ != nullptr && files_->settings_pending()) {
+    // The kit's settings are due, or being written: a write that starts after the flip would be refused and the hand-over rolled back with a second re-enumeration. They go first.
+    files_->flush_settings();
+    share_wait_ = true;
+    share_until_ = now_ms_ + kShareWaitMs;
+    return hu::DiskRefusal::None;
   }
   return dev_->disk_share(read_only_);
 }
 
-void UsbAudio::poll() noexcept {
+void UsbAudio::poll(std::uint64_t now_ms) noexcept {
+  now_ms_ = now_ms;
+  if (share_wait_) {
+    if (files_ != nullptr && files_->app_busy()) {
+      share_wait_ = false;
+      refusal_ = hu::DiskRefusal::Busy;
+    } else if (files_ == nullptr || !files_->settings_pending() || now_ms >= share_until_) {
+      share_wait_ = false;
+      refusal_ = dev_ != nullptr ? dev_->disk_share(read_only_) : hu::DiskRefusal::Unavailable;
+    }
+  }
   if (dev_ == nullptr || !dev_->ready()) {
     return;
   }
   if (!applied_) {
-    // The driver runs: what the settings kept goes to it. The layout is the one the port started with (main took it from boot_layout()), so only the level and the edited slots are left.
+    // The driver runs: what the settings kept goes to it. The layout is the one the port started with (main took it from boot_layout()), so only the level is left; the edited slots wait
+    // for the profile they were saved for (below): a start that fell back to another profile must not get them.
     dev_->set_return_level(static_cast<float>(level_) * 0.01f);
-    if (map_set_) {
-      const unsigned channels = hu::profile_channels(dev_->profile());
-      for (unsigned c = 0; c < channels && c < kMaxChannels; ++c) {
-        (void)dev_->set_stem(c, stems_[c]);
-      }
-    }
+    stems_pending_ = map_set_;
     applied_ = true;
   }
   if (!dev_->changing()) {  // the kit's copy follows the port: a change the console made is kept too
     const Profile now = dev_->profile();
+    if (stems_pending_) {
+      stems_pending_ = false;
+      if (now == profile_) {
+        const unsigned channels = hu::profile_channels(now);
+        for (unsigned c = 0; c < channels && c < kMaxChannels; ++c) {
+          (void)dev_->set_stem(c, stems_[c]);
+        }
+      } else {
+        map_set_ = false;  // the port came up in another profile (the saved one was refused): the saved slots mean something else there
+      }
+    }
     if (now != profile_) {
       map_set_ = false;
     }
@@ -104,7 +131,7 @@ void UsbAudio::restore(const KitValues& v) noexcept {
   }
   if (dev_ != nullptr && applied_) {  // a card put in after the boot: the level and the slots follow it (the layout does not: the port is not re-enumerated behind the user's back)
     dev_->set_return_level(static_cast<float>(level_) * 0.01f);
-    if (map_set_) {
+    if (map_set_ && !dev_->changing() && dev_->profile() == profile_) {  // (only for the profile they were saved for)
       const unsigned channels = hu::profile_channels(profile_);
       for (unsigned c = 0; c < channels && c < kMaxChannels; ++c) {
         (void)dev_->set_stem(c, stems_[c]);

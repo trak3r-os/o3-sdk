@@ -44,7 +44,7 @@ struct KitValues {
   bool usb_audio = true;
   std::uint8_t usb_profile = static_cast<std::uint8_t>(hal::usb_audio::Profile::P8);  // hal::usb_audio::Profile, 0 .. kProfileCount-1
   bool usb_duplex = true;
-  std::uint8_t usb_level = 100;  // 0 .. 100
+  std::uint8_t usb_level = 0;  // 0 .. 100 (the return is not heard until it is raised)
   bool usb_map_set = false;      // usb_stem holds the edited slots of the profile
   std::uint16_t usb_stem[hal::usb_audio::kMaxChannels] = {};
   // DISPLAY and PAD LIGHTS (brightness.h): 0 low, 1 medium, 2 high; high is what the hardware does without them.

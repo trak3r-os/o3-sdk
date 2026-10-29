@@ -67,6 +67,11 @@ class FakeUsbAudio final : private mk66::audio::UsbAudioService::Link {
   }
   // The unit starts: the port presents this layout (the settings' choice), the factory map, no stream open, the card the unit's.
   void power_up(bool audio, Profile profile, bool duplex) {
+    if (fall_back_) {  // usb0::start() refused the layout (the saved profile): the boot profile P8 in AUDIO, duplex
+      audio = true;
+      profile = Profile::P8;
+      duplex = true;
+    }
     audio_ = audio;
     profile_ = profile;
     duplex_ = duplex;
@@ -80,6 +85,8 @@ class FakeUsbAudio final : private mk66::audio::UsbAudioService::Link {
     return_ring_.reset();
     clear_capture();
   }
+  // The driver refuses whatever layout it is started with and comes up in the boot layout (AUDIO, P8, duplex), as usb0::start() does for a profile it cannot feed: from the next power_up().
+  void fall_back(bool on) noexcept { fall_back_ = on; }
   // Once a millisecond of simulated time.
   void tick(std::uint32_t now_ms) {
     now_ms_ = now_ms;
@@ -380,6 +387,7 @@ class FakeUsbAudio final : private mk66::audio::UsbAudioService::Link {
   std::function<void(bool)> card_give_;
   std::function<bool()> busy_;
   std::uint32_t now_ms_ = 0;
+  bool fall_back_ = false;
   // the port
   bool audio_ = true;
   Profile profile_ = Profile::P8;

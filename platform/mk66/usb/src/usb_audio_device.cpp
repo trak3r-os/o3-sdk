@@ -27,7 +27,8 @@ class DiskPort final : public DiskShare::Port {
  public:
   storage::CardOwner owner() const noexcept override { return storage::device::owner(); }
   bool card_busy() const noexcept override { return storage::device::card_busy(); }
-  // o3-sdk: the files service's settings write is held by the card claim instead (disk_holds_card), and a write that is running is a claim that refuses the share at once (Busy).
+  // o3-sdk: the kit's settings that are due are written BEFORE the share is asked of the platform (app::UsbAudio::share_disk flushes them and waits), so there is no write for the machine to quiesce for;
+  // an app job that is running is a claim that refuses the share at once (Busy).
   bool save_pending() const noexcept override { return false; }
   DiskShare::Layout layout() const noexcept override { return DiskShare::Layout{usb0::mode(), usb0::profile(), usb0::return_enabled()}; }
   bool layout_changing() const noexcept override { return usb0::change_phase() != 0u; }
@@ -61,8 +62,8 @@ class DiskPort final : public DiskShare::Port {
   }
   void disk_close() noexcept override { usb0::disk_close(); }
   void pump(std::uint32_t now_ms) noexcept override { usb0::disk_pass(now_ms); }  // the SCSI state machine (and the card slot) for the computer
-  // o3-sdk: the files service has no hold. A write that starts between the request and the flip is a claim, and the flip refuses it (the share ends with Busy and the user asks again); once the card
-  // is the computer's the writer's gate says Host and the kit's settings stay dirty until the eject.
+  // o3-sdk: the files service has no hold. The kit's settings were written before the request reached here (app::UsbAudio::share_disk); an app job that starts between the request and the flip is a
+  // claim, and the flip refuses it (the share ends with Busy and the user asks again); once the card is the computer's the writer's gate says Host and the kit's settings stay dirty until the eject.
   void hold_background(bool) noexcept override {}
   hal::storage::Status take_back() noexcept override {
     appimg::service_while_blocked(true);

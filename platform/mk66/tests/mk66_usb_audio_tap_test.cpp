@@ -300,6 +300,36 @@ TEST_CASE("usb audio: a mapped slot is the engine's stem of that slot, the mask 
   CHECK(f.engine.stem_slots() == ((1u << dsp::kStemMasterL) | (1u << dsp::kStemMasterR)));
 }
 
+TEST_CASE("usb audio: the return level is 0 until it is raised - the return is pulled and not heard - and `usb map reset` (factory_map of the map's own profile) gives P8's empty slots, not StemMap's T1..T6") {
+  auto fx = std::make_unique<Fx>();
+  Fx& f = *fx;
+  REQUIRE(f.ok);
+  CHECK(f.svc.return_level() == 0.0f);
+  f.svc.streams_changed(false, true);
+  f.host_plays(1000, -2000, 4);
+  for (unsigned b = 0; b < 6; ++b) {
+    f.step();
+    f.host_plays(1000, -2000, 1);
+  }
+  const std::int16_t* out = f.step();
+  bool plain = true;
+  for (std::uint32_t i = 0; i < kBlock; ++i) {
+    plain = plain && out[2u * i] == f.master_l[f.master_l.size() - kBlock + i];
+  }
+  CHECK(plain);
+  CHECK(f.svc.pulled_blocks() == 7u);
+  // The console's `usb map reset` calls factory_map on the map's own profile.
+  REQUIRE(f.svc.set_stem(0, hu::track_source(3)));
+  REQUIRE(au::factory_map(f.map, f.map.profile()));
+  f.map.apply(f.tap);
+  for (unsigned c = 0; c < 6u; ++c) {
+    CHECK(f.map.slot(c) == 0u);
+  }
+  au::StemMap plain_map;
+  REQUIRE(plain_map.reset(Profile::P8));
+  CHECK(plain_map.slot(0) == 1u);  // (track3r-os's own P8 has T1..T6: the reason the console must not call reset())
+}
+
 TEST_CASE("usb audio: with a stream open and nothing staged (every slot empty) silence blocks keep the ring's pace") {
   auto fx = std::make_unique<Fx>();
   Fx& f = *fx;

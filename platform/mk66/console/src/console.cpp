@@ -313,7 +313,7 @@ void usb_map_command(shell::Shell& sh, const shell::Args& a) {
   char buf[kTextBuffer];
   audio::StemMap& map = usb0::stem_map();
   if (a.argc == 3 && same(a.argv[2], "reset")) {
-    map.reset(map.profile());
+    audio::factory_map(map, map.profile());  // o3-sdk: its factory slots (P8's are empty), as the boot map and the service's reset_stems()
     usb0::apply_stem_map();
   } else if (a.argc == 4) {
     std::uint32_t slot = 0;

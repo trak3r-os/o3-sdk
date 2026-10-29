@@ -13,7 +13,7 @@ wait 100
 expect state card=ready
 expect state usb=P8
 expect state dup=1
-expect state ret=100
+expect state ret=0
 expect state strm=0
 expect state disk=idle
 snap 00_boot
@@ -48,7 +48,8 @@ wait 600
 expect state strm=1
 usbwav 02_p10
 
-# 3. The return. The computer plays a 1 kHz tone to the unit: it is added to the output at RETURN LEVEL (100 per cent), and no stem hears it.
+# 3. The return (RETURN LEVEL is 0 at the boot: it is drained and not heard; here it is raised to 100). The computer plays a 1 kHz tone to the unit: it is added to the output, and no stem hears it.
+usb level 100
 usb return tone 1000 -12
 wait 700
 usbwav 03_return
@@ -117,12 +118,18 @@ wait 100
 expect state files=failed
 snap 08_save_refused
 expect nofile Apps/hello/riff.o3a
+# Settings changed while the card is the computer's wait for the eject (DISPLAY's theme here) and are then written, not read over by the card's older file.
 tap config
+tap right
+turn 1
+expect state theme=1
+tap left
 tap f1
 tap f1
 wait 800
 expect state card=ready
 expect state disk=idle
+expect state theme=1
 snap 09_disk_ejected
 tap config
 tap file
@@ -130,3 +137,9 @@ wait 200
 expect state files=done
 expect file Apps/hello/riff.o3a
 snap 10_saved
+
+# 6. The file holds the theme the card was given back with: a reboot keeps it.
+wait 2000
+reboot
+expect state theme=1
+expect state card=ready

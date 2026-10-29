@@ -15,7 +15,7 @@
 //   (P10: S1..S8 = T1..T8, S9 and S10 the master; P11: T1..T9; P8: o3-sdk's own, none: S1..S6 empty, so the boot profile streams the master and silence on 1..6, as it always did); set_stem()
 //   changes one. The engine stages a source only while the computer has the capture stream open and a slot names it: an app that never streams stems pays nothing.
 //
-//   THE RETURN. What the computer plays is added to the output after the render at return_level() (0..1, linear), outside the master inserts and never captured by a take or a stem; with the
+//   THE RETURN. The level is 0 until it is raised (the return is drained, not heard, so that once the unit is the computer's default output its system sounds do not come out of it). What the computer plays is added to the output after the render at return_level() (0..1, linear), outside the master inserts and never captured by a take or a stem; with the
 //   audio in's source Usb it is also the engine's input.
 //
 //   THE DISK. disk_share() hands the card to the computer: the port re-enumerates with a mass-storage function added, the card is the computer's until the eject (disk_eject() or the

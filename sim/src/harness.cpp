@@ -132,6 +132,7 @@ bool Harness::start() {
     (void)runtime_->load_settings();
   }
   if (usb_ != nullptr) {  // the port starts in the layout the settings kept, as the unit's main starts usb0 (the first pass of the runtime then applies the level and the slots)
+    (void)usb_->wrap(runtime_->block_callback(), *engine_);  // the service is given the engine of this start (a reboot made a new one: the old pointer must not be used by power_up's hook)
     const app::UsbAudio::Layout l = runtime_->context().usb_audio().boot_layout();
     usb_->power_up(l.audio, l.profile, l.duplex);
   }
