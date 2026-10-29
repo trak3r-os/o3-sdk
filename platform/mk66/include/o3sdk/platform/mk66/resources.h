@@ -129,7 +129,7 @@ static_assert(role_of(Irq::SDHC) == hal::irq::Role::Completion, "the SDHC line i
 // ---- PIT timers: four channels (H11), one interrupt line each --------------------------------------------------------------------
 enum class PitOwner : std::uint8_t {
   Free,
-  MidiOutEmitter,  // the one channel of the MIDI-out timed emitter (ADR 0013 D5, open item 6): reserved for MIDI DIN (M2b)
+  MidiOutEmitter,  // the one channel of the MIDI-out timed emitter (ADR 0013 D5, open item 6): OS-005c
 };
 struct PitRow {
   std::uint8_t channel;
@@ -137,11 +137,11 @@ struct PitRow {
   bool claimed;
   const char* name;
 };
-// Channel 0 is reserved for the MIDI-out emitter (track3r-os OS-005c2: a one-shot compare whose interrupt writes the due byte to UART4), which
-// comes back with MIDI DIN in milestone M2b; M2 uses no PIT. Other PIT users are gone by design: the sequencer ticks inside the render (D5),
-// the engine control rate is the block rate, and MIDI input is timestamped in the UART ISR.
+// One PIT channel is in use: channel 0, the MIDI-out emitter (OS-005c2: platform/mk66/src/midi_din.cpp, a one-shot compare whose interrupt writes the due byte
+// to UART4). Other PIT users are gone by design: the sequencer ticks inside the render (D5), the engine control rate is the block rate, and MIDI input is
+// timestamped in the UART ISR.
 inline constexpr PitRow kPit[4] = {
-    {0, PitOwner::MidiOutEmitter, false, "midi_out emitter (ADR 0013 D5; reserved for M2b)"},
+    {0, PitOwner::MidiOutEmitter, true, "midi_out emitter (ADR 0013 D5, OS-005c2)"},
     {1, PitOwner::Free, false, "free"},
     {2, PitOwner::Free, false, "free"},
     {3, PitOwner::Free, false, "free"},

@@ -36,6 +36,9 @@
 #include <o3sdk/platform/mk66/display/device.h>
 #include <o3sdk/platform/mk66/input/device.h>
 #include <o3sdk/platform/mk66/input/pad_bus_log.h>
+#include <o3sdk/platform/mk66/midi.h>
+#include <o3sdk/platform/mk66/midi/midi_service.h>
+#include <o3sdk/platform/mk66/midi_config.h>
 #include <o3sdk/platform/mk66/output_gate.h>
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/ui/assets.h>
@@ -71,6 +74,8 @@
 namespace mk66 = o3sdk::platform::mk66;
 namespace display = o3sdk::platform::mk66::display::device;
 namespace input = o3sdk::platform::mk66::input::device;
+namespace midi = o3sdk::platform::mk66::midi;
+namespace midi_io = o3sdk::platform::mk66::midi_io;
 #if O3SDK_CONSOLE
 namespace console = o3sdk::platform::mk66::console;
 namespace power = o3sdk::platform::mk66::power::device;
@@ -122,6 +127,29 @@ const char* volatile const g_build_label = O3SDK_IMAGE_LABEL;
 
 // The app's engine: 23 KB, in SRAM_U's .bss (the render reads it every block). Built by the static constructors.
 o3sdk::dsp::Engine g_engine;
+
+// MIDI in and out (docs/M2B2-PLAN.md section 3, slice MD): the hal::midi::Device the runtime serves through Platform::midi. About 24 KB in SRAM_U's .bss, where the interrupts that
+// fill and drain its rings (UART4 48, USB0 64, PIT0 96) keep the latency track3r-os measured; built by the static constructors, started below (midi_io::start, usb0::bind_midi).
+std::uint32_t midi_heard_at(void*) noexcept { return mk66::audio_block_heard_at(); }
+void midi_kick(void*) noexcept { midi_io::kick(); }
+std::uint32_t midi_isr_dropped(void*) noexcept {
+  // The interrupts' own losses: bytes of either port that found their ring full (the render had not drained it).
+  std::uint32_t lost = midi_io::rx_stats().ring_full;
+#if O3SDK_CONSOLE
+  lost += o3sdk::platform::mk66::usb0::midi_bind_stats().in_ring_full;
+#endif
+  return lost;
+}
+// The USB MIDI port is alive while the pull-up is on, a host has configured the device and the bus is not suspended: only then does a start of frame drain what is queued for it. Read in the render (a few
+// plain bytes the USB interrupt writes; a block old at worst, which the service's hand-over tolerates). An image without the console has no USB.
+bool midi_usb_active(void*) noexcept {
+#if O3SDK_CONSOLE
+  return usb0::attached() && usb0::control().configured() && !usb0::control().suspended();
+#else
+  return false;
+#endif
+}
+midi::MidiService g_midi(midi::MidiServiceHooks{&midi_heard_at, &midi_kick, &midi_isr_dropped, &midi_usb_active, nullptr, mk66::midi_cfg::kAudioLeadCycles});
 
 // OS-POWER P1: the power-off latch (stage A of the shutdown, never cleared) and the end of its stage E (the display dark and held, the chip in power-down), from appimg (console/src/appimg.cpp).
 // An image without the console has no Power switch: neither is ever true.
@@ -345,10 +373,10 @@ int main() {
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
-  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL};
+  static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
-  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL};
+  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   const bool app_started = rt.start();
@@ -374,6 +402,10 @@ int main() {
   if (!input_ok) {
     mk66::boot::play_code(mk66::blink::kInputDegraded, 1);  // the control buttons did not answer; the app runs, their scanner is retried
   }
+
+  // ---- MIDI DIN: UART4 (receive, stamped in its interrupt) and PIT0 (the transmit emitter), their lines enabled last, before the audio so that the render finds the rings live. The USB half is bound
+  // in the USB section below. A port that does not come up leaves MIDI out of the instrument, not the instrument out of order.
+  boot_log(midi_io::start(g_midi.din(), g_midi.din_in(), g_midi.time_ref()) ? "boot: MIDI DIN started" : "boot: MIDI DIN NOT started");
 
   // ---- Audio: the codec brought up muted and the I2S/DMA path running; the render line calls the Runtime once per block. A
   // failure leaves the outputs muted and the image running, with the code latched for the LED.
@@ -435,12 +467,14 @@ int main() {
   // below the audio DMA interrupt, and must never be able to delay its bring-up. The set of the first enumeration is track3r-os's default one, AUDIO with 8 channels out and the stereo
   // return in (docs/M2B-PLAN.md D5): the master is on channels 7 and 8. A failure (the table misaligned, the descriptors invalid) leaves the pull-up off and says why in the log; the
   // image runs without USB.
+  console::attach_midi(g_midi);  // `midi` reports on it
   console::attach(rt);
   if (usb_crashed) {
     console::log("boot: USB skipped, the last run crashed in it");
   } else {
     mk66::set_module(console::kUsbModule);
     namespace layout = usb0::boot_layout;
+    usb0::bind_midi(g_midi.usb_out(), g_midi.usb_in(), g_midi.time_ref());  // before the pull-up: the USB interrupt's MIDI binding (the bytes of the host's MIDI port, the frame's events) is there from its first pass
     if (usb0::start(layout::kMode, layout::kProfile, layout::kReturn)) {
       console::note_usb_started();
       // What the driver presents, which is not the boot layout when start() fell back to STANDARD (a layout it refused, descriptors that did not build).

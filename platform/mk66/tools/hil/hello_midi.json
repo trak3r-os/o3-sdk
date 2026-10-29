@@ -1,0 +1,62 @@
+{
+ "name": "hello_midi",
+ "title": "HELLO on the unit: MIDI (slice MD): the `midi` report at rest, the Config MIDI section (FOLLOW CLOCK, FOLLOW PORT USB), the computer as the USB master (midi_clock_tool.py send) and the tempo that follows it, the DIN loop. Nothing is saved: a power cycle puts the settings back",
+ "steps": [
+  {"say": "docs/M2B2-PLAN.md section 6, slice MD, the unit rows. The unit runs HELLO with the USB console; the computer is the far end of the USB MIDI port (the unit shows up as a MIDI device next to its audio and serial ones: `midi_clock_tool.py list` names the node, /dev/snd/midiC<card>D<device>). Steps that need the computer's side say what to run in a second terminal; this runner only talks to the console, so it waits for them (soft steps: a missed one is reported, not fatal). The DIN steps need a cable from MIDI OUT to MIDI IN, placed once by the maintainer"},
+  {"state": {"app": "HELLO", "screen": "PLAY", "sys": "0", "playing": "0"}, "within": 10, "poll": 0.5},
+  {"cmd": "version", "expect": ["Track3r o3sdk, build \\S+"], "expect_not": "ERR"},
+  {"cmd": "log 60", "expect": ["boot: MIDI DIN started"], "expect_not": "MIDI DIN NOT started", "show": true,
+   "note": "(UART4 and PIT0 came up; a unit that did not say it is a build before slice MD)"},
+  {"cmd": "midi", "expect": ["midi: following no locked no tempo 0\\.00 bpm", "midi: config channel omni out 1 ports din\\+usb clock-out on transport-out on transport-in on follow off", "midi: din rx isrs \\d+ bytes \\d+ errors 0 overruns 0 full 0", "midi: usb frames \\d+ events-out \\d+", "midi: loop clocks \\d+"], "expect_not": ["ERR", "not in this image"], "show": true,
+   "note": "the report at rest: the defaults (D3), the DIN receiver with no error, the USB binding counting frames once the computer has configured the unit (frames 0 until then)"},
+  {"cmd": "cpu reset", "expect": ["cpu: peaks and fault counters reset"]},
+  {"wait": 5},
+  {"cmd": "cpu", "show": true, "expect": ["render"], "note": "the render's cost with MIDI idle and no host listening: the baseline of the A/B in the next steps (plan section 9: the USB ISR does MIDI work at every SOF, the PIT0 ISR runs). Compare the same line after the clock steps"},
+
+  {"say": "NOTES IN over USB (the computer sends to the unit): in a second terminal `aplaymidi -p <unit port> some.mid`, or any DAW's note output to the unit, channel 1, with HELLO's synth routed to the omni channel. Then record the unit's main output over USB audio: `o3audio.py record --not-silent` (the HELLO synth sounds). `midi` below counts the bytes and the last ones"},
+  {"cmd": "midi", "expect": ["midi: rx [1-9]\\d* tx \\d+ dropped 0", "midi: usb frames [1-9]\\d* events-out \\d+ events-in [1-9]\\d* bytes-in [1-9]\\d*", "midi: last rx U:9[0-9A-F]"], "soft": true, "show": true,
+   "note": "the notes the computer sent were counted on USB (events-in, bytes-in) and the last non-timing bytes are a USB note on (U:9n). dropped 0: no ring overflowed"},
+
+  {"say": "NOW the Config MIDI section: the runner opens Config (the Config button), moves to MIDI (Right), sets FOLLOW CLOCK ON (row 6, F1) and FOLLOW PORT USB (row 7, F1), and closes it. It uses the keys, as a finger would"},
+  {"keys": ["config"], "gap": 0.4, "if_state": {"sys": "0"}},
+  {"state": {"sys": "1"}, "within": 3},
+  {"keys": ["right"], "gap": 0.3, "if_state": {"section": "firmware"}, "note": "(with the card's update path the Config opens on FIRMWARE; Right goes to MIDI)"},
+  {"state": {"sys": "1", "section": "midi"}, "within": 3},
+  {"keys": ["down"], "repeat": 5, "gap": 0.15, "note": "(IN CHANNEL, OUT CHANNEL, OUT PORTS, CLOCK OUT, TRANSPORT OUT, FOLLOW CLOCK: the cursor is on the sixth row if it started on the first, as it does at boot)"},
+  {"keys": ["f1"], "gap": 0.3, "note": "FOLLOW CLOCK ON"},
+  {"keys": ["down"], "gap": 0.15},
+  {"keys": ["f1"], "gap": 0.3, "note": "FOLLOW PORT USB"},
+  {"shot": "midi_section", "non_blank": true, "note": "look at it: FOLLOW CLOCK ON, FOLLOW PORT USB, CLOCK WAITING FOR A CLOCK ON USB"},
+  {"cmd": "midi", "expect": ["follow usb", "midi: following no"], "show": true},
+  {"keys": ["config"], "gap": 0.4},
+  {"state": {"sys": "0"}, "within": 3},
+
+  {"say": "THE MASTER: in a second terminal, `midi_clock_tool.py send /dev/snd/midiC<card>D<device> --profile 120:12,140:12 --start --stop` (the computer is the clock master over USB: 120 BPM for 12 s, then 140 for 12 s, Start first, Stop at the end). The runner polls `midi` and `state` meanwhile"},
+  {"cmd": "midi", "expect": ["midi: following yes locked (yes|no) tempo 12[0-9]\\.\\d\\d bpm"], "within": 40, "poll": 0.5, "soft": true, "show": true,
+   "note": "the unit attached to the master: following yes, the tempo near 120 (the loop settles in a few beats; locked yes follows)"},
+  {"state": {"playing": "1", "tempo": "~^(119[89]\\d\\d|120[01]\\d\\d)$"}, "within": 15, "poll": 0.5, "soft": true,
+   "note": "state tempo (milli-BPM) follows the master within 0.1 BPM, and HELLO's transport plays with the Start (HELLO's riff is the clocked hook that steps on the master's grid)"},
+  {"cmd": "midi", "expect": ["locked yes"], "within": 10, "poll": 1.0, "soft": true},
+  {"cmd": "cpu", "show": true, "expect": ["render"], "note": "the render's cost while following and sending the clock back out: compare with the baseline above (the plan's risk: CPU of the MIDI block, an estimate of 2 to 4 k cycles a block following, under 1.5 %)"},
+  {"shot": "following", "non_blank": true, "note": "HELLO playing on the master's tempo"},
+  {"state": {"tempo": "~^(139[89]\\d\\d|140[01]\\d\\d)$"}, "within": 20, "poll": 0.5, "soft": true, "note": "after the profile's step to 140 the tempo follows within 0.1 BPM (the loop re-acquires in a few clocks: no jump of the riff, listen: the steps never double or skip)"},
+  {"cmd": "midi", "expect": ["midi: loop clocks [1-9]\\d* reacquires [1-9]\\d* "], "soft": true, "show": true, "note": "the tempo step was re-acquired by the loop (reacquires counts it)"},
+  {"state": {"playing": "0"}, "within": 20, "poll": 0.5, "soft": true, "note": "the tool's Stop (FC) stopped HELLO's transport (TRANSPORT IN is on)"},
+  {"cmd": "midi", "expect": ["transport-in [1-9]\\d* ignored 0"], "soft": true, "show": true},
+  {"say": "MEASURE the unit's clock OUT with HELLO playing on its own tempo (Play on the unit, the master of the previous step is quiet): `midi_clock_tool.py measure /dev/snd/midiC<card>D<device> --seconds 20` says 24 ppqn at HELLO's tempo (within 0.01 % over the 20 s) and one FA at the start. The runner checks the unit's own counters meanwhile"},
+  {"state": {"tempo": "~^\\d+$"}, "within": 30, "poll": 1.0, "soft": true, "note": "(the master went quiet: 48 clocks without one let it go, the unit has its own tempo back)"},
+  {"cmd": "midi", "expect": ["midi: following no", "released [1-9]"], "within": 20, "poll": 1.0, "soft": true, "show": true},
+
+  {"say": "DIN, with the MIDI OUT to MIDI IN loopback cable in place: Config > MIDI > OUT PORTS DIN (or DIN + USB, the default) and the transport playing sends clock and notes out of DIN; they come back in. The runner plays HELLO with the Play key for a few seconds and reads the counters"},
+  {"keys": ["play"], "gap": 0.3},
+  {"wait": 4},
+  {"cmd": "midi", "expect": ["midi: din rx isrs [1-9]\\d* bytes [1-9]\\d* errors 0 overruns 0 full 0", "tx irqs [1-9]\\d* bytes [1-9]\\d* rt [1-9]\\d*"], "soft": true, "show": true,
+   "note": "the DIN transmitter sent bytes (tx bytes, rt = the clock bytes) and with the loopback the receiver counted them with no framing error (errors 0), no overrun, no full ring; late-max is the worst latency of a clock byte in microseconds"},
+  {"keys": ["play"], "gap": 0.3, "note": "(HELLO's own Play toggles: stopped again)"},
+  {"cmd": "cpu", "show": true, "expect": ["render"], "note": "the cost with DIN clock out and the loop back in"}
+ ],
+ "finally": [
+  {"say": "RESTORE: Config > MIDI: FOLLOW CLOCK OFF and FOLLOW PORT DIN if the run set them (the settings are not saved: a power cycle does it too). `midi` should say `follow off`"},
+  {"cmd": "midi", "soft": true, "show": true, "expect": ["midi: config"]}
+ ]
+}

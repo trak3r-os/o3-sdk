@@ -12,9 +12,9 @@
 
 namespace o3sdk::platform::mk66::console {
 
-// The order of the table, and of `help`: track3r-os's relative order for the commands in scope.
+// The order of the table, and of `help`: track3r-os's relative order for the commands in scope; `midi` (docs/M2B2-PLAN.md, slice MD) is o3-sdk's own and comes last.
 enum class Cmd : unsigned {
-  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard,
+  Help, Version, Stage, Cpu, Mem, Crash, Usb, Log, Input, Peek, Poke, Rot, Sd, Ls, Reset, Fw, Key, Pad, Enc, State, Shot, Leds, Cache, Power, Guard, Midi,
   Count
 };
 
@@ -49,6 +49,7 @@ inline constexpr CommandInfo kCommandInfo[] = {
     {"cache", "cache [on|off|inv|check]: the code cache (LMEM): state, switch, check"},
     {"power", "power [press|release|pin|off [dry]]: the Power switch and the shutdown"},
     {"guard", "guard [n <1..255>]: the main-loop guard's window (OS-MAINGUARD)"},
+    {"midi", "midi: MIDI in and out: follow state, tempo, counters, the last bytes"},
 };
 static_assert(sizeof(kCommandInfo) / sizeof(kCommandInfo[0]) == static_cast<std::size_t>(Cmd::Count), "one row per Cmd");
 

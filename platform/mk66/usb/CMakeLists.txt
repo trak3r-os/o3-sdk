@@ -7,10 +7,10 @@
 # the kit's usb library; the console that composes these (platform/mk66/console) implements console.h.
 #
 # Dependencies: platform_mk66_audio (audio.h's AudioClockFault, audio_config.h, audio::diag::Text), platform_mk66_display (ft812_regs.h, for the `shot` bands),
-# platform_mk66_update (crc32.h, the `shot` stream's checksum) and usb. The update path's hardware half (update/src/fw_host_mk66.cpp) names usb0.h and console.h, so it links this.
+# platform_mk66_update (crc32.h, the `shot` stream's checksum), platform_mk66_midi (usb0.h's MIDI binding, slice MD) and usb. The update path's hardware half (update/src/fw_host_mk66.cpp) names usb0.h and console.h, so it links this.
 o3sdk_library(platform_mk66_usb
   SOURCES src/diag_text.cpp src/log_command.cpp src/mem_access.cpp src/hil_inject.cpp src/shot_stream.cpp src/usb_audio.cpp
-  DEPENDS platform_mk66_base platform_mk66_audio platform_mk66_display platform_mk66_update usb)
+  DEPENDS platform_mk66_base platform_mk66_audio platform_mk66_display platform_mk66_midi platform_mk66_update usb)
 # The single-precision rule (cmake/O3sdkTargets.cmake): no double in an image; the kit's usb library is built this way too.
 target_compile_options(platform_mk66_usb PRIVATE -fsingle-precision-constant)
 

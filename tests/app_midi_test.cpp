@@ -929,3 +929,22 @@ TEST_CASE("midi: the host fake keeps the contract of hal/midi.h: late input land
   CHECK(in[1].data1 == 63u);
   CHECK(in[1].frame == 8u);
 }
+
+TEST_CASE("midi: a block the pipeline asks to be silent (an underrun mute) still runs the device's begin_block and end_block, so its timeline never stops, and the output is zero") {
+  Rig r;
+  const hal::audio::BlockCallback cb = r.h->runtime().block_callback();
+  std::int16_t in[hal::audio::kBlockSamples] = {};
+  std::int16_t out[hal::audio::kBlockSamples];
+  hal::audio::BlockReport report{};
+  for (unsigned i = 0; i < hal::audio::kBlockSamples; ++i) {
+    out[i] = 1234;
+  }
+  const std::uint64_t at = r.midi.block_start();
+  for (unsigned k = 0; k < 5; ++k) {
+    cb.fn(cb.user, hal::audio::BlockIo{in, out, hal::audio::kFlagSilence, &report});
+  }
+  CHECK(r.midi.block_start() == at + 5u * hal::audio::kBlock);  // begin_block and end_block ran for each: the timeline moved a block each
+  for (unsigned i = 0; i < hal::audio::kBlockSamples; ++i) {
+    CHECK(out[i] == 0);
+  }
+}

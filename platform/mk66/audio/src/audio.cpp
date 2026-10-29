@@ -29,6 +29,7 @@
 #include <o3sdk/platform/mk66/audio_config.h>
 #include <o3sdk/platform/mk66/board.h>
 #include <o3sdk/platform/mk66/mem_map.h>
+#include <o3sdk/platform/mk66/midi_config.h>
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/platform/mk66/resources.h>
 #include <o3sdk/platform/mk66/sections.h>
@@ -376,6 +377,7 @@ void audio_main_pass() noexcept { o3sdk_audio_pipeline.main_pass(); }
 void audio_set_starve_blocks(std::uint32_t n) noexcept { o3sdk_audio_pipeline.set_starve_blocks(n); }
 const audio::Pipeline& audio_pipeline() noexcept { return o3sdk_audio_pipeline; }
 AudioClockFault audio_clock_fault() noexcept { return g_clock_fault; }
+std::uint32_t audio_block_heard_at() noexcept { return o3sdk_audio_pipeline.render_stamp() + midi_cfg::kAudioLeadCycles; }
 
 hal::audio::BlockCallback audio_test_tone() noexcept {
   g_test_tone.init();

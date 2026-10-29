@@ -34,6 +34,7 @@
 //   shot       the screen as framed base64 lines (usb/shot_stream.h): CMD_SNAPSHOT2 into the spare RAM_G, read back over the SPI a few lines a pass of the main loop
 //   leds       the pad LED levels the driver holds, one line. A read.
 //   cache      the LMEM code cache: `cache` shows the state, `cache on|off` switches it (PCCCR only), `cache inv` invalidates it.
+//   midi       slice MD (o3-sdk's own): the MIDI service's snapshot and the DIN and USB drivers' counters (console/midi_report.h says each word). A read.
 //   power      OS-POWER P1 (docs/M2B2-PLAN.md, slice P): the Power switch (PTC3): `power` the pin in the three pulls, the hold's state and counters, the shutdown's stages; `power press|release|pin` feed the hold
 //              in place of the pin (a scripted hold needs no finger); `power off [dry]` runs the shutdown (stages 0 to F: USB off, the lights out, then, after the release of Power, the VLPR off of OS-POWER P2:
 //              dark, PTC3 polled, a press boots the unit; `dry` ends in a restart instead, for the first run on the unit). Once the shutdown has begun the shell refuses every command but the reads (help,
@@ -53,11 +54,14 @@
 #include <o3sdk/platform/mk66/console/core.h>
 #include <o3sdk/platform/mk66/console/inject_commands.h>
 #include <o3sdk/platform/mk66/console/mem_report.h>
+#include <o3sdk/platform/mk66/console/midi_report.h>
 #include <o3sdk/platform/mk66/console/shell_bind.h>
 #include <o3sdk/platform/mk66/console/usb_mode_guard.h>
 #include <o3sdk/platform/mk66/display/device.h>
 #include <o3sdk/platform/mk66/input/device.h>
 #include <o3sdk/platform/mk66/mem_map.h>
+#include <o3sdk/platform/mk66/midi.h>
+#include <o3sdk/platform/mk66/midi/midi_service.h>
 #include <o3sdk/platform/mk66/platform.h>
 #include <o3sdk/platform/mk66/power/power_device.h>
 #include <o3sdk/platform/mk66/storage/device.h>
@@ -157,6 +161,7 @@ void sink_flush(void*) { usb0::cdc_writer().flush(); }
 std::size_t sink_room(void*) { return usb0::cdc_writer().room_bytes(); }
 
 constexpr std::size_t kTextBuffer = 1536;  // the longest reply is `usb`, about 1.2 KB
+static_assert(kTextBuffer >= kMidiReportRoom, "`midi`'s worst-case report fits the buffer (console/midi_report.h)");
 
 void send(shell::Shell& sh, std::size_t n, const char* buffer) { sh.out().text(buffer, n); }
 
@@ -670,6 +675,27 @@ void cmd_cache(shell::Shell& sh, const shell::Args& a) {
   send(sh, t.size(), buf);
 }
 
+// `midi` (slice MD, o3-sdk's own): the MIDI service's snapshot and the drivers' counters, as midi_report.h words. A read: nothing is written. The report is 1.2 KB at its worst (console/midi_report.h pins that it fits the buffer).
+const midi::MidiService* g_midi = nullptr;
+
+void cmd_midi(shell::Shell& sh, const shell::Args& a) {
+  if (a.argc != 1) {
+    sh.out().text("usage: midi\n");
+    return;
+  }
+  MidiFigures figures;
+  midi::MidiService::Diag diag;  // (about 0.4 KB on this stack: the main loop's)
+  if (g_midi != nullptr) {
+    g_midi->diag(diag);
+    figures.service = &diag;
+    figures.din_rx = &midi_io::rx_stats();
+    figures.din_tx = &midi_io::tx_stats();
+    figures.usb = &usb0::midi_bind_stats();
+  }
+  char buf[kTextBuffer];
+  send(sh, format_midi_report(figures, buf, sizeof buf), buf);
+}
+
 // `power ...` (OS-POWER P1, power/src/power_host_mk66.cpp): the Power switch and the shutdown. The stages are in the diag log as `power: <stage> +N ms` (`log` right after `power off`: the CDC ends at USB off).
 // (track3r-os's handler, line for line.)
 const char* power_refusal_text(power::Refusal why) {
@@ -833,12 +859,15 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Cache)] = &cmd_cache;
   kit[static_cast<unsigned>(Cmd::Power)] = &cmd_power;
   kit[static_cast<unsigned>(Cmd::Guard)] = &cmd_guard;
+  kit[static_cast<unsigned>(Cmd::Midi)] = &cmd_midi;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));
   g_shell->set_gate(&power_gate);  // OS-POWER P1 (D2): after the one-way commit the shell refuses what could start anything
   g_pump = new (g_pump_storage) shell::ConsolePump(*g_shell, usb0::cdc_rx());
 }
+
+void attach_midi(const midi::MidiService& service) noexcept { g_midi = &service; }
 
 void note_usb_started() noexcept {
   guard_layout(usb0::mode() == o3sdk::usb::Mode::Audio ? UsbModeGuard::Layout::Audio : UsbModeGuard::Layout::Standard);

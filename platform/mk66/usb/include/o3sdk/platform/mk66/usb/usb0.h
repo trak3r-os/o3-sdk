@@ -16,6 +16,10 @@
 // usb::UsbDevice and touches the buffer descriptors and the endpoints alone; everything the main loop and the engine share with it is
 // a lock-free ring (usb/device.h).
 
+#include <o3sdk/platform/mk66/midi/in.h>
+#include <o3sdk/platform/mk66/midi/time_ref.h>
+#include <o3sdk/platform/mk66/midi/usb_bind.h>
+#include <o3sdk/platform/mk66/midi/usb_out.h>
 #include <o3sdk/usb/cdc.h>
 #include <o3sdk/usb/control.h>
 #include <o3sdk/usb/counters.h>
@@ -38,8 +42,10 @@ bool start(o3sdk::usb::Mode mode, o3sdk::usb::Profile profile, bool usb_return) 
 // True once start() switched the pull-up on.
 bool attached() noexcept;
 
-// Read-only views for `diag usb`. The MIDI rings are the ends of the two MIDI streams; the MIDI port is silent in o3-sdk for now (docs/M2B-PLAN.md): nothing writes
-// midi_to_host() and nothing reads midi_from_host() (the USB interrupt overwrites it), and the seam for the MIDI milestone is here.
+// Read-only views for `diag usb` and the MIDI binding (OS-005). The MIDI rings are the engine's ends of the two MIDI streams: the
+// engine writes midi_to_host() and reads midi_from_host(), each from one context. Since OS-005c2 that one context is the USB interrupt itself
+// (bind_midi below): it is the only writer of midi_to_host() (the frame's events from the MIDI timing core) and the only reader of
+// midi_from_host() (the host's bytes, stamped), so nothing else may touch either ring.
 const o3sdk::usb::DeviceCounters& device_counters() noexcept;
 const o3sdk::usb::ControlPipe& control() noexcept;
 const o3sdk::usb::Counters& stream_counters() noexcept;
@@ -48,6 +54,13 @@ o3sdk::usb::CdcRxRing& cdc_rx() noexcept;
 o3sdk::usb::MidiRing& midi_to_host() noexcept;
 o3sdk::usb::MidiRing& midi_from_host() noexcept;
 const char* serial() noexcept;
+
+// OS-005c2: binds the two MIDI rings to the MIDI timing core (midi/usb_bind.h). From now on the USB interrupt (priority 64) is the ONE consumer of `out` (the frame's events
+// go into midi_to_host() before the device logic arms the bulk-IN buffer, see usb0.cpp) and the ONE producer of `in` (the host's bytes, stamped at the interrupt's
+// entry), and it reads `ref` for the time. The three objects must outlive the USB interrupt (statics); call once, main thread, before or after start() (o3-sdk's main.cpp binds first: the interrupt then has it from its first pass): the binding is
+// published with interrupts masked, so the interrupt sees all of it or none. Until then the from-host ring is simply overwritten and nothing is sent to the host.
+void bind_midi(o3sdk::platform::mk66::midi::UsbMidiOut& out, o3sdk::platform::mk66::midi::RtInRing& in, const o3sdk::platform::mk66::midi::TimeRef& ref) noexcept;
+const o3sdk::platform::mk66::midi::UsbBindStats& midi_bind_stats() noexcept;
 
 // ---- AUDIO mode (OS-006d, ADR 0012) --------------------------------------------------------------------------------------------------------
 // The descriptor set presented now, and the profile it carries (the channel layout of the stems stream), and whether it carries the return stream

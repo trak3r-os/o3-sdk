@@ -90,7 +90,7 @@ TEST_CASE("mk66 midi: the PIT registers and the tick arithmetic: a tick is two c
   CHECK(cfg::pit::kMcrEnable == 0u);
   CHECK(cfg::pit::kChannel == 0u);
   CHECK(mk66::resources::kPit[cfg::pit::kChannel].owner == mk66::resources::PitOwner::MidiOutEmitter);
-  CHECK_FALSE(mk66::resources::kPit[cfg::pit::kChannel].claimed);  // o3sdk: resources.h keeps PIT0 reserved, unclaimed, until the MIDI driver is in the image (slice MD flips both; track3r-os: CHECK(...claimed))
+  CHECK(mk66::resources::kPit[cfg::pit::kChannel].claimed);
   CHECK(cfg::pit::kCyclesPerTickShift == 1u);
   CHECK((mk66::clock::kCoreHz >> cfg::pit::kCyclesPerTickShift) == mk66::clock::kBusHz);
   CHECK(cfg::pit::kByteTicks == 28800u);

@@ -95,12 +95,12 @@ TEST_CASE("resources: the channels' interrupt lines are the right vectors and ca
   }
 }
 
-TEST_CASE("resources: four PIT timers, one reserved for the MIDI-out emitter (M2b), three free, none claimed") {
+TEST_CASE("resources: four PIT timers, one the MIDI-out emitter's (claimed by OS-005c2), three free") {
   CHECK(res::kPitChannelCount == 4u);
   unsigned emitters = 0;
   for (unsigned i = 0; i < res::kPitChannelCount; ++i) {
     CHECK(res::kPit[i].channel == i);
-    CHECK_FALSE(res::kPit[i].claimed);   // M2 runs no PIT
+    CHECK(res::kPit[i].claimed == (i == 0u));
     emitters += res::kPit[i].owner == res::PitOwner::MidiOutEmitter ? 1u : 0u;
     CHECK(res::pit_irq(static_cast<std::uint8_t>(i)) == static_cast<mk66::Irq>(static_cast<unsigned>(mk66::Irq::PIT0) + i));
   }

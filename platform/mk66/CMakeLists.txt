@@ -125,8 +125,9 @@ if(O3SDK_MK66_SKELETON)
   set(_mk66_main src/main_skeleton.cpp)
   set(_mk66_main_libs "")
 else()
-  set(_mk66_main src/main.cpp)
-  set(_mk66_main_libs platform_mk66_display platform_mk66_input platform_mk66_audio)
+  # MIDI (docs/M2B2-PLAN.md, slice MD): the DIN driver (midi_din.cpp) and the MidiService are in every image with an app; the USB half needs the console image's USB.
+  set(_mk66_main src/main.cpp src/midi_din.cpp src/aeabi_f2lz.cpp)
+  set(_mk66_main_libs platform_mk66_display platform_mk66_input platform_mk66_audio platform_mk66_midi)
   if(O3SDK_MK66_CONSOLE)
     set(_mk66_console ON)
     list(APPEND _mk66_main_libs platform_mk66_console platform_mk66_usb platform_mk66_storage platform_mk66_update platform_mk66_power usb)
@@ -144,6 +145,10 @@ target_compile_definitions(platform_mk66_image PRIVATE
   O3SDK_SDRAM_ICODE_ALIAS=$<BOOL:${O3SDK_SDRAM_ICODE_ALIAS}>
   O3SDK_AUDIO_TEST=$<BOOL:${O3SDK_MK66_AUDIO_TEST}>
   O3SDK_CONSOLE=$<BOOL:${_mk66_console}>)
+# audio.cpp's audio_block_heard_at() adds the TX ring's render-ahead (midi_config.h, in platform_mk66_midi, which itself depends on platform_mk66_audio, not on this object).
+if(TARGET platform_mk66_audio_hw)
+  target_link_libraries(platform_mk66_audio_hw PRIVATE platform_mk66_midi)
+endif()
 # The Power switch's image half (power/src/power_host_mk66.cpp): the end of a real off, see O3SDK_POWER_VLPR_OFF above.
 if(TARGET platform_mk66_power_hw)
   target_compile_definitions(platform_mk66_power_hw PRIVATE O3SDK_POWER_VLPR_OFF=$<BOOL:${O3SDK_POWER_VLPR_OFF}>)

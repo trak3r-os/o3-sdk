@@ -52,7 +52,7 @@ constexpr app::DiagCommand row(const char* name, const char* help = "does someth
 }
 
 const char* const kKitNames[] = {"help", "version", "stage", "cpu", "mem",  "crash", "usb",  "log",  "input", "peek",  "poke",  "rot",   "sd",
-                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard"};
+                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard", "midi"};
 
 std::string help_of(const CommandTable& t) {
   Capture c;
@@ -114,7 +114,7 @@ class BareApp final : public app::App {
 }  // namespace
 
 TEST_CASE("kit commands: the names are the ones in scope, in table order, and each row obeys the app rules") {
-  static_assert(console::kKitCommandCount == 25, "the kit's commands");
+  static_assert(console::kKitCommandCount == 26, "the kit's commands");
   REQUIRE(console::kKitCommandCount == sizeof kKitNames / sizeof kKitNames[0]);
   for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
     const console::CommandInfo& c = console::kCommandInfo[i];
@@ -167,7 +167,7 @@ TEST_CASE("power: the reads that stay open during the shutdown are these nine, a
   CHECK(open == 9u);
   // The ones that write something, move the keys, restart or reach the card or the bootloader are refused.
   for (const console::Cmd c : {console::Cmd::Fw, console::Cmd::Reset, console::Cmd::Key, console::Cmd::Pad, console::Cmd::Enc, console::Cmd::Poke, console::Cmd::Rot, console::Cmd::Sd,
-                               console::Cmd::Ls, console::Cmd::Usb, console::Cmd::Cache, console::Cmd::Guard, console::Cmd::Shot, console::Cmd::Input, console::Cmd::Peek, console::Cmd::Leds}) {
+                               console::Cmd::Ls, console::Cmd::Usb, console::Cmd::Cache, console::Cmd::Guard, console::Cmd::Shot, console::Cmd::Input, console::Cmd::Peek, console::Cmd::Leds, console::Cmd::Midi}) {
     CAPTURE(console::info(c).name);
     CHECK_FALSE(console::power_read(c));
   }

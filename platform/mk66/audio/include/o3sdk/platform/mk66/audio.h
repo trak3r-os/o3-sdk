@@ -95,5 +95,8 @@ struct AudioClockFault {
   std::uint32_t mdr = 0;
 };
 AudioClockFault audio_clock_fault() noexcept;
+// The cycle counter value at which the first sample of the block the render is working on is HEARD: the stamp of the slot boundary that started this render plus the TX
+// ring's render-ahead (midi_config.h kAudioLeadCycles). The MIDI timing core's time base (OS-005c2); render context only, valid inside the block callback.
+std::uint32_t audio_block_heard_at() noexcept;
 
 }  // namespace o3sdk::platform::mk66

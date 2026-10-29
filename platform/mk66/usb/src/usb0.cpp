@@ -37,6 +37,7 @@
 #include <o3sdk/platform/mk66/sections.h>
 #include <o3sdk/platform/mk66/usb/console.h>
 #include <o3sdk/platform/mk66/usb/soc_facts.h>
+#include <o3sdk/platform/mk66/midi/usb_bind.h>
 #include <o3sdk/platform/mk66/usb/usb_audio.h>
 #include <o3sdk/usb/descriptors.h>
 #include <o3sdk/usb/identity.h>
@@ -123,6 +124,12 @@ o3sdk::usb::CdcTxWriter g_writer(g_cdc_tx);
 Usb0Regs g_regs;
 o3sdk::usb::UsbDevice<Usb0Regs> g_dev(g_regs, g_bdt, g_pipe, g_stream_counters, g_cdc_tx, g_cdc_rx, g_midi_to_host, g_midi_from_host);
 volatile bool g_attached = false;  // the pull-up is on: written by start() and the mode change in the main thread, read by the console
+
+// OS-005c2: the MIDI timing core's ends of the two MIDI rings (bind_midi). The interrupt reads the three pointers; bind_midi() writes them with interrupts masked.
+o3sdk::platform::mk66::midi::UsbMidiOut* volatile g_midi_out = nullptr;
+o3sdk::platform::mk66::midi::RtInRing* volatile g_midi_in = nullptr;
+const o3sdk::platform::mk66::midi::TimeRef* volatile g_midi_ref = nullptr;
+o3sdk::platform::mk66::midi::UsbBindStats g_midi_stats;
 
 // ---- AUDIO mode (OS-006d) -------------------------------------------------------------------------------------------------------------------
 // The return ring (USB ISR writes, the engine's pull reads: 2 KB), its engine-side reader, and the streams object, built by start() once the engine exists (it
@@ -410,10 +417,35 @@ o3sdk::usb::MidiRing& midi_to_host() noexcept { return g_midi_to_host; }
 o3sdk::usb::MidiRing& midi_from_host() noexcept { return g_midi_from_host; }
 const char* serial() noexcept { return g_desc.serial; }
 
-// The USB interrupt body: the device logic of usb/device.h. (track3r-os wraps it in the MIDI binding: the frame's events into the to-host ring before it,
-// the host's bytes stamped into the midiRt ring after it; the MIDI port is cut in o3-sdk, docs/M2B-PLAN.md section 2.)
+void bind_midi(o3sdk::platform::mk66::midi::UsbMidiOut& out, o3sdk::platform::mk66::midi::RtInRing& in, const o3sdk::platform::mk66::midi::TimeRef& ref) noexcept {
+  std::uint32_t primask;
+  asm volatile("mrs %0, primask\n\tcpsid i" : "=r"(primask)::"memory");
+  g_midi_ref = &ref;
+  g_midi_in = &in;
+  g_midi_out = &out;
+  asm volatile("msr primask, %0" ::"r"(primask) : "memory");
+}
+const o3sdk::platform::mk66::midi::UsbBindStats& midi_bind_stats() noexcept { return g_midi_stats; }
+
+// The USB interrupt body: the device logic of usb/device.h with the MIDI binding around it.
+//   * BEFORE the device logic, when a start of frame is pending: the frame's events go into the to-host ring, so that the same pass's on_sof() -> service_in() arms the
+//     bulk-IN buffer with them and they leave in this frame, not the next. (A SOF that arrives while the device logic is already running is handled inside it, without
+//     this call: that frame's events leave one frame later. Rare, and one millisecond.)
+//   * AFTER it, whatever the pass wrote into the from-host ring becomes stamped bytes in the USB midiRt ring. The stamp is the cycle counter at entry.
+// Bounded (midi/usb_bind.h) and wait-free; the same priority as the device logic, so neither can race the other.
 namespace {
-void usb_isr() noexcept { g_dev.isr(); }
+void usb_isr() noexcept {
+  const std::uint32_t entry = regs::dwt_cyccnt();
+  o3sdk::platform::mk66::midi::UsbMidiOut* const out = g_midi_out;
+  if (out != nullptr && (g_regs.istat() & o3sdk::usb::sie::kIstatSofTok) != 0u) {
+    o3sdk::platform::mk66::midi::usb_midi_sof(*out, *g_midi_ref, entry, g_midi_to_host, g_pipe.configured(), g_midi_stats);
+  }
+  g_dev.isr();
+  o3sdk::platform::mk66::midi::RtInRing* const in = g_midi_in;
+  if (in != nullptr) {
+    o3sdk::platform::mk66::midi::usb_midi_from_host(g_midi_from_host, *in, entry, g_midi_stats);
+  }
+}
 }  // namespace
 
 }  // namespace o3sdk::platform::mk66::usb0
