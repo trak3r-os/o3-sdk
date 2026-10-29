@@ -147,13 +147,7 @@ void stop_hardware() noexcept {
   regs::nvic_icer(kRenderIrq) = regs::irq_bit(kRenderIrq);
 }
 
-// The unmute and mute plans write CHIP_ANA_CTRL with the values the power-up leaves, which keep the ADC on the line in (SELECT_ADC,
-// bit 2): the input select at boot stays, whatever the outputs do. (track3r-os composed these writes with the recorder's source
-// switch; the kit switches nothing yet, sgtl5000.h "The analogue input".)
-static_assert((sgtl5000::kAnaCtrlOutputsMuted & sgtl5000::kAnaCtrlSelectLine) != 0u && (sgtl5000::kAnaCtrlOutputsUnmuted & sgtl5000::kAnaCtrlSelectLine) != 0u,
-              "the unmute and mute plans keep the ADC on the line in");
-
-// The class implementing the contract. State is the main thread's (start/unmute/mute).
+// The class implementing the contract. State is the main thread's (start/unmute/mute/apply_input).
 class Mk66Audio final : public haudio::Device {
  public:
   Result start(const haudio::BlockCallback& render) noexcept override;
@@ -161,14 +155,23 @@ class Mk66Audio final : public haudio::Device {
   void mute() noexcept override;
   void stop() noexcept;  // OS-POWER P1: the audio path is stopped for good (the unit powers off or restarts): see below
   bool outputs_enabled() const noexcept override { return enabled_; }
+  bool apply_input(const sgtl5000::InputPlan& plan) noexcept;  // OS-011c
 
  private:
   bool codec_write(std::uint16_t reg, std::uint16_t value) noexcept {
     return i2c::write_reg(board::kCodecI2cAddress, reg, value) == i2c::Result::Ok;
   }
+  // A step of the unmute or mute plan: CHIP_ANA_CTRL keeps the ADC's input select the recorder chose (sgtl5000.h "The analogue input").
+  bool plan_write(const sgtl5000::Step& step) noexcept {
+    const std::uint16_t value = step.reg == sgtl5000::kAnaCtrl ? sgtl5000::ana_ctrl_with_adc(step.value, adc_line_) : step.value;
+    return codec_write(step.reg, value);
+  }
   Result bring_up_codec() noexcept;
   bool started_ = false;
   bool enabled_ = false;
+  // OS-011c: which input the codec's ADC listens to, the line in (the power-up default) or the microphone: CHIP_ANA_CTRL bit 2, which the unmute and mute plans also write, so
+  // they keep it (the source switch, audio_input_apply). Main thread only, like every codec write. (It sits in the padding of this object: no bytes of SRAM.)
+  bool adc_line_ = true;
 };
 
 Mk66Audio::Result Mk66Audio::bring_up_codec() noexcept {
@@ -317,7 +320,7 @@ bool Mk66Audio::unmute() noexcept {
   }
   sgtl5000::Step step{};
   for (unsigned i = 0; sgtl5000::unmute_step(i, step); ++i) {
-    if (!codec_write(step.reg, step.value)) {
+    if (!plan_write(step)) {
       mute();
       return false;
     }
@@ -335,7 +338,7 @@ void Mk66Audio::mute() noexcept {
   enabled_ = false;
   if (started_) {
     for (const sgtl5000::Step& step : sgtl5000::kMute) {
-      (void)codec_write(step.reg, step.value);
+      (void)plan_write(step);
     }
   }
 }
@@ -354,7 +357,7 @@ void Mk66Audio::stop() noexcept {
     return;
   }
   // Started: the key is NOT lowered here. run_stop soft-mutes the DAC and waits the ramp out first, the key falls on silence (spec 4.1 A2: key-first can click).
-  (void)sgtl5000::run_stop([this](const sgtl5000::Step& step) { return codec_write(step.reg, step.value); }, [] { amplifier_muted(); },
+  (void)sgtl5000::run_stop([this](const sgtl5000::Step& step) { return plan_write(step); }, [] { amplifier_muted(); },
                            [](std::uint32_t ms) {
                              if (ms != 0u) {
                                boot::delay_ms(ms);
@@ -364,11 +367,27 @@ void Mk66Audio::stop() noexcept {
   started_ = false;
 }
 
+bool Mk66Audio::apply_input(const sgtl5000::InputPlan& plan) noexcept {
+  if (!started_) {
+    return false;
+  }
+  for (unsigned i = 0; i < plan.count; ++i) {
+    if (!codec_write(plan.step[i].reg, plan.step[i].value)) {
+      return false;
+    }
+    if (plan.step[i].reg == sgtl5000::kAnaCtrl) {
+      adc_line_ = plan.line;
+    }
+  }
+  return true;
+}
+
 Mk66Audio g_device;
 
 }  // namespace
 
 hal::audio::Device& audio_device() noexcept { return g_device; }
+bool audio_input_apply(const sgtl5000::InputPlan& plan) noexcept { return g_device.apply_input(plan); }
 void audio_stop() noexcept { g_device.stop(); }
 const audio::AudioStatus& audio_status() noexcept { return o3sdk_audio_pipeline.status(); }
 void audio_cpu_reset() noexcept { o3sdk_audio_pipeline.reset_peaks(); }

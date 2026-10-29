@@ -4,6 +4,8 @@
 // The body of the FIRMWARE page of the system Config screen (private to kit/app/src; system_firmware_page.cpp).
 
 #include <o3sdk/app/firmware_view.h>
+#include <o3sdk/dsp/engine.h>
+#include <o3sdk/hal/capture.h>
 #include <o3sdk/hal/midi.h>
 #include <o3sdk/ui/renderer.h>
 
@@ -25,5 +27,33 @@ inline constexpr unsigned kMidiRowCount = 8;
 // wrapped round with `wrap`), a switch toggles for any step.
 hal::midi::Config midi_step(hal::midi::Config c, unsigned row, int steps, bool wrap) noexcept;
 void draw_midi_page(ui::Renderer& r, const PageGrid& grid, const hal::midi::Config& c, const hal::midi::Status& s, unsigned row) noexcept;
+
+// The AUDIO page (system_audio_page.cpp): INPUT, GAIN and MONITOR, then FREQ, REGION and SEEK while the radio is the input.
+enum AudioRow : unsigned { kAudioInput, kAudioGain, kAudioMonitor, kAudioFreq, kAudioRegion, kAudioSeek };
+inline constexpr unsigned kAudioBaseRows = 3;
+inline constexpr unsigned kAudioRadioRows = 3;
+// How many rows the page has for this source.
+constexpr unsigned audio_row_count(hal::capture::Source source) noexcept {
+  return source == hal::capture::Source::Radio ? kAudioBaseRows + kAudioRadioRows : kAudioBaseRows;
+}
+// The sources the INPUT row offers, in order (the USB return has no path yet: slice U adds it).
+inline constexpr unsigned kAudioSourceChoices = 6;
+// `source` moved by `steps` choices of the INPUT row: clamped, or wrapped round with `wrap`; the radio is skipped while no receiver is there (`radio_ok` false), unless it is where
+// the move starts and goes nowhere else.
+hal::capture::Source audio_step_source(hal::capture::Source source, int steps, bool wrap, bool radio_ok) noexcept;
+// A per cent value moved by `steps` (clamped to 0..100, or wrapped round with `wrap`).
+unsigned audio_step_percent(unsigned value, int steps, bool wrap) noexcept;
+
+struct AudioView {
+  hal::capture::Source source;
+  unsigned gain;
+  unsigned monitor;
+  hal::capture::RadioStatus radio;
+  dsp::InputPeaks meter;
+  bool settling;
+  bool failed;  // the codec refused the last write and it is being tried again
+  unsigned row;
+};
+void draw_audio_page(ui::Renderer& r, const PageGrid& grid, const AudioView& v) noexcept;
 
 }  // namespace o3sdk::app

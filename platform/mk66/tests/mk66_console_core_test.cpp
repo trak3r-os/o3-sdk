@@ -52,7 +52,7 @@ constexpr app::DiagCommand row(const char* name, const char* help = "does someth
 }
 
 const char* const kKitNames[] = {"help", "version", "stage", "cpu", "mem",  "crash", "usb",  "log",  "input", "peek",  "poke",  "rot",   "sd",
-                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard", "midi",  "files"};
+                                 "ls",   "reset",   "fw",    "key", "pad",  "enc",   "state", "shot", "leds",  "cache", "power", "guard", "midi",  "files", "radio", "mon"};
 
 std::string help_of(const CommandTable& t) {
   Capture c;
@@ -114,7 +114,7 @@ class BareApp final : public app::App {
 }  // namespace
 
 TEST_CASE("kit commands: the names are the ones in scope, in table order, and each row obeys the app rules") {
-  static_assert(console::kKitCommandCount == 27, "the kit's commands");
+  static_assert(console::kKitCommandCount == 29, "the kit's commands");
   REQUIRE(console::kKitCommandCount == sizeof kKitNames / sizeof kKitNames[0]);
   for (std::size_t i = 0; i < console::kKitCommandCount; ++i) {
     const console::CommandInfo& c = console::kCommandInfo[i];

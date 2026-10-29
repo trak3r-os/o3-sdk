@@ -21,11 +21,12 @@ using Section = SystemConfig::Section;
 using Phase = FirmwareView::Phase;
 
 // The order of the tabs.
-constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Midi, Section::Display, Section::Info};
+constexpr Section kOrder[SystemConfig::kSectionCount] = {Section::Firmware, Section::Audio, Section::Midi, Section::Display, Section::Info};
 
 const char* tab_label(Section s) noexcept {
   switch (s) {
     case Section::Firmware: return "FIRMWARE";
+    case Section::Audio: return "AUDIO";
     case Section::Midi: return "MIDI";
     case Section::Display: return "DISPLAY";
     case Section::Info: return "INFO";
@@ -54,15 +55,17 @@ void format_uptime(std::uint64_t seconds, char* out, std::size_t cap) noexcept {
 
 }  // namespace
 
-SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi) noexcept
+SystemConfig::SystemConfig(hal::firmware::FirmwareSink* firmware, const char* build, bool midi, bool audio) noexcept
     : sink_(firmware),
       build_(build),
       midi_(midi),
-      section_(firmware != nullptr && firmware->available() ? Section::Firmware : (midi ? Section::Midi : Section::Display)) {}
+      audio_(audio),
+      section_(firmware != nullptr && firmware->available() ? Section::Firmware : (audio ? Section::Audio : (midi ? Section::Midi : Section::Display))) {}
 
 bool SystemConfig::has(Section s) const noexcept {
   switch (s) {
     case Section::Firmware: return sink_ != nullptr && sink_->available();
+    case Section::Audio: return audio_;
     case Section::Midi: return midi_;
     case Section::Display:
     case Section::Info: break;
@@ -73,6 +76,7 @@ bool SystemConfig::has(Section s) const noexcept {
 const char* SystemConfig::section_name() const noexcept {
   switch (section_) {
     case Section::Firmware: return "firmware";
+    case Section::Audio: return "audio";
     case Section::Midi: return "midi";
     case Section::Display: return "display";
     case Section::Info: return "info";
@@ -95,7 +99,7 @@ void SystemConfig::close(Context& ctx) noexcept {
   if (!open_ || locked()) {
     return;
   }
-  leave_section();
+  leave_section(ctx);
   open_ = false;
   ctx.redraw();
 }
@@ -104,13 +108,17 @@ void SystemConfig::close(Context& ctx) noexcept {
 void SystemConfig::enter(Context& ctx) noexcept {
   if (section_ == Section::Firmware) {
     open_list(ctx);
+  } else if (section_ == Section::Audio) {
+    ctx.audio_in().watch(true);  // the level meter: the engine measures the input only while this page is up
   }
 }
 
-// The section is being left (or the screen closed): nothing the FIRMWARE section started may be left running or waiting.
-void SystemConfig::leave_section() noexcept {
+// The section is being left (or the screen closed): nothing the FIRMWARE section started may be left running or waiting, and the AUDIO section stops asking for the input's peaks.
+void SystemConfig::leave_section(Context& ctx) noexcept {
   if (section_ == Section::Firmware) {
     (void)firmware_abandon(view_, sink_);
+  } else if (section_ == Section::Audio) {
+    ctx.audio_in().watch(false);
   }
 }
 
@@ -135,7 +143,7 @@ void SystemConfig::move_section(Context& ctx, int dir) noexcept {
   if (kOrder[at] == section_) {
     return;
   }
-  leave_section();
+  leave_section(ctx);
   section_ = kOrder[at];
   enter(ctx);
 }
@@ -172,6 +180,8 @@ void SystemConfig::input(Context& ctx, const Input& in) noexcept {
   bool taken = false;
   if (section_ == Section::Firmware) {
     taken = firmware_input(ctx, in);
+  } else if (section_ == Section::Audio) {
+    taken = audio_input(ctx, in);
   } else if (section_ == Section::Midi) {
     taken = midi_input(ctx, in);
   } else if (section_ == Section::Display) {
@@ -248,6 +258,86 @@ bool SystemConfig::midi_input(Context& ctx, const Input& in) noexcept {
     return false;
   }
   ctx.midi().set_config(midi_step(ctx.midi().config(), midi_row_, steps, wrap));
+  return true;
+}
+
+// UP / DOWN move the cursor over the rows; the encoder steps the row's value (SHIFT: coarser), F1 steps it by one and wraps (the monitor's F1 is off / on, the radio's SEEK row
+// seeks up). F5 and F6 seek down and up while the radio is the input; on a receiver that did not answer F5 tries it again.
+bool SystemConfig::audio_input(Context& ctx, const Input& in) noexcept {
+  AudioIn& a = ctx.audio_in();
+  Radio& radio = ctx.radio();
+  const bool on_radio = a.source() == AudioIn::Source::Radio;
+  if (on_radio && (in.press(Button::F5) || in.press(Button::F6))) {
+    const hal::capture::RadioStatus::State s = radio.status().state;
+    if (s == hal::capture::RadioStatus::State::Absent || s == hal::capture::RadioStatus::State::Failed) {
+      if (in.press(Button::F5)) {
+        radio.power(true);  // the one retry: a person asked for it
+      }
+    } else {
+      radio.seek(in.press(Button::F6));
+    }
+    return true;
+  }
+  const unsigned rows = audio_row_count(a.source());
+  const int last = static_cast<int>(rows) - 1;
+  if (audio_row_ > last) {
+    audio_row_ = static_cast<std::uint8_t>(last);
+  }
+  if (in.press(Button::Up) || in.press(Button::Down)) {
+    const int row = static_cast<int>(audio_row_) + (in.press(Button::Down) ? 1 : -1);
+    audio_row_ = static_cast<std::uint8_t>(row < 0 ? 0 : (row > last ? last : row));
+    return true;
+  }
+  int steps = 0;
+  bool wrap = false;
+  const bool coarse = in.shift;
+  if (in.turn()) {
+    steps = in.delta();
+  } else if (in.press(Button::F1) && !in.shift) {
+    steps = 1;
+    wrap = true;
+  }
+  if (steps == 0) {
+    return false;
+  }
+  switch (audio_row_) {
+    case kAudioInput: {
+      const bool radio_ok = radio.status().state != hal::capture::RadioStatus::State::Absent;
+      const AudioIn::Source to = audio_step_source(a.source(), steps, wrap, radio_ok);
+      if (to != a.source()) {
+        (void)a.select(to, a.gain());
+      }
+      break;
+    }
+    case kAudioGain: {
+      const unsigned to = audio_step_percent(a.gain(), coarse ? steps * 5 : steps, wrap);
+      if (to != a.gain()) {
+        (void)a.set_gain(to);
+      }
+      break;
+    }
+    case kAudioMonitor:
+      if (wrap) {  // F1: off, or on at the usual level
+        a.monitor(a.monitor() == 0u ? AudioIn::kMonitorOn : 0u);
+      } else {
+        a.monitor(audio_step_percent(a.monitor(), coarse ? steps * 5 : steps, false));
+      }
+      break;
+    case kAudioFreq:
+      radio.step(coarse ? steps * 10 : steps);
+      break;
+    case kAudioRegion: {
+      const int count = static_cast<int>(hal::capture::kRegionCount);
+      int to = static_cast<int>(radio.region()) + (steps > 0 ? 1 : -1);
+      to = wrap ? (to + count) % count : (to < 0 ? 0 : (to >= count ? count - 1 : to));
+      radio.set_region(static_cast<Radio::Region>(to));
+      break;
+    }
+    case kAudioSeek:
+      radio.seek(steps > 0);
+      break;
+    default: break;
+  }
   return true;
 }
 
@@ -353,6 +443,13 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
     case Section::Firmware:
       draw_firmware_page(r, grid, view_);
       break;
+    case Section::Audio: {
+      const AudioIn& a = ctx.audio_in();
+      const AudioView view{a.source(), a.gain(), a.monitor(), ctx.radio().status(), a.meter(), a.settling(), a.failed(),
+                           audio_row_ < audio_row_count(a.source()) ? audio_row_ : audio_row_count(a.source()) - 1u};
+      draw_audio_page(r, grid, view);
+      break;
+    }
     case Section::Midi:
       draw_midi_page(r, grid, ctx.midi().config(), ctx.midi().status(), midi_row_);
       break;
@@ -401,7 +498,7 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
   r.text(kMargin, ui::caps_y(t, Face::Label, area.y + area.h - m.row_pitch, m.row_pitch), foot, Color::TextDim, Face::Label);
 }
 
-void SystemConfig::soft_keys(const Context&, SoftKeys& keys) const noexcept {
+void SystemConfig::soft_keys(const Context& ctx, SoftKeys& keys) const noexcept {
   keys.label[7] = "BACK";
   switch (section_) {
     case Section::Firmware:
@@ -429,6 +526,16 @@ void SystemConfig::soft_keys(const Context&, SoftKeys& keys) const noexcept {
           keys.label[7] = nullptr;
           break;
       }
+      break;
+    case Section::Audio:
+      keys.label[0] = "NEXT";
+      if (ctx.audio_in().source() == AudioIn::Source::Radio) {
+        const hal::capture::RadioStatus::State s = ctx.radio().status().state;
+        const bool dead = s == hal::capture::RadioStatus::State::Absent || s == hal::capture::RadioStatus::State::Failed;
+        keys.label[4] = dead ? "RETRY" : "SEEK -";
+        keys.label[5] = dead ? nullptr : "SEEK +";
+      }
+      keys.label[7] = "CLOSE";
       break;
     case Section::Midi:
     case Section::Display:

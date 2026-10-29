@@ -15,6 +15,7 @@
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/hal/firmware.h>
 #include <o3sdk/hal/leds.h>
+#include <o3sdk/platform/host/fake_capture.h>
 #include <o3sdk/platform/host/fake_firmware.h>
 #include <o3sdk/platform/host/fake_midi.h>
 #include <o3sdk/platform/host/fakes.h>
@@ -58,9 +59,11 @@ class Harness {
   // MIDI device of the platform (a platform::host::FakeMidi; null: none, no MIDI section, the runtime as it was before MIDI). `card`: the SD
   // card of the platform (a platform::host::DirCard over a directory, or any HostCard; null: none, so Context::files() says "NO CARD" and the
   // kit keeps no settings); the harness puts a write-protect switch in front of it (card_protect). `app_id`: the folder name of Apps/<id>/ when
-  // the app's build gave none (a test app; null: o3sdk_app_id()). All of them must outlive the harness.
+  // the app's build gave none (a test app; null: o3sdk_app_id()). `capture`: the codec's input and the FM radio of the platform (a platform::host::FakeCapture; null: none, no
+  // AUDIO section, Context::audio_in() and radio() are refused, and the input of every block is silence); with one, the harness gives the engine what its read_block() delivers and
+  // steps its service() once a millisecond. All of them must outlive the harness.
   explicit Harness(app::App& app, hal::firmware::FirmwareSink* firmware = nullptr, platform::host::FakeMidi* midi = nullptr,
-                   platform::host::HostCard* card = nullptr, const char* app_id = nullptr);
+                   platform::host::HostCard* card = nullptr, const char* app_id = nullptr, platform::host::FakeCapture* capture = nullptr);
   ~Harness();
   Harness(const Harness&) = delete;
   Harness& operator=(const Harness&) = delete;
@@ -109,6 +112,8 @@ class Harness {
   // The fake MIDI device the harness was given (null without one), and the timeline sample "now" is (the samples due at the engine's rate by
   // the simulated time): what a scripted `midi` line is stamped with, so it lands in the block that renders next.
   platform::host::FakeMidi* midi() { return midi_; }
+  // The fake capture device the harness was given (null without one).
+  platform::host::FakeCapture* capture() { return capture_; }
   std::uint64_t due_samples() const;
 
   app::Runtime& runtime() { return *runtime_; }
@@ -126,6 +131,7 @@ class Harness {
 
   app::App& app_;
   platform::host::FakeMidi* midi_;
+  platform::host::FakeCapture* capture_;
   hal::firmware::FirmwareSink* firmware_;
   platform::host::HostCard* inner_card_;
   const char* app_id_;

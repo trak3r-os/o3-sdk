@@ -8,7 +8,7 @@ What the system Config screen lets the user change, and the app did not ask for,
 "FORM" u32 length "O3SK"  SETS  [unknown chunks]  "CRC "
 ```
 
-At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 92 bytes.
+At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 128 bytes (14 keys).
 
 ## 1. `SETS`
 
@@ -25,8 +25,13 @@ At most 2,048 bytes (`settings::kMaxBytes`); the file of this version is 92 byte
 | 7 | follow port (`follow_port`) | 0 DIN, 1 USB |
 | 8 | transport in (`transport_in`) | 0, 1 |
 | 9 | transport out (`transport_out`) | 0, 1 |
+| 10 | audio in source (`hal::capture::Source`, slice AI) | 0 line mix, 1 line left, 2 line right, 3 mic low, 4 mic high, 5 radio, 6 USB |
+| 11 | audio in gain, per cent | 0 .. 100 |
+| 12 | audio in monitor, per cent | 0 (off) .. 100 |
+| 13 | radio region (`hal::capture::Region`) | 0 Europe, 1 USA, 2 Australia, 3 Japan |
+| 14 | radio station, 10 kHz units (the one value that is not a byte) | 7600 .. 10800 |
 
-**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 10. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The settings of later slices (the audio input, the USB layout and stem map, brightness and pad lights) take the next keys.
+**A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 15. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The settings of later slices (the USB layout and stem map, brightness and pad lights) take the next keys. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.
 
 ## 2. Other chunks
 

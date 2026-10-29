@@ -10,6 +10,9 @@ class Runtime;
 namespace o3sdk::platform::mk66::midi {
 class MidiService;
 }
+namespace o3sdk::hal::capture {
+class CaptureHw;
+}
 
 namespace o3sdk::platform::mk66::console {
 
@@ -20,6 +23,10 @@ void attach(app::Runtime& runtime) noexcept;
 // The MIDI service `midi` reports on (docs/M2B2-PLAN.md, slice MD): once, main thread, any time before the first command runs (the image's static, which lives for ever). Without it `midi` says
 // it is not in this image.
 void attach_midi(const midi::MidiService& service) noexcept;
+
+// The capture device `radio` reports on (slice AI of M2c: capture.h's, the one main handed to the Runtime as Platform::capture): once, main thread, any time before the first command runs. Without it `radio`
+// says this image has no radio.
+void attach_capture(hal::capture::CaptureHw& capture) noexcept;
 
 // usb0::start() has run and put the pull-up on: the mode guard watches the set the device started in (usb_mode_guard.h).
 void note_usb_started() noexcept;

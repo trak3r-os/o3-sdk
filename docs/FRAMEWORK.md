@@ -233,10 +233,10 @@ and reach their app through `o3sdk_app()`. HELLO's `describe_state` is the examp
 
 ### The system Config (the kit's, in every app)
 
-**Status: built (M2b, second round; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO, and MIDI when `Platform::midi`
-is set; host-tested, with the simulator scenario `apps/hello/scenarios/config.txt`. On a unit: a release image with this screen (o3-303 988318f on
+**Status: built (M2b, second round; `kit/app` `system_config.h`, `firmware_flow.h`): FIRMWARE, DISPLAY and INFO, MIDI when `Platform::midi`
+is set, and AUDIO (the audio in and the radio) when `Platform::capture` is set (M2c slice AI, host-tested, not yet on a unit); host-tested, with the simulator scenario `apps/hello/scenarios/config.txt`. On a unit: a release image with this screen (o3-303 988318f on
 o3-sdk 20ccef1) was installed over USB on 2026-10-26, reported by the tester: Config's FIRMWARE, DISPLAY and INFO opened and worked over USB
-injection, cpu 35.5 and 37.1 %. Not verified: the final FIRMWARE INSTALL from the screen (F1, which needs a finger).** AUDIO and the app's own
+injection, cpu 35.5 and 37.1 %. Not verified: the final FIRMWARE INSTALL from the screen (F1, which needs a finger).** The USB rows of AUDIO and the app's own
 pages are planned. The settings on the card are built (slice FA of M2c, host only: see "Files on the card" below).
 What follows is the maintainer's decision (2026-10-25) for what it is: the kit brings the machine up (clocks, SDRAM, display, input,
 LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
@@ -247,7 +247,9 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   or pad pressed before still reaches it, so no note is left on), its screen goes on running and sounding underneath, and the pad LEDs are
   dark. `Runtime::lock_input(bool)` locks input altogether, `Runtime::system_strip(text, progress, hold_ms)` puts one line over the bottom of
   whatever is on screen (the platform's power-off hold feeds it), `Runtime::card_changed()` is the platform's card watch.
-- Sections, in this order: FIRMWARE (hidden when `Platform::firmware` is null), MIDI (hidden when `Platform::midi` is null: the user's
+- Sections, in this order: FIRMWARE (hidden when `Platform::firmware` is null), AUDIO (hidden when `Platform::capture` is null: INPUT, GAIN, MONITOR and a level meter of the input; while INPUT is
+  RADIO also FREQ, REGION and SEEK, with F5 / F6 seeking down and up; the radio's rows are greyed and INPUT skips the radio when the receiver does not answer, F5 then tries it again; see "Audio in and the radio"
+  below), MIDI (hidden when `Platform::midi` is null: the user's
   `hal::midi::Config` and the device's status; see "MIDI" below), DISPLAY (the theme), INFO (the app's name and version, the
   build id, the uptime). Keys: LEFT / RIGHT change section, F8 is BACK (one level up; the last closes the screen), CONFIG closes it.
   FIRMWARE: the `Firmware/*.ptf` list is read in one pass when the section opens (UP / DOWN or the encoder choose), F1 asks "UPDATE
@@ -257,7 +259,7 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`).
 - An app can refuse for a moment with `App::update_blocker(ctx)` (a text, or null: asked when the list opens and at INSTALL), for
   example while it records. `App::config_pages()` (default 0) is declared for the pages an app will add; the kit draws none yet.
-- The remaining plan (the maintainer, 2026-10-25): AUDIO (USB audio out and the outputs; planned, `docs/M2C-PLAN.md`; the MIDI section is built, above),
+- The remaining plan (the maintainer, 2026-10-25): the USB rows of AUDIO (USB audio out and the outputs; planned, `docs/M2C-PLAN.md`; the MIDI section and AUDIO's input rows are built, above and below),
   brightness and the last crash record in INFO; a section whose driver does not exist yet is not shown. An app adds its own pages after
   the kit's: up to eight items each, a value (a parameter descriptor with get and set on the main loop) or an action (run after a
   confirming hold), and it reads the kit's settings (the theme, the MIDI channel) through `Context`.
@@ -265,7 +267,7 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   to a section, hide one, set its defaults. For USB audio the kit streams the master by default, and an app can declare more streams
   (the dry voice, a send, stems) up to what full-speed USB carries (about eight channels at 44.1 kHz, 16 bits). FIRMWARE and INFO stay
   in every app, so any unit can always be switched to another engine and tell what it runs (confirmed by the maintainer, 2026-10-25).
-- The kit keeps its settings on the card for the app (M2c, slice FA, host only until the unit session): the theme and the MIDI settings in `Apps/<app>/system.o3s`, read at
+- The kit keeps its settings on the card for the app (M2c, slice FA, host only until the unit session): the theme, the MIDI settings and the audio in's source, gain and monitor and the radio's region and station (keys 10 to 14, slice AI) in `Apps/<app>/system.o3s`, read at
   boot over what `App::setup` set, written 1.5 s after the last change and at once when the power-off begins (`docs/formats/o3sdk-settings.md`). The app's own Config values
   join them with the app pages. FIRMWARE says SAVING while a card job runs (`Files::busy()`).
 
@@ -283,6 +285,33 @@ without MIDI, and then nothing arrives and nothing leaves. Slice K, host only.
   hook follows. With the engine playing, the clock and the transport go out on the ports the user chose. `ctx.midi().send(m)` sends one message
   from the main loop.
 - **Settings**: `ctx.midi().config()` and `set_config()` are the user's `hal::midi::Config`; an app that sets them in `setup()` sets the defaults.
+
+### Audio in and the radio (`audio_in.h`, `radio.h`)
+
+`kit/app/include/o3sdk/app/audio_in.h` and `radio.h`, `Context::audio_in()` and `Context::radio()`. **Status: built (M2c, slice AI), host-tested and run in the simulator (`apps/hello/scenarios/audio_in.txt`, `audio_in_absent.txt`); not yet run on a unit
+(line in was never seen on one, the microphone never measured, and the radio may not be on this board: see `docs/M2C-PLAN.md` section 13).** They exist when the platform gives the runtime a `hal::capture::CaptureHw` (`Platform::capture`); without one every call is refused
+(`available()` is false), the Config has no AUDIO section and the render is untouched.
+
+```cpp
+app::AudioIn& in = ctx.audio_in();
+in.select(hal::capture::Source::MicHigh, 40);   // the codec's input and its gain (0..100 per cent); the planes are silent for 200 ms while it settles
+in.set_gain(55);                                // the gain only, no settling
+in.monitor(app::AudioIn::kMonitorOn);           // the input into the master bus (70 %); monitor(0) is off and free
+const dsp::InputPeaks p = in.peaks();           // peak of each channel since the last call; the engine measures only while you keep asking
+ctx.radio().tune(9370);                         // 93.70 MHz (10 kHz units), snapped to a channel of the region
+in.select(hal::capture::Source::Radio, 20);     // powers the receiver and points the codec at it
+ctx.radio().seek(true);                         // returns at once; radio().status() says Seeking, then Ready with the station in .freq
+```
+
+- The input reaches the render as it always did (`in_l` / `in_r` of a unit, `BlockContext::input_l()` of a hook). `select()` shuts the engine's input gate (`Engine::set_input_gate`, a one-block fade) and the runtime opens it again 200 ms later
+  (`AudioIn::kSettleMs`); `LineMix` is the mean of the two line channels in both planes, `LineLeft` / `LineRight` one channel in both, the other sources reach the planes as they are. **Until an app or the user selects a source nothing here touches
+  the codec, the gate or the planes** (an app that never calls it renders what it did, bit for bit). The board's power-up input is what the app has then; the analogue switch (PTE26) boots in the radio's position, so the line jack is heard only after a `select` of a line source.
+- A codec write that is not acknowledged is kept and retried every 500 ms from the main loop (`failed()`); the gate stays shut meanwhile. The radio is a state machine in `hal::capture::CaptureHw::service()`, which the platform's main loop calls once a pass (one I2C transfer at most);
+  `radio().status()` is Off, Starting (about 0.7 s), Ready, Tuning, Seeking, Absent (the chip did not answer: the board may have no radio) or Failed. The kit never asks a dead receiver again by itself; `radio().power(true)` is the retry
+  (the Config's F5, the console's `radio retry`).
+- The kit keeps source, gain, monitor, region and station with its settings (`settings.h` keys 10 to 14) and applies the saved ones over the app's defaults at boot, only what differs from the defaults (so a card with the defaults costs the codec nothing).
+- Console: `radio [retry]` (the driver's state, last failure, registers, pin levels) and `mon [off|on|0..100]`; `state` gains `in= gain= mon= gate= radio= freq=` when there is a capture device. The USB return (`Source::Usb`) and recording are later slices of M2c.
+- The simulator's fake codec and radio: `platform/host/fake_capture.h` (`sim/README.md`: `input tone|wav|off`, `radio stations|absent`, `--audio-in`).
 
 ### Files on the card (`files.h`)
 
@@ -410,8 +439,8 @@ machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driv
 | System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Verified on the unit** in part (M2b round 2, slices F and K): FIRMWARE, DISPLAY and INFO opened and worked over USB injection on 2026-10-26 (reported by the tester; no `docs/hw` file yet). **Host only**: the MIDI section (when `Platform::midi` is set). **Planned**: AUDIO and an app's pages |
 | MIDI | DIN in/out (UART), USB MIDI | kit `hal::midi::Device`, `app::Midi`, console `midi` | notes into the engine through routes, every other message to `App::midi`, clock followed and sent on the transport; MIDI learn is planned | **Host only** (M2b round 2, slices MC, K, MD): the MIDI core is ported from track3r-os (`platform/mk66/midi`, 1104b85); the kit API, routes, clock follow and `FakeMidi` are host-tested (slice K); the MK66 service, the DIN and USB drivers and console `midi` are built and host-tested (slice MD, 5937691: host ctest 147/147, ASan 147/147, mk66 25/25). HELLO's image grows by 19.4 KB of flash. Not run on a unit. Owed: the MD row of `docs/M2B2-PLAN.md` section 6, last column; the ISR latency and the render cost of MIDI |
 | Power switch | PTC3 | `core::PowerHold`, `platform/mk66/power` | a clean shutdown: silent, dark, card released | **Host only** (M2b round 2, slice P): the pure logic and the shutdown are ported from track3r-os's `platform/mk66/power` (11 files identical after the rename) and host-tested (`mk66_power_*`); console `power`, `power press/release/pin`, `power off [dry]`; `O3SDK_POWER_VLPR_OFF` ON as in track3r-os. Never run on a unit: the pin's pull and polarity, and the VLPR wake, are open |
-| Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (`in_l`, `in_r` of a unit; `BlockContext::input_l()` of a hook), input select and gain, recording into SDRAM | **Host only** for the input planes (the RX ring runs in the pipeline; line in on the unit is not verified). Input select, gain, microphone and recording: **planned** (M2c): `hal::capture` is a contract with no driver |
-| FM radio | Si4703 into the codec input | `hal::capture` | tune, seek, RDS; a source to sample | **Planned** (M2c): contract only |
+| Audio in | SGTL5000 ADC: line in, microphone | `hal::capture` | input planes in every block (`in_l`, `in_r` of a unit; `BlockContext::input_l()` of a hook), `Context::audio_in()`: input select, gain, gate, monitor, peaks; the Config's AUDIO section; recording into SDRAM | **Built, host only** (M2c slice AI: `capture.cpp`, `audio_input_apply`, the kit's `AudioIn`, the fake codec in the simulator; the image builds and passes its static checks). Not verified on a unit: line in was never seen on one, the microphone never measured, the analogue switch's polarity is assumed. Recording: **planned** (M2c) |
+| FM radio | Si4703 into the codec input | `hal::capture` | `Context::radio()`: tune, seek, region, status; RDS is not in this round; a source to sample | **Built, host only** (M2c slice AI: the ported Si4703 driver behind `capture.cpp`, the fake in the simulator). The first answer on a unit decides whether FM exists on this board (OS-RAD1 failed on its first run in track3r-os; the board's radio wiring is unconfirmed): Absent shows as "not on this unit" |
 | Computer return stream | USB0 isochronous (UAC2) | platform | the computer's audio as an engine source | **Planned** (later) |
 
 Not a hardware capability but part of the promise: the **engine** (units, slots, sends, the transport, clocked hooks) is verified on the unit

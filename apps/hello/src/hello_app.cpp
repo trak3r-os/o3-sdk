@@ -8,12 +8,14 @@
 //   PARAMS        next page of values (SYNTH, DELAY); SHIFT + PARAMS: the previous one
 //   PLAY          the demo riff on and off (a clocked hook of the engine plays it, sample-accurate)
 //   UP / DOWN     tempo +-1 BPM (SHIFT: +-10)
-//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, MIDI, DISPLAY (the theme), INFO
+//   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, AUDIO (the input's source, gain and monitor; the radio), MIDI, DISPLAY (the theme), INFO
 //   MIDI          notes on the channel the user chose in the Config's MIDI section (any, by default) play SYNTH, frame-accurate; with FOLLOW on
 //                 there, the riff and the tempo follow a MIDI clock on DIN or USB (the riff is a clocked hook; it needs nothing to do so)
 //   INSERT        the riff up a semitone (SHIFT: down), so that there is something to save; DELETE puts the default riff back
 //   FILE          SAVE the riff to the card, Apps/hello/riff.o3a (Context::files(): a job of the main loop, never a pause of the sound or the screen)
 //   SAMPLE LOAD   LOAD it back (a riff that is not there says so on the strip). The card, the file and the last job show on the screen.
+//   REC           the audio in through the master: the monitor on (the usual 70 %) and off. Where the input comes from (line, microphone, radio) is the Config's AUDIO
+//                 section; the screen's IN meter shows what arrives. With no capture device (a platform without audio in) neither exists.
 //
 // One instrument (SYNTH) on slot 0, a DELAY on send A.
 
@@ -282,6 +284,12 @@ class PlayScreen final : public app::Screen {
     r.text(rx, area.y + 70, "OUT", Color::TextDim, Face::Label);
     const dsp::EngineStats s = ctx.engine().stats();
     app::level_meter(r, Rect{rx + 40, area.y + 72, rw - 40, 10}, s.peak_l > s.peak_r ? s.peak_l : s.peak_r);
+    // The audio in (Context::audio_in()): its peak, while the monitor plays it ("MON"). Asking for the peaks is what makes the engine measure them; nothing of this exists without a capture device.
+    if (ctx.audio_in().available()) {
+      const dsp::InputPeaks in_peak = ctx.audio_in().peaks();
+      r.text(rx, area.y + 84, ctx.audio_in().monitor() != 0u ? "MON" : "IN", ctx.audio_in().monitor() != 0u ? Color::Play : Color::TextDim, Face::Label);
+      app::level_meter(r, Rect{rx + 40, area.y + 86, rw - 40, 10}, in_peak.l > in_peak.r ? in_peak.l : in_peak.r);
+    }
 
     // What the keys do.
     const int hy = map_y + 4 * cell_h + 18;
@@ -416,6 +424,12 @@ class HelloApp final : public app::App {
     dsp::Engine& e = ctx.engine();
     if (in.press(Button::Play)) {
       (void)(e.playing() ? e.stop() : e.play());
+      ctx.redraw();
+      return true;
+    }
+    if (in.press(Button::Rec) && ctx.audio_in().available()) {
+      app::AudioIn& a = ctx.audio_in();
+      a.monitor(a.monitor() == 0u ? app::AudioIn::kMonitorOn : 0u);
       ctx.redraw();
       return true;
     }

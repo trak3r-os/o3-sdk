@@ -96,6 +96,10 @@ I2cBus& bus(i2c_cfg::Instance which) noexcept;
 // every wait bounded in time (5 ms a byte); a failure leaves the bus released. Main thread only.
 Result write_reg(std::uint8_t address7, std::uint16_t reg, std::uint16_t value) noexcept;
 Result read_reg(std::uint8_t address7, std::uint16_t reg, std::uint16_t& value) noexcept;
+// OS-011c (slice AI of M2c): the Si4703 radio picks its 2-wire mode at the rising edge of its reset if SDIO (this bus's SDA) is low. sda_hold(true) drives SDA low as a GPIO (the peripheral
+// is detached from the pin); sda_hold(false) releases it and runs init() again, which puts the pins back to the peripheral. I2C0, main thread only, nothing else on the
+// bus meanwhile (the main loop is the bus's only user).
+Result sda_hold(bool low) noexcept;
 
 }  // namespace o3sdk::platform::mk66::i2c
 

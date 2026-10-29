@@ -128,7 +128,7 @@ if(O3SDK_MK66_SKELETON)
   set(_mk66_main_libs "")
 else()
   # MIDI (docs/M2B2-PLAN.md, slice MD): the DIN driver (midi_din.cpp) and the MidiService are in every image with an app; the USB half needs the console image's USB.
-  set(_mk66_main src/main.cpp src/midi_din.cpp src/aeabi_f2lz.cpp)
+  set(_mk66_main src/main.cpp src/midi_din.cpp src/capture.cpp src/aeabi_f2lz.cpp)
   set(_mk66_main_libs platform_mk66_display platform_mk66_input platform_mk66_audio platform_mk66_midi)
   if(O3SDK_MK66_CONSOLE)
     set(_mk66_console ON)

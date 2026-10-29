@@ -1,0 +1,33 @@
+# The same on a board with no FM receiver: the radio is asked for and does not answer. The AUDIO section says so, nothing retries by itself, and the line input still works.
+#
+#   mkdir <dir> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/audio_in_absent.txt --out <dir>
+radio absent
+input tone 440 -12
+wait 100
+tap config
+expect state section=audio
+# INPUT to RADIO (five choices on).
+turn 5
+expect state in=radio
+expect state radio=starting
+wait 100
+expect state radio=absent
+snap 00_absent
+# Seek keys do nothing to a receiver that is not there; F5 is RETRY, and a person's retry runs the power-up once more.
+tap f6
+wait 100
+expect state radio=absent
+tap f5
+wait 100
+expect state radio=absent
+snap 01_absent_retry
+# INPUT steps off it, and does not come back to it by itself (the radio is skipped while it is absent).
+turn 1
+expect state in=radio
+turn -1
+expect state in=michigh
+wait 500
+expect state radio=absent
+snap 02_mic
+tap config
+expect state sys=0

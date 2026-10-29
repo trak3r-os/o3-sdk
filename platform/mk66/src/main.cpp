@@ -5,7 +5,7 @@
 // static constructors. main then:
 //
 //   crash record of the last run -> display bring-up -> input init -> app::Runtime over the app (assets, App::setup, engine start)
-//   -> audio start (muted) -> loop { wfi; input; display; rt.poll(); audio beat; the outputs opened once after a clean run; LED }
+//   -> audio start (muted) -> loop { wfi; input; display; rt.poll(); audio beat; capture.service (the radio); the outputs opened once after a clean run; LED }
 //
 // The pad bus (I2C2) is not touched by the input init: input::audio_started() after the audio start is the second condition of its gate, which
 // opens a second after the board's rail, and the loop's input pass brings the pad chips up then (OS-BUG-PADS, input/pad_bus.h).
@@ -37,6 +37,7 @@
 #include <o3sdk/hal/cycles.h>
 #include <o3sdk/platform/mk66/audio.h>
 #include <o3sdk/platform/mk66/blink.h>
+#include <o3sdk/platform/mk66/capture.h>
 #include <o3sdk/platform/mk66/crash_record.h>
 #include <o3sdk/platform/mk66/display/device.h>
 #include <o3sdk/platform/mk66/input/device.h>
@@ -156,6 +157,11 @@ bool midi_usb_active(void*) noexcept {
 #endif
 }
 midi::MidiService g_midi(midi::MidiServiceHooks{&midi_heard_at, &midi_kick, &midi_isr_dropped, &midi_usb_active, nullptr, mk66::midi_cfg::kAudioLeadCycles});
+
+// Audio in and the FM radio (docs/M2C-PLAN.md section 5, slice AI): the capture device (the codec's input switch and gain, the analogue switch, the Si4703 driver; capture.h) keeps its state, about 130 bytes,
+// in the SDRAM like the other main-loop objects (a zero static of `.sdram_bss`, 8-aligned: capture_create() constructs it there once, in main). Everything it does is the main loop's.
+alignas(mk66::kCaptureStorageAlign) O3SDK_BIG unsigned char g_capture_storage[mk66::kCaptureStorageBytes];
+static_assert(mk66::kCaptureStorageAlign <= 8u, "O3SDK_BIG places an object on 8 bytes");
 
 #if O3SDK_CONSOLE
 // The app's files (docs/M2C-PLAN.md section 3): the card's write side (FatFs's FIL, DIR and FILINFO of the save layer, about 1.5 KB) and the files service's jobs (the atomic save's read-back buffer,
@@ -385,15 +391,18 @@ int main() {
   // ---- The app: the Runtime uploads the UI's bitmaps, runs App::setup and starts the engine.
   mk66::set_module(kAppModule);
   g_engine.set_cycle_counter(&o3sdk::hal::cycles);  // the header's CPU %
+  // Audio in and the radio (Platform::capture): the radio stays off until a radio source is chosen; nothing here touches the codec until an app or the Config's AUDIO section selects a source.
+  o3sdk::hal::capture::CaptureHw& capture = mk66::capture_create(g_capture_storage);
 #if O3SDK_CONSOLE
   // Every event the app polls is also offered to `input` (console::tap_input), and `key`, `pad` and `enc` inject into the scanner's own queue.
   // The system Config screen's FIRMWARE section drives the same update path as the `fw` command (update::sink()); INFO shows the build label.
   // The card: the files service reads through the volume and writes through g_writer; while the firmware update path holds the card (appimg::firmware_update_active) it refuses (Card::InUse).
   static o3sdk::app::Platform platform{display::display(), console::tap_input(input::input()), &input::leds(), mk66::system_clock(), true, &update::sink(), O3SDK_IMAGE_LABEL, &g_midi,
-                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active};
+                                       &storage::device::storage(), &g_writer, &g_files_work, nullptr, &mk66::appimg::firmware_update_active, &capture};
 #else
   // No update path in this image: the Config screen has no FIRMWARE section.
-  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi};
+  static o3sdk::app::Platform platform{display::display(), input::input(), &input::leds(), mk66::system_clock(), true, nullptr, O3SDK_IMAGE_LABEL, &g_midi,
+                                       nullptr, nullptr, nullptr, nullptr, nullptr, &capture};
 #endif
   static o3sdk::app::Runtime rt(o3sdk_app(), g_engine, platform);
   const bool app_started = rt.start();
@@ -504,6 +513,7 @@ int main() {
   // return in (docs/M2B-PLAN.md D5): the master is on channels 7 and 8. A failure (the table misaligned, the descriptors invalid) leaves the pull-up off and says why in the log; the
   // image runs without USB.
   console::attach_midi(g_midi);  // `midi` reports on it
+  console::attach_capture(capture);  // `radio` reports on it
   console::attach(rt);
   if (usb_crashed) {
     console::log("boot: USB skipped, the last run crashed in it");
@@ -596,6 +606,9 @@ int main() {
       rt.poll();                // input -> app -> screen, the pad LEDs
     }
     mk66::audio_main_pass();  // the beat: a whole pass has run
+    if (!powering_off()) {
+      capture.service(clock.uptime_ms());  // the radio's state machine: one bounded step (at most one I2C transfer), nothing while it is off. Not once the shutdown has the codec's bus.
+    }
 
     const auto ms = static_cast<std::uint32_t>(clock.uptime_ms());
 #if O3SDK_CONSOLE

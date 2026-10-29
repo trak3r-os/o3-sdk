@@ -21,7 +21,7 @@ const char* result_name(Result r) noexcept {
 
 namespace {
 
-static_assert(kMidiTransportOut == kKeyCount, "the keys are 1 .. kKeyCount, in order");
+static_assert(kRadioFreq == kKeyCount, "the keys are 1 .. kKeyCount, in order");
 
 struct Entry {
   std::uint16_t key;
@@ -40,15 +40,21 @@ void gather(const KitValues& v, Entry (&out)[kKeyCount]) noexcept {
   out[6] = {kMidiFollowPort, static_cast<float>(static_cast<unsigned>(m.follow_port))};
   out[7] = {kMidiTransportIn, m.transport_in ? 1.0f : 0.0f};
   out[8] = {kMidiTransportOut, m.transport_out ? 1.0f : 0.0f};
+  out[9] = {kInputSource, static_cast<float>(v.in_source)};
+  out[10] = {kInputGain, static_cast<float>(v.in_gain)};
+  out[11] = {kInputMonitor, static_cast<float>(v.in_monitor)};
+  out[12] = {kRadioRegion, static_cast<float>(v.radio_region)};
+  out[13] = {kRadioFreq, static_cast<float>(v.radio_freq)};
 }
 
 // Applies one entry to `v`: 1 applied, 0 the key is not known, -1 the value is not one this key takes.
 int apply(KitValues& v, std::uint16_t key, float value) noexcept {
-  if (key < kTheme || key > kMidiTransportOut) {
+  if (key < kTheme || key > kRadioFreq) {
     return 0;
   }
-  // Every setting is a small whole number (a NaN fails the first test).
-  if (!(value >= 0.0f && value <= 255.0f) || static_cast<float>(static_cast<unsigned>(value)) != value) {
+  // Every setting is a small whole number (a NaN fails the first test); the station is the one that does not fit a byte.
+  const float limit = key == kRadioFreq ? 65535.0f : 255.0f;
+  if (!(value >= 0.0f && value <= limit) || static_cast<float>(static_cast<unsigned>(value)) != value) {
     return -1;
   }
   const auto n = static_cast<unsigned>(value);
@@ -92,6 +98,31 @@ int apply(KitValues& v, std::uint16_t key, float value) noexcept {
         return -1;
       }
       m.follow_port = static_cast<hal::midi::Port>(n);
+      return 1;
+    case kInputSource:
+      if (n >= hal::capture::kSourceCount) {
+        return -1;
+      }
+      v.in_source = static_cast<std::uint8_t>(n);
+      return 1;
+    case kInputGain:
+    case kInputMonitor:
+      if (n > 100u) {
+        return -1;
+      }
+      (key == kInputGain ? v.in_gain : v.in_monitor) = static_cast<std::uint8_t>(n);
+      return 1;
+    case kRadioRegion:
+      if (n >= hal::capture::kRegionCount) {
+        return -1;
+      }
+      v.radio_region = static_cast<std::uint8_t>(n);
+      return 1;
+    case kRadioFreq:
+      if (n < 7600u || n > hal::capture::kBandTop) {
+        return -1;
+      }
+      v.radio_freq = static_cast<std::uint16_t>(n);
       return 1;
     default:
       return 0;

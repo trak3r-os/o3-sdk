@@ -13,6 +13,7 @@
 //
 // This header is the codec only (pure, no card): app/files.h reads and writes the file, the runtime hands it the values.
 
+#include <o3sdk/hal/capture.h>
 #include <o3sdk/hal/midi.h>
 #include <o3sdk/ui/theme.h>
 
@@ -25,9 +26,15 @@ namespace o3sdk::app {
 struct KitValues {
   ui::ThemeId theme = ui::ThemeId::Amiga;
   hal::midi::Config midi;
+  // Audio in and the radio (audio_in.h, radio.h): hal::capture::Source and Region as numbers, per cent, and the frequency in 10 kHz units. The defaults are an untouched input.
+  std::uint8_t in_source = 0;     // hal::capture::Source, 0 .. kSourceCount-1
+  std::uint8_t in_gain = 0;       // 0 .. 100
+  std::uint8_t in_monitor = 0;    // 0 .. 100 (0: off)
+  std::uint8_t radio_region = 0;  // hal::capture::Region, 0 .. kRegionCount-1
+  std::uint16_t radio_freq = 8750;
 
   friend bool operator==(const KitValues& a, const KitValues& b) noexcept {
-    return a.theme == b.theme && a.midi.channel == b.midi.channel && a.midi.out_channel == b.midi.out_channel && a.midi.out_ports == b.midi.out_ports &&
+    return a.in_source == b.in_source && a.in_gain == b.in_gain && a.in_monitor == b.in_monitor && a.radio_region == b.radio_region && a.radio_freq == b.radio_freq && a.theme == b.theme && a.midi.channel == b.midi.channel && a.midi.out_channel == b.midi.out_channel && a.midi.out_ports == b.midi.out_ports &&
            a.midi.clock_out == b.midi.clock_out && a.midi.follow == b.midi.follow && a.midi.follow_port == b.midi.follow_port &&
            a.midi.transport_in == b.midi.transport_in && a.midi.transport_out == b.midi.transport_out;
   }
@@ -51,8 +58,13 @@ enum Key : std::uint16_t {
   kMidiFollowPort = 7,  // Config::follow_port, a hal::midi::Port
   kMidiTransportIn = 8,   // Config::transport_in, 0 or 1
   kMidiTransportOut = 9,  // Config::transport_out, 0 or 1
+  kInputSource = 10,   // hal::capture::Source, 0 .. kSourceCount-1 (M2c slice AI)
+  kInputGain = 11,     // the source's gain, 0 .. 100 per cent
+  kInputMonitor = 12,  // the monitor's level, 0 (off) .. 100 per cent
+  kRadioRegion = 13,   // hal::capture::Region, 0 .. kRegionCount-1
+  kRadioFreq = 14,     // the station, 10 kHz units: the region's band, 7600 .. 10800
 };
-inline constexpr unsigned kKeyCount = 9;  // the keys of this version
+inline constexpr unsigned kKeyCount = 14;  // the keys of this version
 
 enum class Result : std::uint8_t {
   Ok,

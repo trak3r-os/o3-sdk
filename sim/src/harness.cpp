@@ -63,9 +63,11 @@ void put_u16(std::FILE* f, std::uint16_t v) {
 
 }  // namespace
 
-Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi, platform::host::HostCard* card, const char* app_id)
+Harness::Harness(app::App& app, hal::firmware::FirmwareSink* firmware, platform::host::FakeMidi* midi, platform::host::HostCard* card, const char* app_id,
+                 platform::host::FakeCapture* capture)
     : app_(app),
       midi_(midi),
+      capture_(capture),
       firmware_(firmware),
       inner_card_(card),
       app_id_(app_id),
@@ -84,7 +86,7 @@ Harness::~Harness() = default;
 // The platform and the runtime over the engine in hand (the card's work memory is made afresh: a restart starts from nothing).
 void Harness::make_runtime() {
   files_work_ = protect_ != nullptr ? std::make_unique<app::Files::Work>() : nullptr;
-  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr});
+  platform_ = std::make_unique<app::Platform>(app::Platform{*display_, input_, &leds_, clock_, false, firmware_, "sim", midi_, protect_.get(), protect_.get(), files_work_.get(), app_id_, nullptr, capture_});
   runtime_ = std::make_unique<app::Runtime>(app_, *engine_, *platform_);
 }
 
@@ -201,6 +203,9 @@ void Harness::render_due() {
   std::int16_t out[hal::audio::kBlockSamples];
   hal::audio::BlockReport report{};
   while (samples_ + hal::audio::kBlock <= due) {
+    if (capture_ != nullptr) {
+      capture_->read_block(in, hal::audio::kBlock);  // what the codec hears this block
+    }
     const hal::audio::BlockIo io{in, out, 0u, &report};
     cb.fn(cb.user, io);
     samples_ += hal::audio::kBlock;
@@ -214,6 +219,9 @@ void Harness::run_ms(std::uint32_t ms) {
   for (std::uint32_t i = 0; i < ms; ++i) {
     clock_.advance(core::kTicksPerMs);
     render_due();
+    if (capture_ != nullptr) {
+      capture_->service(clock_.uptime_ms());  // the platform's main loop: the radio's state machine, once a pass
+    }
     runtime_->poll();
   }
 }

@@ -50,6 +50,7 @@
 #include <o3sdk/hal/audio.h>
 #include <o3sdk/platform/mk66/audio/pipeline.h>
 #include <o3sdk/platform/mk66/audio/status.h>
+#include <o3sdk/platform/mk66/sgtl5000.h>
 
 #include <cstdint>
 
@@ -57,6 +58,9 @@ namespace o3sdk::platform::mk66 {
 
 // The one audio device (an object in .bss, valid after the static constructors).
 hal::audio::Device& audio_device() noexcept;
+// OS-011c: writes the register steps of a source switch (sgtl5000.h InputPlan, composed by the caller with audio_device().outputs_enabled()) to the codec. Remembers the ADC's
+// input select so that a later unmute() or mute() keeps it. False: the audio path is not started or a write was not acknowledged. Main thread only.
+bool audio_input_apply(const sgtl5000::InputPlan& plan) noexcept;
 // OS-POWER P1 (docs/specs/OS-POWER.md 4.1 A2, 4.6): the one stop of the audio path. The codec is muted click-free (the DAC through its own soft ramp, the amplifier key LOW, the outputs muted and the analogue
 // stage powered down: sgtl5000.h run_stop), then the I2S transmitter and receiver, the two eDMA channels and the two interrupt lines are stopped; the path is "not started" afterwards. Main thread only;
 // it blocks for about 70 ms (the caller keeps the display serviced). Plain when the path never started (the boot disk mode). The caller sets the power-off latch FIRST (appimg::power_off_latched):

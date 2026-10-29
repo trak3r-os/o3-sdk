@@ -1,0 +1,115 @@
+# Audio in and the FM radio on HELLO (kit/app audio_in.h, radio.h, docs/M2C-PLAN.md section 5): the Config's AUDIO section on a fake codec input.
+#
+#   mkdir <dir> && build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/audio_in.txt --out <dir> --wav <dir>/hello.wav
+#
+# The scenario fails at the first `expect` that is wrong. The WAV (the master) holds: nothing while the monitor is off, the 440 Hz tone in at -12 dBFS from the monitor (on, 70 %),
+# a silent gap while the INPUT switch settles (200 ms), the tone again, louder after GAIN, then the radio's stations, one tone each, at freq / 10 Hz (88.5 MHz is 885 Hz).
+record on
+input tone 440 -12
+radio stations 88.5 93.7 101.1
+wait 100
+expect state card=none
+snap 00_hello
+
+# The AUDIO section is the first of the Config here (no update path): INPUT, GAIN, MONITOR. Nothing was selected: the codec's power-up input is what the app has.
+tap config
+expect state sys=1
+expect state section=audio
+expect state in=line
+expect state gain=0
+expect state mon=0
+expect state gate=1
+expect state radio=off
+snap 01_audio_line
+
+# MONITOR on with F1 (off / on at 70 %): the input joins the master.
+tap down
+tap down
+tap f1
+expect state mon=70
+wait 300
+snap 02_monitor_on
+
+# INPUT one choice on: LINE LEFT. The gate shuts for 200 ms (the planes are silent) and opens again by itself.
+tap up
+tap up
+turn 1
+expect state in=lineleft
+expect state gate=0
+snap 03_settling
+wait 100
+expect state gate=0
+wait 150
+expect state in=lineleft
+expect state gate=1
+
+# GAIN +20 per cent.
+tap down
+turn 20
+expect state gain=20
+wait 300
+snap 04_gain
+
+# INPUT up to RADIO: the receiver powers up (0.7 s), nothing is on 87.50 MHz, and the radio rows are there.
+tap up
+turn 4
+expect state in=radio
+expect state radio=starting
+wait 300
+expect state radio=starting
+wait 600
+expect state radio=ready
+expect state freq=8750
+snap 05_radio_ready
+
+# F6 seeks up: 88.50 MHz, then 93.70 MHz; F5 seeks down again.
+tap f6
+expect state radio=seeking
+wait 600
+expect state radio=ready
+expect state freq=8850
+snap 06_radio_8850
+wait 300
+tap f6
+wait 600
+expect state radio=ready
+expect state freq=9370
+wait 300
+tap f5
+wait 600
+expect state radio=ready
+expect state freq=8850
+
+# FREQ (the fourth row) with the encoder: a channel at a time (100 kHz in Europe), SHIFT ten.
+tap down
+tap down
+tap down
+turn 2
+expect state freq=8870
+wait 300
+snap 07_freq
+
+# REGION: the next one (USA: 200 kHz channels), then back.
+tap down
+tap f1
+wait 200
+snap 08_region
+tap f1
+tap f1
+tap f1
+wait 200
+
+# Back to a line input: the radio rows go.
+tap up
+tap up
+tap up
+tap up
+turn -5
+expect state in=line
+expect state gate=0
+wait 300
+expect state gate=1
+snap 09_back_to_line
+tap config
+expect state sys=0
+wav hello

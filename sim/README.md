@@ -9,6 +9,7 @@ build-host/apps/hello/hello_sim --ms 2000 --wav /tmp/hello.wav     # the whole r
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config.txt --firmware-dir apps/hello/scenarios/firmware --out /tmp/hello
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out /tmp/hello    # notes and a master clock in (a fake MIDI device)
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/files.txt --card /tmp/hello-card --out /tmp/hello   # the file API on a card directory
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/audio_in.txt --out /tmp/hello --wav /tmp/hello.wav  # a tone in, the monitor, the radio (a fake codec input and radio)
 ```
 
 `--firmware-dir DIR` gives the system Config screen a fake update path (`platform/host/fake_firmware.h`) over the `*.ptf` files of `DIR`, in name
@@ -24,6 +25,16 @@ In a test, `sim::Harness(app, firmware, &fake_midi)` takes any `hal::midi::Devic
 The fake is also the reference model of what a real device promises the kit (`hal/midi.h`): input stamped with a frame, an ideal master clock (`clock_start`,
 `clock_continue`, `clock_stop`, `clock_tempo`, `clock_off`: Start at the next block, a quiet master flywheeled for 48 clocks), and the clock and transport
 the app sends captured with their sample (`FakeMidi::sent`).
+
+`--audio-in` gives the app a fake codec input and FM radio (`platform/host/fake_capture.h`, `hal::capture::CaptureHw`): the AUDIO section of the system Config,
+`Context::audio_in()` and `radio()`. A scenario that has an `input` or `radio` line gets one without the option. Without one (the default) the app has no audio in: no AUDIO section, every call
+of `audio_in()` and `radio()` is refused and the input of every block is silence, so the render is the one an app without audio in always had. The scenario's `input tone <hz> [<dbfs>]`,
+`input wav <file>` (16-bit PCM, looped) and `input off` set what the codec hears at the line jack and the microphone; the fake scales it by the gain the kit set (line 0..22.5 dB, microphone
+0..25 or 0..44 dB, as the platform maps it) and delivers it as the engine's input, so a unit's `in_l` / `in_r` and a hook's `input_l()` see it, and the monitor plays it in the master (`wav`).
+`radio stations <f...>` is what the air holds (MHz, `93.7`, or 10 kHz units, `9370`): a seek finds the next of them, and a tuned one is a sine at freq / 10 Hz in the input while the source is
+Radio; `radio absent` is a board with no receiver (Absent after the power-up: the AUDIO section says so). The fake follows the driver's states and its times (Starting 0.7 s, Tuning 80 ms,
+Seeking 0.4 s). In a test, `sim::Harness(app, firmware, midi, card, app_id, &fake_capture)` takes any `hal::capture::CaptureHw`; `Harness::capture()` is the fake (`refuse_writes(n)` makes the codec
+not acknowledge, to test the retry).
 
 `--card DIR` gives the app an SD card: the directory `DIR` (made when it is not there) is its root (`platform/host/dir_card.h`: a `hal::storage::Storage` and
 `StorageWriter` that applies the real write guard, `hal/app_guard.h`, to every change). `Context::files()` saves and loads under `DIR/Apps/<app>/` (`<app>` is the CMake id: `hello`), the
@@ -79,6 +90,8 @@ One command a line, `#` starts a comment (`sim/include/o3sdk/sim/scenario.h`):
 | `wav <name>` | `<out>/<name>.wav`, what has been recorded so far |
 | `midi <din\|usb> <hex...>` | MIDI bytes arriving on a port now, `midi din 90 3c 64` (a note on, channel 1, middle C); channel messages only, with running status, so `midi din 90 30 64 34 64` is two notes; they land in the block that renders next |
 | `clock <bpm> start\|stop` | a MIDI master at `<bpm>` (20 .. 300, decimals allowed) sends Start or Stop; `clock <bpm> continue <beats>` is a song position (sixteenths) then Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in the Config's MIDI section |
+| `input tone <hz> [<dbfs>]`, `input wav <file>`, `input off` | what the fake codec hears (a capture device: `--audio-in`, or a scenario that has the line): a sine at -12 dBFS by default, a looped 16-bit WAV, or silence |
+| `radio stations <f...>`, `radio absent`, `radio present` | the stations the fake receiver finds (MHz or 10 kHz units); a board with no receiver, or with one |
 
 | `card out` / `card in` | the card out of its slot (every card call answers NO CARD, a file being written stays torn) and back (mounted at once, the runtime told as the platform's card watch does) |
 | `card protect on\|off` | the card's write-protect switch |

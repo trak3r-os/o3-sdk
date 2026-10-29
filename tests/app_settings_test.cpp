@@ -31,6 +31,11 @@ KitValues non_default() {
   v.midi.follow_port = hal::midi::Port::Usb;
   v.midi.transport_in = false;
   v.midi.transport_out = false;
+  v.in_source = 4;  // M2c slice AI: the audio in and the radio (mic high, 40 %, monitor 70, Japan, 82.10 MHz)
+  v.in_gain = 40;
+  v.in_monitor = 70;
+  v.radio_region = 3;
+  v.radio_freq = 8210;
   return v;
 }
 
@@ -81,23 +86,28 @@ TEST_CASE("settings: the keys are the documented ones, in order, and never move"
   CHECK(st::kMidiFollowPort == 7);
   CHECK(st::kMidiTransportIn == 8);
   CHECK(st::kMidiTransportOut == 9);
-  CHECK(st::kKeyCount == 9);
+  CHECK(st::kInputSource == 10);  // slice AI
+  CHECK(st::kInputGain == 11);
+  CHECK(st::kInputMonitor == 12);
+  CHECK(st::kRadioRegion == 13);
+  CHECK(st::kRadioFreq == 14);
+  CHECK(st::kKeyCount == 14);
   CHECK(st::kSetsVersion == 0x0100);
 }
 
 TEST_CASE("settings: the file of the defaults is the documented bytes") {
   const std::vector<std::uint8_t> f = file_of(KitValues{});
-  // FORM, length, O3SK, SETS 4 + 9 * 6 = 58 bytes (even: no pad), CRC.
-  REQUIRE(f.size() == 12 + 8 + 58 + 14);
+  // FORM, length, O3SK, SETS 4 + 14 * 6 = 88 bytes (even: no pad), CRC.
+  REQUIRE(f.size() == 12 + 8 + 88 + 14);
   CHECK(std::memcmp(f.data(), "FORM", 4) == 0);
   CHECK(std::memcmp(f.data() + 8, "O3SK", 4) == 0);
   CHECK(std::memcmp(f.data() + 12, "SETS", 4) == 0);
   CHECK(f[16] == 0);
-  CHECK(f[19] == 58);
+  CHECK(f[19] == 88);
   CHECK(f[20] == 0x01);  // version 1.0
   CHECK(f[21] == 0x00);
-  CHECK(f[22] == 0x00);  // nine entries
-  CHECK(f[23] == 0x09);
+  CHECK(f[22] == 0x00);  // fourteen entries
+  CHECK(f[23] == 0x0E);
   // Entry 1: key 1 (theme), the value 0.0f; entry 2: key 2 (channel, omni 0); entry 3: key 3, out channel 1.0f = 0x3F800000.
   CHECK(f[24] == 0);
   CHECK(f[25] == 1);
@@ -117,7 +127,7 @@ TEST_CASE("settings: every setting round trips, the defaults and a file of chang
     st::Report rep;
     REQUIRE(st::read(f.data(), f.size(), back, rep) == st::Result::Ok);
     CHECK(back == v);
-    CHECK(rep.applied == 9);
+    CHECK(rep.applied == 14);
     CHECK(rep.skipped_keys == 0);
     CHECK(rep.skipped_values == 0);
     CHECK(rep.unknown_chunks == 0);
@@ -140,19 +150,19 @@ TEST_CASE("settings: a key the file lacks keeps the value the app set, one it ha
 
 TEST_CASE("settings: a key this version does not know is skipped and counted, the rest is read") {
   KitValues v;
-  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {10, 0.0f}, {0, 1.0f}});
+  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {15, 0.0f}, {0, 1.0f}});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(v.midi.channel == 5);
   CHECK(v.theme == ui::ThemeId::White);
   CHECK(rep.applied == 2);
-  CHECK(rep.skipped_keys == 3);  // 99, 10 (the next key of a newer firmware) and 0
+  CHECK(rep.skipped_keys == 3);  // 99, 15 (the next key of a newer firmware) and 0
 }
 
 TEST_CASE("settings: a newer minor version is read as far as this version knows it") {
   KitValues v;
-  // Version 1.3 with entries a later firmware appended (key 10, 11) and two extra bytes at the end of the chunk.
-  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {10, 4.0f}, {11, 1.0f}}, 2, [](chunk::Writer&) {});
+  // Version 1.3 with entries a later firmware appended (key 15, 16) and two extra bytes at the end of the chunk.
+  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {15, 4.0f}, {16, 1.0f}}, 2, [](chunk::Writer&) {});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(rep.newer_minor);
@@ -278,7 +288,7 @@ TEST_CASE("settings: a damaged file is refused at every byte and every cut, and 
 TEST_CASE("settings: a buffer that is too small writes nothing") {
   std::uint8_t tiny[40];
   CHECK(st::write(non_default(), tiny, sizeof tiny) == 0);
-  std::uint8_t exact[12 + 8 + 58 + 14];
+  std::uint8_t exact[12 + 8 + 88 + 14];
   CHECK(st::write(non_default(), exact, sizeof exact) == sizeof exact);
   CHECK(st::write(non_default(), nullptr, 0) == 0);
 }

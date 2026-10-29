@@ -28,6 +28,7 @@
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/eve/display_list_builder.h>
 #include <o3sdk/hal/audio.h>
+#include <o3sdk/hal/capture.h>
 #include <o3sdk/hal/clock.h>
 #include <o3sdk/hal/display.h>
 #include <o3sdk/hal/firmware.h>
@@ -65,6 +66,10 @@ struct Platform {
   Files::Work* files_work = nullptr;
   const char* app_id = nullptr;
   bool (*card_claim)() noexcept = nullptr;
+  // Audio in and the FM radio (audio_in.h, radio.h, docs/M2C-PLAN.md section 5): the codec's source and gain and the receiver, for Context::audio_in() and radio() and the AUDIO section of the
+  // system Config. The platform's main loop calls capture->service(uptime_ms) once a pass (the radio's state machine; it does at most one bus transfer). Null (a test rig, an image without
+  // it): no AUDIO section, every call of audio_in() and radio() is refused, and the runtime and the render are as they were.
+  hal::capture::CaptureHw* capture = nullptr;
 };
 
 // Layout of the chrome (the theme's metrics: a 32 px strip, a 22 px key row).
@@ -103,11 +108,14 @@ class Runtime {
   // `playing` is the last Play/Stop the main loop asked for, `tempo` is in milli-BPM (120000 = 120.0), `cpu` the render's load of the
   // last block in percent (0 without a cycle counter), `frames` the frames drawn. Spaces in a name become '_'. NUL terminated, cut
   // at a pair when `cap` is short; returns the length. Main loop only.
-  //   ... frames=<n> sys=0|1 section=<firmware|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>
+  //   ... frames=<n> sys=0|1 section=<firmware|audio|midi|display|info> fw=<closed|list|ask_update|checking|ask_install|installing>
   //       card=<none|ready|readonly|unsupported|computer|inuse> files=<idle|running|done|failed> [<the app's pairs>]
   // `sys` is the system Config screen being open, `section` the one it shows (or was left on), `fw` the firmware switcher's phase, `card` the
   // files service's view of the card (files.h Card; `none` also without a card capability) and `files` the phase of its last job (Files::Status).
   // `tempo` and `playing` are the master's while the engine follows a MIDI clock (Engine::tempo).
+  //   ... files=<...> [in=<line|lineleft|lineright|miclow|michigh|radio|usb> gain=<0..100> mon=<0..100> gate=0|1 radio=<off|starting|ready|tuning|seeking|absent|failed> freq=<10 kHz units>]
+  //       [<the app's pairs>]
+  // The audio pairs (the choice of Context::audio_in() and radio(); `gate` is 0 while the source settles) are there only when the platform has a capture device.
   std::size_t state_line(char* out, std::size_t cap) const noexcept;
 
   // ---- The system layer (system_config.h) -----------------------------------------------------------------------------------------
@@ -141,6 +149,7 @@ class Runtime {
   void draw_keys(ui::Renderer& r) noexcept;
   void update_leds() noexcept;
   KitValues kit_values() const noexcept;
+  void apply_kit_audio(const KitValues& v) noexcept;
 
   App& app_;
   dsp::Engine& engine_;

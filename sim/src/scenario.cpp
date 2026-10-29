@@ -19,6 +19,15 @@ bool to_int(const std::string& s, long& out) {
   return end != nullptr && *end == '\0';
 }
 
+bool to_double(const std::string& s, double& out) {
+  if (s.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  out = std::strtod(s.c_str(), &end);
+  return end != nullptr && *end == '\0';
+}
+
 // "140" or "140.5" as milli-BPM; false for anything else or outside 20 .. 300 BPM.
 bool to_mbpm(const std::string& s, std::uint32_t& out) {
   if (s.empty()) {
@@ -49,6 +58,24 @@ bool to_byte(const std::string& s, std::uint8_t& out) {
     v = v * 16u + static_cast<unsigned>(d);
   }
   out = static_cast<std::uint8_t>(v);
+  return true;
+}
+
+// A station: "93.7" (MHz) or "9370" (10 kHz units) as 10 kHz units; false outside the FM bands (76 .. 108 MHz).
+bool to_station(const std::string& s, std::uint16_t& out) {
+  if (s.empty()) {
+    return false;
+  }
+  char* end = nullptr;
+  const double v = std::strtod(s.c_str(), &end);
+  if (end == nullptr || *end != '\0' || !(v > 0.0)) {
+    return false;
+  }
+  const double units = v < 200.0 ? v * 100.0 : v;
+  if (!(units >= 7600.0 && units <= 10800.0)) {
+    return false;
+  }
+  out = static_cast<std::uint16_t>(units + 0.5);
   return true;
 }
 
@@ -206,6 +233,47 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
         h.midi()->clock_continue(mbpm, static_cast<unsigned>(n));
       } else {
         return fail("clock <bpm 20..300> start|stop, clock <bpm> continue <beats>, or clock off");
+      }
+    } else if (cmd == "input") {
+      if (h.capture() == nullptr) {
+        return fail("input: this harness has no capture device (<app>_sim makes one when the scenario has an input or radio line, or with --audio-in)");
+      }
+      if (w.size() >= 2 && w[1] == "tone") {
+        double hz = 0.0;
+        double dbfs = -12.0;
+        if (w.size() < 3 || w.size() > 4 || !to_double(w[2], hz) || (w.size() == 4 && !to_double(w[3], dbfs)) || !(hz >= 20.0 && hz <= 20000.0) ||
+            !(dbfs <= 0.0 && dbfs >= -96.0)) {
+          return fail("input tone <hz 20..20000> [<dbfs -96..0>]");
+        }
+        h.capture()->input_tone(static_cast<float>(hz), static_cast<float>(dbfs));
+      } else if (w.size() == 3 && w[1] == "wav") {
+        std::string why;
+        if (!h.capture()->input_wav_file(w[2], why)) {
+          return fail("input wav: " + why);
+        }
+      } else if (w.size() == 2 && w[1] == "off") {
+        h.capture()->input_off();
+      } else {
+        return fail("input tone <hz> [<dbfs>] | input wav <file> | input off");
+      }
+    } else if (cmd == "radio") {
+      if (h.capture() == nullptr) {
+        return fail("radio: this harness has no capture device (<app>_sim makes one when the scenario has an input or radio line, or with --audio-in)");
+      }
+      if (w.size() >= 3 && w[1] == "stations") {
+        std::vector<std::uint16_t> list;
+        for (std::size_t i = 2; i < w.size(); ++i) {
+          std::uint16_t f = 0;
+          if (!to_station(w[i], f)) {
+            return fail("radio stations: '" + w[i] + "' is not a frequency (87.5 or 8750, 76 .. 108 MHz)");
+          }
+          list.push_back(f);
+        }
+        h.capture()->radio_stations(std::move(list));
+      } else if (w.size() == 2 && (w[1] == "absent" || w[1] == "present")) {
+        h.capture()->radio_absent(w[1] == "absent");
+      } else {
+        return fail("radio stations <f...> | radio absent | radio present");
       }
     } else if (cmd == "card") {
       if (h.card() == nullptr) {

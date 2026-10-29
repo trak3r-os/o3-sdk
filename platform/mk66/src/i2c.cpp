@@ -221,6 +221,17 @@ Result init(i2c_cfg::Instance which) noexcept { return init_instance(i2c_cfg::fa
 
 Result init() noexcept { return init(i2c_cfg::Instance::I2c0); }
 
+Result sda_hold(bool low) noexcept {
+  const InstanceFacts& f = i2c_cfg::facts(i2c_cfg::Instance::I2c0);
+  if (low) {
+    regs::port_pcr(f.sda) = regs::kPcrMuxGpio | regs::kPcrOdeDseSre;
+    pull_low(f.sda);
+    return Result::Ok;
+  }
+  release(f.sda);
+  return init_instance(f);  // the pins back to the peripheral, the bus cleared, the divider and the enable as at the first start
+}
+
 Result write_reg(std::uint8_t address7, std::uint16_t reg, std::uint16_t value) noexcept {
   const std::uint8_t tx[4] = {static_cast<std::uint8_t>(reg >> 8), static_cast<std::uint8_t>(reg & 0xFFu),
                               static_cast<std::uint8_t>(value >> 8), static_cast<std::uint8_t>(value & 0xFFu)};

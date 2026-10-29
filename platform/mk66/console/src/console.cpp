@@ -35,6 +35,9 @@
 //   leds       the pad LED levels the driver holds, one line. A read.
 //   cache      the LMEM code cache: `cache` shows the state, `cache on|off` switches it (PCCCR only), `cache inv` invalidates it.
 //   files      slice FA (o3-sdk's own): the app file API's state and cost (console/files_command.h), and `files crc <path>`, the CRC-32 of a file of the card. A read.
+//   radio      OS-RAD1 (slice AI of M2c): the FM radio driver's state, step, last failure (step/cause), last I2C result, registers as last read and pin levels; `radio retry` runs the power-up again from the
+//              reset while the radio is the selected input. A read apart from the retry.
+//   mon        slice AI of M2c: the audio-in monitor's level (`mon`, `mon off`, `mon on`, `mon 0..100`), Context::audio_in().monitor(). The one command that changes the sound.
 //   midi       slice MD (o3-sdk's own): the MIDI service's snapshot and the DIN and USB drivers' counters (console/midi_report.h says each word). A read.
 //   power      OS-POWER P1 (docs/M2B2-PLAN.md, slice P): the Power switch (PTC3): `power` the pin in the three pulls, the hold's state and counters, the shutdown's stages; `power press|release|pin` feed the hold
 //              in place of the pin (a scripted hold needs no finger); `power off [dry]` runs the shutdown (stages 0 to F: USB off, the lights out, then, after the release of Power, the VLPR off of OS-POWER P2:
@@ -50,6 +53,7 @@
 #include <o3sdk/core/placement.h>
 #include <o3sdk/platform/mk66/audio.h>
 #include <o3sdk/platform/mk66/audio/diag.h>
+#include <o3sdk/platform/mk66/capture.h>
 #include <o3sdk/platform/mk66/console/attach.h>
 #include <o3sdk/platform/mk66/console/commands.h>
 #include <o3sdk/platform/mk66/console/core.h>
@@ -503,6 +507,71 @@ void cmd_files(shell::Shell& sh, const shell::Args& a) {
   run_files_command(sh, *g_files, storage::device::storage(), a);
 }
 
+// `radio [retry]` (OS-RAD1; slice AI of M2c, track3r-os's handler with the recorder's conditions replaced by the kit's): the FM radio driver's state, step, last failure, last bus result, the registers as last
+// read and the lines' levels; `radio retry` runs the power-up again from the reset (main loop, like a source change does), but only while the radio is the selected input (Context::audio_in(): the reset
+// would otherwise power a receiver nobody listens to; then the state only, and why). A read apart from the retry, which writes the radio's registers.
+hal::capture::CaptureHw* g_capture = nullptr;
+app::AudioIn* g_audio_in = nullptr;
+void cmd_radio(shell::Shell& sh, const shell::Args& a) {
+  if (a.argc > 2 || (a.argc == 2 && !same(a.argv[1], "retry"))) {
+    sh.out().text("usage: radio [retry]\n");
+    return;
+  }
+  if (g_capture == nullptr) {
+    sh.out().text("radio: this image has no radio\n");
+    return;
+  }
+  bool retried = false;
+  if (a.argc == 2) {
+    if (g_audio_in != nullptr && g_audio_in->source() == hal::capture::Source::Radio) {
+      capture_radio_restart(*g_capture);
+      retried = true;
+    } else {
+      sh.out().text("radio: retry skipped, the radio is not the selected input (select INPUT RADIO in the Config's AUDIO section first). State only:\n");
+    }
+  }
+  char buf[kTextBuffer];
+  const std::size_t n = capture_radio_report(*g_capture, buf, sizeof buf);
+  if (n == 0u) {
+    sh.out().text("radio: this image has no radio\n");
+    return;
+  }
+  if (retried) {
+    sh.out().text("radio: power-up started again from the reset; `radio` shows how it went\n");
+  }
+  send(sh, n, buf);
+}
+
+// `mon [off|on|0..100]` (slice AI of M2c; track3r-os's line-in monitor level on the kit's audio in): shows the monitor's level; `mon off`, `mon on` (70) or `mon <0..100>` sets it
+// (Context::audio_in().monitor(): the input joins the master bus before the master inserts, ramped across a block, 0 is off and free). Not with the main out patched to the line in.
+void cmd_mon(shell::Shell& sh, const shell::Args& a) {
+  if (g_audio_in == nullptr) {
+    sh.out().text("mon: not in this image\n");
+    return;
+  }
+  if (a.argc > 2) {
+    sh.out().text("usage: mon [off|on|0..100]\n");
+    return;
+  }
+  if (a.argc == 2) {
+    std::uint32_t level = 0;
+    if (same(a.argv[1], "off")) {
+      level = 0;
+    } else if (same(a.argv[1], "on")) {
+      level = app::AudioIn::kMonitorOn;
+    } else if (!parse_dec(a.argv[1], 100u, level)) {
+      sh.out().text("usage: mon [off|on|0..100]\n");
+      return;
+    }
+    g_audio_in->monitor(level);
+  }
+  char buf[160];
+  audio::diag::Text t(buf, sizeof buf);
+  t.str("monitor ").dec(g_audio_in->monitor()).str(" %, input ").dec(static_cast<std::uint32_t>(g_audio_in->source())).str(" (0 line .. 5 radio), gain ").dec(g_audio_in->gain());
+  t.str(" %, the gate is ").str(g_audio_in->settling() ? "shut (settling)" : "open").str("; mon on = ").dec(app::AudioIn::kMonitorOn).str(", mon off = 0").nl();
+  send(sh, t.size(), buf);
+}
+
 // ---- OS-HIL: input injection (console/inject_commands.h), the screen, the pad LEDs ------------------------------------------------------------
 // The scanner's queue is the one the key chips feed, both ends in the main loop, and so is the console: the injector's pushes never race the scan.
 
@@ -847,6 +916,7 @@ void attach(app::Runtime& runtime) noexcept {
   appimg::bind_engine(runtime.context().engine());
   appimg::bind_files(runtime.context().files());
   g_files = &runtime.context().files();
+  g_audio_in = &runtime.context().audio_in();
   g_commands.assemble(runtime.context().app(), &log);
   shell::CommandFn kit[kKitCommandCount] = {};
   kit[static_cast<unsigned>(Cmd::Help)] = &help_command;
@@ -876,6 +946,8 @@ void attach(app::Runtime& runtime) noexcept {
   kit[static_cast<unsigned>(Cmd::Guard)] = &cmd_guard;
   kit[static_cast<unsigned>(Cmd::Midi)] = &cmd_midi;
   kit[static_cast<unsigned>(Cmd::Files)] = &cmd_files;
+  kit[static_cast<unsigned>(Cmd::Radio)] = &cmd_radio;
+  kit[static_cast<unsigned>(Cmd::Mon)] = &cmd_mon;
   g_table.build(g_commands, runtime, kit);
   bind_inject(&g_inject);
   g_shell = new (g_shell_storage) shell::Shell(g_table.rows(), g_table.size(), shell::Output(shell::Sink{&sink_write, &sink_flush, nullptr, &sink_room}));
@@ -884,6 +956,8 @@ void attach(app::Runtime& runtime) noexcept {
 }
 
 void attach_midi(const midi::MidiService& service) noexcept { g_midi = &service; }
+
+void attach_capture(hal::capture::CaptureHw& capture) noexcept { g_capture = &capture; }
 
 void note_usb_started() noexcept {
   guard_layout(usb0::mode() == o3sdk::usb::Mode::Audio ? UsbModeGuard::Layout::Audio : UsbModeGuard::Layout::Standard);

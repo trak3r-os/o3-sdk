@@ -16,7 +16,7 @@ target_link_libraries(o3sdk_tests PRIVATE formats platform_host_fat platform_mk6
 if(TARGET app_hello)
   target_link_libraries(o3sdk_tests PRIVATE "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_hello>")
   get_filename_component(hello_scenarios "${CMAKE_CURRENT_SOURCE_DIR}/../apps/hello/scenarios" ABSOLUTE)
-  set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/sim_midi_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_files_test.cpp PROPERTIES COMPILE_DEFINITIONS "O3SDK_HELLO_SCENARIOS=\"${hello_scenarios}\"")
+  set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/sim_midi_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/sim_files_test.cpp ${CMAKE_CURRENT_SOURCE_DIR}/app_audio_in_test.cpp PROPERTIES COMPILE_DEFINITIONS "O3SDK_HELLO_SCENARIOS=\"${hello_scenarios}\"")
 endif()
 o3sdk_strict_warnings(o3sdk_tests)
 # The tree builds without exceptions: REQUIRE then ends the run with std::terminate on a failure, which ctest reports.

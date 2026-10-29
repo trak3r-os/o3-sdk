@@ -83,6 +83,34 @@ const char* files_phase_name(Files::Status::Phase p) noexcept {
   return "idle";
 }
 
+const char* source_name(hal::capture::Source s) noexcept {
+  switch (s) {
+    case hal::capture::Source::LineMix: return "line";
+    case hal::capture::Source::LineLeft: return "lineleft";
+    case hal::capture::Source::LineRight: return "lineright";
+    case hal::capture::Source::MicLow: return "miclow";
+    case hal::capture::Source::MicHigh: return "michigh";
+    case hal::capture::Source::Radio: return "radio";
+    case hal::capture::Source::Usb: return "usb";
+    case hal::capture::Source::Count: break;
+  }
+  return "line";
+}
+
+const char* radio_state_name(hal::capture::RadioStatus::State s) noexcept {
+  using State = hal::capture::RadioStatus::State;
+  switch (s) {
+    case State::Off: return "off";
+    case State::Starting: return "starting";
+    case State::Ready: return "ready";
+    case State::Tuning: return "tuning";
+    case State::Seeking: return "seeking";
+    case State::Absent: return "absent";
+    case State::Failed: return "failed";
+  }
+  return "off";
+}
+
 // The render's load of the last block in percent (the header's number).
 std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
   return static_cast<std::uint32_t>(static_cast<std::uint64_t>(s.cycles) * 100u / hal::audio::kCyclesPerBlock);
@@ -91,10 +119,12 @@ std::uint32_t cpu_percent(const dsp::EngineStats& s) noexcept {
 }  // namespace
 
 Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
-    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr) {
+    : app_(app), engine_(engine), platform_(platform), sys_(platform.firmware, platform.build, platform.midi != nullptr, platform.capture != nullptr) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
   ctx_.midi_.bind(platform_.midi, &engine_);
+  ctx_.audio_in_.bind(platform_.capture, &engine_);
+  ctx_.radio_.bind(platform_.capture);
   ctx_.files_.bind(platform_.storage, platform_.writer, platform_.files_work, platform_.app_id != nullptr ? platform_.app_id : o3sdk_app_id(), platform_.card_claim);
 }
 
@@ -103,7 +133,24 @@ KitValues Runtime::kit_values() const noexcept {
   KitValues v;
   v.theme = ctx_.theme_;
   v.midi = ctx_.midi_.config();
+  v.in_source = static_cast<std::uint8_t>(ctx_.audio_in_.source());
+  v.in_gain = static_cast<std::uint8_t>(ctx_.audio_in_.gain());
+  v.in_monitor = static_cast<std::uint8_t>(ctx_.audio_in_.monitor());
+  v.radio_region = static_cast<std::uint8_t>(ctx_.radio_.region());
+  v.radio_freq = static_cast<std::uint16_t>(ctx_.radio_.freq());
   return v;
+}
+
+// The loaded audio choice over the app's: only what differs from what is in place is applied, so that a card that holds the defaults (an app that never used audio in) costs the codec nothing
+// and the gate nothing. The radio's region and station go first: selecting the radio powers the chip up on them.
+void Runtime::apply_kit_audio(const KitValues& v) noexcept {
+  const KitValues now = kit_values();
+  if (v.radio_region != now.radio_region || v.radio_freq != now.radio_freq) {
+    ctx_.radio_.restore(static_cast<hal::capture::Region>(v.radio_region), v.radio_freq);
+  }
+  if (v.in_source != now.in_source || v.in_gain != now.in_gain || v.in_monitor != now.in_monitor) {
+    ctx_.audio_in_.restore(static_cast<AudioIn::Source>(v.in_source), v.in_gain, v.in_monitor);
+  }
 }
 
 Files::SettingsLoad Runtime::load_settings() noexcept {
@@ -112,6 +159,7 @@ Files::SettingsLoad Runtime::load_settings() noexcept {
   if (result == Files::SettingsLoad::Loaded || result == Files::SettingsLoad::FromBackup) {
     ctx_.theme_ = v.theme;
     ctx_.midi_.set_config(v.midi);
+    apply_kit_audio(v);
     ctx_.redraw_ = true;
   }
   return result;
@@ -195,6 +243,8 @@ void Runtime::poll() noexcept {
   }
 
   poll_midi();
+  ctx_.audio_in_.poll(ctx_.ms_);
+  ctx_.radio_.poll();
   app_.update(ctx_);
   if (ctx_.screen_ != nullptr) {
     ctx_.screen_->update(ctx_);
@@ -208,6 +258,7 @@ void Runtime::poll() noexcept {
   if (ctx_.files_.take_loaded(loaded)) {  // the settings of a card put in after the boot, read by the service: applied as load_settings() applies them
     ctx_.theme_ = loaded.theme;
     ctx_.midi_.set_config(loaded.midi);
+    apply_kit_audio(loaded);
     ctx_.redraw_ = true;
   }
   Files::Strip line;
@@ -331,6 +382,14 @@ std::size_t Runtime::state_line(char* out, std::size_t cap) const noexcept {
   w.str("fw", firmware_phase_name(sys_.firmware().phase));
   w.str("card", card_name(ctx_.files_.card()));
   w.str("files", files_phase_name(ctx_.files_.status().phase));
+  if (ctx_.audio_in_.available()) {
+    w.str("in", source_name(ctx_.audio_in_.source()));
+    w.num("gain", ctx_.audio_in_.gain());
+    w.num("mon", ctx_.audio_in_.monitor());
+    w.flag("gate", !ctx_.audio_in_.settling());
+    w.str("radio", radio_state_name(ctx_.radio_.status().state));
+    w.num("freq", ctx_.radio_.freq());
+  }
   std::size_t n = w.size();
   // The app's pairs go after a space; the room is what the kit's pairs left (the separator, one character and the terminator at least).
   if (w.complete() && n + 3u <= cap) {
@@ -421,6 +480,17 @@ void Runtime::render_block(void* user, const hal::audio::BlockIo& io) noexcept {
   float out_l[n];
   float out_r[n];
   dsp::s16_to_planes(io.in, in_l, in_r, n);
+  // Audio in's choice of the line's channels (audio_in.h): one relaxed load a block, and no work at all until an app or the user has selected a line source.
+  const std::uint8_t map = self->ctx_.audio_in_.channel_map();
+  if (map != 0u) {
+    for (std::uint32_t i = 0; i < n; ++i) {
+      const float l = in_l[i];
+      const float r = in_r[i];
+      const float v = map == 1u ? (l + r) * 0.5f : (map == 2u ? l : r);
+      in_l[i] = v;
+      in_r[i] = v;
+    }
+  }
   hal::midi::Device* midi = self->platform_.midi;
   if (midi != nullptr) {
     self->render_midi_in(n);

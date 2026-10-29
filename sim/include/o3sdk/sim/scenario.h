@@ -20,6 +20,11 @@
 //                             (in sixteenths) and Continue; `clock off` takes the master away. The engine follows it when FOLLOW is on in
 //                             the system Config's MIDI section (or the app set it)
 //
+//   input tone <hz> [<dbfs>]  what the codec hears at the line jack and the microphone: a sine (default -12 dBFS); `input wav <file>` a 16-bit PCM WAV, looped;
+//                             `input off` silence (the default)
+//   radio stations <f...>     the stations the fake receiver finds, in MHz (93.7) or 10 kHz units (9370); a tuned one is a sine at freq / 10 Hz in the input while the
+//                             source is Radio. `radio absent` is a board with no receiver (the power-up ends in Absent), `radio present` takes it back
+//
 //   card out|in               the SD card out of its slot (every card call answers NO CARD, a file being written stays torn) and back in (mounted at once)
 //   card protect on|off       the card's write-protect switch
 //   reboot                    the unit restarted on the same card: the runtime and the engine made again, App::setup, the kit's settings read from the card
@@ -27,6 +32,8 @@
 //   expect state <text>       the console's `state` line holds `text` ("files=done", "card=none", "section=display"); a scenario that fails an expect fails with its line
 // `card` and `expect file` need a card (<app>_sim --card DIR, or a Harness given one); `reboot` works without one (and keeps nothing).
 //
+// `input` and `radio` need a capture device (platform/host/fake_capture.h: the simulator makes one when the scenario uses them or with --audio-in); the AUDIO section of the
+// system Config and Context::audio_in() / radio() exist only with one.
 // `midi` and `clock` need a MIDI device (Harness(app, firmware, &fake_midi); the simulator makes one when the scenario uses them or with
 // --midi). Each command that touches the panel is followed by one millisecond, so that the runtime sees events in order.
 
