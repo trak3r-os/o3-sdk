@@ -169,6 +169,7 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
       }
       std::printf("snap %s\n", path.c_str());
       ++result.snapshots;
+      result.digests.emplace_back(w[1], h.raster().last_frame_digest());
     } else if (cmd == "boot") {
       if (w.size() != 2) {
         return fail("boot <name>");
@@ -182,6 +183,7 @@ ScenarioResult run_scenario(Harness& h, const std::string& text, const std::stri
       }
       std::printf("boot %s\n", path.c_str());
       ++result.snapshots;
+      result.digests.emplace_back(w[1], h.raster().last_frame_digest());
     } else if (cmd == "record") {
       if (w.size() != 2 || (w[1] != "on" && w[1] != "off")) {
         return fail("record on|off");

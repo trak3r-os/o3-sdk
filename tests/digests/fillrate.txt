@@ -1,0 +1,14 @@
+# Pinned frame digests (FNV-1a over the display-list words of each picture a scenario takes): tools/digest_check.py compares them.
+# A change that moves one fails its ctest until this file is regenerated (digest_check.py ... --update) and reviewed.
+tour/01_k0 a134cd76
+tour/02_l8_nearest_k3 f8ccfe87
+tour/03_l8_nearest_k7_shift_step 95096025
+tour/04_l8_bilinear_k7 88ae0267
+tour/05_l4_k7 ce0606f0
+tour/06_rect_k7 78e97d48
+tour/07_mix_k5 6e2114b4
+tour/08_mix_k5_cell100 4ac8a34d
+tour/09_mix_k5_cell100_ballast768 c75a6cc6
+tour/10_rect_k32_cell50_ballast_clamped 451061f1
+tour/11_grid_off 1eee5cb6
+tour/12_k0_grid_off 8bfc2cb2

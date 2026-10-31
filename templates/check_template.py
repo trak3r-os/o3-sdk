@@ -7,7 +7,10 @@
 
 host: tools/new_app.py into <work>/app/demo_app, configure and build it against --sdk (warnings are failures), run its four ctests
 (app_test, pad_map_test, pattern_test, voice_test) and its two scenarios in the simulator (exit 0, pictures and the WAV written, no frame
-refused): boot.txt, and files.txt on the simulator's card (a fresh directory), which saves, reboots and loads, and leaves its files.
+refused): boot.txt, and files.txt on the simulator's card (a fresh directory), which saves, reboots and loads, and leaves its files. The
+frames of both are pinned: their digests (sim digests.txt) are compared with tests/digests/template.txt of --sdk (tools/digest_check.py).
+A meant change regenerates the pins from the last run: tools/digest_check.py --pins tests/digests/template.txt --have <work>/digests-have.txt
+--update (the failure prints that command).
 mk66: the same instance, cross-built with -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=<--arm>, then its image ctests (demo_app_image,
 _flashconfig, _ramfunc and _usb), the image files, and no software double (__aeabi_d) in the ELF.
 
@@ -93,6 +96,17 @@ def configure_and_build(args, src, build, sdk, extra):
     no_warnings(out, "the configure and build")
 
 
+def keep_digests(sim_out, run_name):
+    """The simulator's digests.txt of one run as lines keyed `<run>/<snap>`; the file is removed so the next run cannot be mistaken for it."""
+    path = os.path.join(sim_out, "digests.txt")
+    if not os.path.isfile(path):
+        raise Failure("the simulator wrote no digests.txt in %s" % sim_out)
+    with open(path) as f:
+        lines = ["%s/%s\n" % (run_name, l.strip()) for l in f if l.strip()]
+    os.remove(path)
+    return lines
+
+
 def check_host(args):
     work, sdk, src = prepare(args)
     build = os.path.join(work, "build-host")
@@ -104,8 +118,9 @@ def check_host(args):
     os.makedirs(sim_out)
     text = run([os.path.join(build, "app", APP + "_sim"), "--scenario", os.path.join(src, "app", "scenarios", "boot.txt"), "--out", sim_out],
                what="the simulator, boot.txt")
-    if "0 refused" not in text or "0 events dropped" not in text:
+    if "0 refused" not in text or "0 events dropped" not in text or "handle 0 used 0 times" not in text:
         raise Failure("the simulator summary is not clean:\n" + text[-400:])
+    digests = keep_digests(sim_out, "boot")
     for name in ("01_boot.png", "03_decay.png", "boot.wav"):
         path = os.path.join(sim_out, name)
         if not os.path.isfile(path) or os.path.getsize(path) < 1000:
@@ -116,14 +131,21 @@ def check_host(args):
     os.makedirs(card)
     text = run([os.path.join(build, "app", APP + "_sim"), "--scenario", os.path.join(src, "app", "scenarios", "files.txt"), "--card", card,
                 "--out", sim_out], what="the simulator, files.txt on a card")
-    if "0 refused" not in text or "0 events dropped" not in text:
+    if "0 refused" not in text or "0 events dropped" not in text or "handle 0 used 0 times" not in text:
         raise Failure("the simulator summary is not clean:\n" + text[-400:])
+    digests += keep_digests(sim_out, "files")
     for name in ("01_saved.png", "04_after_reboot.png"):
         if not os.path.isfile(os.path.join(sim_out, name)):
             raise Failure("the files scenario did not write %s" % name)
     for name in ("pattern.o3a", "pattern.o3a.bak", "config.o3a"):
         if not os.path.isfile(os.path.join(card, "Apps", APP, name)):
             raise Failure("the files scenario left no %s on the card" % name)
+    # The pinned frames: the digests of both runs against the committed pins (the name DEMO-APP is the check's, so they do not move with the id).
+    have = os.path.join(work, "digests-have.txt")
+    with open(have, "w") as f:
+        f.write("".join(digests))
+    run([sys.executable, "-I", os.path.join(sdk, "tools", "digest_check.py"), "--pins", os.path.join(sdk, "tests", "digests", "template.txt"),
+         "--have", have], what="the pinned frames (template.txt)")
 
 
 def check_mk66(args):

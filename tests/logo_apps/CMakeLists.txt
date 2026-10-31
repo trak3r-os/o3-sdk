@@ -23,3 +23,6 @@ if(TARGET hello_sim)  # an app without LOGO has the kit's default: the O3 logo, 
   add_test(NAME logo_default_boot COMMAND ${_check} --sim $<TARGET_FILE:hello_sim> --out ${CMAKE_CURRENT_BINARY_DIR}/default_out --expect default)
 endif()
 set_tests_properties(logo_colour_boot logo_tint_boot PROPERTIES TIMEOUT 60)
+# Their frames are pinned like the other apps' (tests/CMakeLists.txt, o3sdk_digest_test): the boot screen of each.
+o3sdk_digest_test(digest_logo_colour logo_colour_sim ${PROJECT_SOURCE_DIR}/tests/digests/logo_colour.txt "--run=boot|${CMAKE_CURRENT_SOURCE_DIR}/boot.txt")
+o3sdk_digest_test(digest_logo_tint logo_tint_sim ${PROJECT_SOURCE_DIR}/tests/digests/logo_tint.txt "--run=boot|${CMAKE_CURRENT_SOURCE_DIR}/boot.txt")

@@ -2,6 +2,7 @@
 #include <o3sdk/sim/eve_raster.h>
 
 #include <o3sdk/eve/dl.h>
+#include <o3sdk/ui/plot/canvas.h>
 
 #include <algorithm>
 #include <bitset>
@@ -155,8 +156,44 @@ void EveRaster::release_ink(int x0, int y0, int x1, int y1) {
   }
 }
 
+std::uint32_t EveRaster::digest_words(const std::uint32_t* words, std::size_t count) noexcept {
+  std::uint32_t hash = kDigestBasis;
+  for (std::size_t i = 0; i < count; ++i) {
+    for (unsigned shift = 0; shift < 32; shift += 8) {
+      hash = (hash ^ ((words[i] >> shift) & 0xFFu)) * 16777619u;
+    }
+  }
+  return hash;
+}
+
+void EveRaster::count_line_load(const Context& c, int x0, int y0, int x1, int y1) {
+  x0 = std::max({x0, static_cast<int>(c.scissor_x), 0});
+  y0 = std::max({y0, static_cast<int>(c.scissor_y), 0});
+  x1 = std::min({x1, static_cast<int>(c.scissor_x + c.scissor_w), kWidth});
+  y1 = std::min({y1, static_cast<int>(c.scissor_y + c.scissor_h), kHeight});
+  if (x0 >= x1 || y0 >= y1) {
+    return;
+  }
+  const auto width = static_cast<std::uint32_t>(x1 - x0);
+  for (int y = y0; y < y1; ++y) {
+    ++line_prims_[y];
+    line_px_[y] += width;
+  }
+}
+
+void EveRaster::count_capsule_box(const Context& c, std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1,
+                                  std::uint32_t radius_q4) {
+  const std::int64_t r = radius_q4;
+  count_line_load(c, static_cast<int>(floor_div64(std::int64_t{std::min(x0, x1)} - r, 16)),
+                  static_cast<int>(floor_div64(std::int64_t{std::min(y0, y1)} - r, 16)),
+                  static_cast<int>(floor_div64(std::int64_t{std::max(x0, x1)} + r + 15, 16)),
+                  static_cast<int>(floor_div64(std::int64_t{std::max(y0, y1)} + r + 15, 16)));
+}
+
 bool EveRaster::render(const std::uint32_t* words, std::size_t count) {
   error_.clear();
+  std::fill(std::begin(line_prims_), std::end(line_prims_), 0u);
+  std::fill(std::begin(line_px_), std::end(line_px_), 0u);
   glyph_log_.clear();
   glyph_ink_.clear();
   if (record_below_ != 0) {
@@ -184,6 +221,11 @@ bool EveRaster::render(const std::uint32_t* words, std::size_t count) {
   }
   front_.swap(work_);
   ++frames_;
+  last_digest_ = digest_words(words, count);
+  last_line_prims_ = *std::max_element(std::begin(line_prims_), std::end(line_prims_));
+  last_line_px_ = *std::max_element(std::begin(line_px_), std::end(line_px_));
+  peak_line_prims_ = std::max(peak_line_prims_, last_line_prims_);
+  peak_line_px_ = std::max(peak_line_px_, last_line_px_);
   return true;
 }
 
@@ -286,8 +328,10 @@ void EveRaster::draw_rect_q4(std::int32_t x0, std::int32_t y0, std::int32_t x1, 
   const std::int32_t w = static_cast<std::int32_t>(ctx_.line_width);
   const std::int32_t lo_x = std::min(x0, x1) - w, hi_x = std::max(x0, x1) + w;
   const std::int32_t lo_y = std::min(y0, y1) - w, hi_y = std::max(y0, y1) + w;
-  fill_pixels(ceil_div(lo_x - 8, 16), ceil_div(lo_y - 8, 16), floor_div(hi_x - 8, 16) + 1,
-              floor_div(hi_y - 8, 16) + 1, 255);
+  const int bx0 = ceil_div(lo_x - 8, 16), by0 = ceil_div(lo_y - 8, 16);
+  const int bx1 = floor_div(hi_x - 8, 16) + 1, by1 = floor_div(hi_y - 8, 16) + 1;
+  count_line_load(ctx_, bx0, by0, bx1, by1);
+  fill_pixels(bx0, by0, bx1, by1, 255);
 }
 
 // LINES, LINE_STRIP segments and POINTS: a capsule of `radius_q4` (the segment thickened on both sides, round ends;
@@ -306,6 +350,7 @@ bool EveRaster::draw_capsule_q4(std::int32_t x0, std::int32_t y0, std::int32_t x
       return fail("LINES / LINE_STRIP / POINTS vertex beyond +-4096 px is not modelled", 0);
     }
   }
+  count_capsule_box(collect ? strip_ctx_ : ctx_, x0, y0, x1, y1, radius_q4);
   const std::int64_t r = radius_q4;
   const Capsule shape(x0, y0, x1, y1, r);
   const Capsule outer(x0, y0, x1, y1, r + kPixelReach);
@@ -365,6 +410,7 @@ bool EveRaster::add_edge_segment_q4(std::int32_t x0, std::int32_t y0, std::int32
       return fail("EDGE_STRIP vertex beyond +-4096 px is not modelled", 0);
     }
   }
+  count_capsule_box(strip_ctx_, x0, y0, x1, y1, strip_ctx_.line_width);
   if (x0 > x1) {
     std::swap(x0, x1);
     std::swap(y0, y1);
@@ -435,6 +481,9 @@ void EveRaster::discard_strip() {
 }
 
 bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t cell) {
+  if (handle == ui::plot::kHandleApp) {
+    ++handle_app_uses_;
+  }
   const Handle& h = handles_[handle & 31u];
   const std::uint32_t stride = (h.stride_hi << 10) | h.stride_lo;
   const std::uint32_t layout_h = (h.layout_h_hi << 9) | h.layout_h_lo;
@@ -453,6 +502,8 @@ bool EveRaster::draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t 
   if (base + cell_bytes > kRamGBytes) {
     return fail("bitmap cell lies outside RAM_G", h.source);
   }
+  // The chip fetches the whole BITMAP_SIZE box on every row it covers, ink or not (a transformed bitmap too: its box is the drawn rectangle).
+  count_line_load(ctx_, px, py, px + static_cast<int>(width), py + static_cast<int>(height));
   const unsigned pixels_per_byte = h.format == 1 ? 8u : (h.format == 17 ? 4u : (h.format == 2 ? 2u : 1u));
   const std::uint32_t layout_w = stride * pixels_per_byte;
   // The alpha of source pixel (sx, sy) of the cell: L1 the bit (0 / 255, MSB leftmost), L2 two bits (x 85, leftmost in
@@ -678,6 +729,10 @@ bool EveRaster::exec(std::uint32_t word) {
 
   const std::uint32_t opcode = word >> 24;
   Handle& h = handles_[ctx_.handle];
+  if (ctx_.handle == ui::plot::kHandleApp && (opcode == op::kBitmapSource || opcode == op::kBitmapLayout || opcode == op::kBitmapLayoutH ||
+                                              opcode == op::kBitmapSize || opcode == op::kBitmapSizeH)) {
+    ++handle_app_uses_;
+  }
   switch (opcode) {
     case op::kDisplay:
       flush_strip();

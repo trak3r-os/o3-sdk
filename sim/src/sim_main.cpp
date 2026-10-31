@@ -4,7 +4,9 @@
 //
 //   <app>_sim [--scenario FILE] [--out DIR] [--wav FILE] [--ms N] [--firmware-dir DIR] [--midi] [--audio-in] [--usb] [--backlight] [--card DIR]
 //
-// Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. --wav records the whole run. Exit 1 when the
+// Without a scenario it runs N milliseconds (default 500) and writes DIR/<app>.png. DIR/digests.txt gets one line per picture written, `<name> <digest>`: the
+// FNV-1a of the display-list words of that frame in 8 hex digits (EveRaster::last_frame_digest(); tools/digest_check.py compares them with tests/digests/).
+// The summary also says the busiest scan line of the run and how often the app's bitmap handle 0 was used (EveRaster). --wav records the whole run. Exit 1 when the
 // scenario fails, when a frame did not fit the display list or the raster refused one, or when the app's setup had a call the engine
 // refused (an attach, a route or a hook that was not taken: Engine::setup_errors(); the refusals are listed on stderr), so a script can
 // gate on it. --firmware-dir gives the system Config screen a fake update path over the *.ptf files of DIR (load_firmware_dir: nothing is
@@ -29,6 +31,8 @@
 #include <memory>
 #include <sstream>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace {
 
@@ -199,12 +203,14 @@ int main(int argc, char** argv) {
   }
 
   int status = 0;
+  std::vector<std::pair<std::string, std::uint32_t>> digests;  // what digests.txt will hold
   if (!scenario.empty()) {
     const o3sdk::sim::ScenarioResult r = o3sdk::sim::run_scenario(h, scenario_text, out);
     if (!r.ok) {
       std::fprintf(stderr, "%s:%d: %s\n", scenario.c_str(), r.line, r.error.c_str());
       status = 1;
     }
+    digests = r.digests;
   } else {
     h.run_ms(static_cast<std::uint32_t>(ms > 0 ? ms : 1));
     h.runtime().draw();
@@ -214,7 +220,22 @@ int main(int argc, char** argv) {
       status = 1;
     } else {
       std::printf("snap %s\n", path.c_str());
+      digests.emplace_back(lower_name(app.info().name), h.raster().last_frame_digest());
     }
+  }
+  if (!digests.empty()) {
+    std::ofstream f(out + "/digests.txt");
+    for (const auto& d : digests) {
+      char line[160];
+      std::snprintf(line, sizeof(line), "%s %08x\n", d.first.c_str(), static_cast<unsigned>(d.second));
+      f << line;
+    }
+    if (!f) {
+      std::fprintf(stderr, "cannot write %s/digests.txt\n", out.c_str());
+      status = 1;
+    }
+  } else {
+    std::remove((out + "/digests.txt").c_str());  // a reused --out keeps no digests of an earlier run
   }
 
   if (!wav.empty()) {
@@ -235,6 +256,8 @@ int main(int argc, char** argv) {
   std::printf("%s %s: %u frames drawn, %u refused, peak list %zu/2048 words; %u audio blocks, %u events dropped, %u commands dropped\n",
               app.info().name, app.info().version, h.runtime().frames(), h.runtime().frame_failures(),
               h.display().peak_frame_words(), s.blocks, s.dropped_events, h.engine().dropped_commands());
+  std::printf("%s %s: peak line %u prims, %u px; handle 0 used %zu times\n", app.info().name, app.info().version, h.raster().peak_line_prims(),
+              h.raster().peak_line_px(), h.raster().handle_app_uses());
   if (h.runtime().frame_failures() != 0u || h.display().render_failures() != 0u) {
     std::fprintf(stderr, "frames failed: %u refused by the builder, %zu by the raster (%s)\n", h.runtime().frame_failures(),
                  h.display().render_failures(), h.display().first_error().c_str());

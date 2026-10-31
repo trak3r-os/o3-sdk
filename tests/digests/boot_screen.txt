@@ -1,0 +1,10 @@
+# Pinned frame digests of the boot screen with the kit default logo (FNV-1a over the display-list words, EveRaster::digest_words):
+# tests/boot_screen_test.cpp compares them. A change that moves one fails there until this file is updated and reviewed. Lines: <form>_<mode> <digest>.
+hello_kit_plain 2139c230
+hello_kit_translate 2139c230
+no_build_line_plain 6191262c
+no_build_line_translate 6191262c
+o3_303_tagged_dirty_plain 68240bc6
+o3_303_tagged_dirty_translate 06e43889
+o3_303_two_ids_plain 4a8c3276
+o3_303_two_ids_translate 92b4ddee

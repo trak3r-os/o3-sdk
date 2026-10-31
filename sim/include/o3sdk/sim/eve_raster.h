@@ -59,6 +59,34 @@ class EveRaster {
 
   const std::string& error() const noexcept { return error_; }
 
+  // FNV-1a (32 bit) over the words of the last list render() took and drew: every word as its four bytes, least significant first, in order
+  // (the order they go to the chip). Words, not pixels: they are what a change of the kit must not move, and the same words give the same
+  // digest on every machine. A list the raster refused leaves it as it was, like the visible frame it belongs to. kDigestBasis before the first
+  // frame. RasterDisplay hands every committed list to render(), so this is the digest of the picture rgba() holds.
+  static constexpr std::uint32_t kDigestBasis = 2166136261u;
+  static std::uint32_t digest_words(const std::uint32_t* words, std::size_t count) noexcept;
+  std::uint32_t last_frame_digest() const noexcept { return last_digest_; }
+
+  // The load on a scan line, in the chip's terms (apps/fillrate measured where lines break). The chip walks the
+  // whole list for every line and, on each line a primitive covers, fetches its whole box: so a primitive counts once on every row of its box,
+  // and its pixels are the box's width. What is a box:
+  //   * a bitmap: its BITMAP_SIZE box (the REPEAT band included, drawn once at its width), clipped to the scissor and the screen. Not its ink:
+  //     a transparent pixel costs as much as an opaque one, and a BITMAP_SIZE left with an old _H word is as wide as the chip makes it;
+  //   * a RECTS pair: the rectangle it fills, the line width included;
+  //   * a POINTS vertex, a LINES pair and each LINE_STRIP / EDGE_STRIP segment: the bounding box of the shape with its radius or half width (the
+  //     conservative choice: the chip's own cost for them was not measured). An edge strip's fill beyond its segments is not counted.
+  // peak_line_*() are the most on any one row, over every frame drawn since construction (a row's primitives and its pixels are each maximised
+  // on their own); last_frame_peak_line_*() are those of the last frame render() drew. Frames the raster refused count in neither.
+  unsigned peak_line_prims() const noexcept { return peak_line_prims_; }
+  unsigned peak_line_px() const noexcept { return peak_line_px_; }
+  unsigned last_frame_peak_line_prims() const noexcept { return last_line_prims_; }
+  unsigned last_frame_peak_line_px() const noexcept { return last_line_px_; }
+
+  // Bitmap handle 0 is the app's (ui/plot/canvas.h, kHandleApp); the kit never touches it. This counts, over every list executed (a refused one
+  // too), the BITMAP_SOURCE, BITMAP_LAYOUT[_H] and BITMAP_SIZE[_H] words that came while handle 0 was the current one, and the bitmaps drawn
+  // with handle 0 (the handle of a VERTEX2II, or the current one for a VERTEX2F). A kit app that never uses Canvas must read zero.
+  std::size_t handle_app_uses() const noexcept { return handle_app_uses_; }
+
   // The visible frame: kWidth x kHeight RGBA8, row-major, alpha always 255.
   const std::uint8_t* rgba() const noexcept { return front_.data(); }
   std::size_t frames() const noexcept { return frames_; }
@@ -136,6 +164,10 @@ class EveRaster {
   void flush_strip();
   void discard_strip();
   bool draw_bitmap(int px, int py, std::uint32_t handle, std::uint32_t cell);
+  // A primitive's box [x0,x1) x [y0,y1), clipped to the scissor of `c` and the screen, counts on each of its rows (line_prims_, line_px_).
+  void count_line_load(const Context& c, int x0, int y0, int x1, int y1);
+  // The bounding box of a capsule (radius `radius_q4`, 1/16 px) between two vertices in pixels, rounded outwards, counted with `c`'s scissor.
+  void count_capsule_box(const Context& c, std::int32_t x0, std::int32_t y0, std::int32_t x1, std::int32_t y1, std::uint32_t radius_q4);
 
   std::uint32_t record_below_ = 0;      // record_glyphs(): 0 off
   std::vector<GlyphDraw> glyph_log_;
@@ -174,6 +206,15 @@ class EveRaster {
   bool done_ = false;
   std::size_t word_index_ = 0;
   Handle handles_[32];
+
+  // Frame digest and line load: the arrays and counts of the list being drawn are reset by render(), the peaks, the last frame's figures and
+  // the digest are taken from them when the list is drawn to its DISPLAY.
+  std::uint32_t last_digest_ = kDigestBasis;
+  std::uint32_t line_prims_[kHeight] = {};
+  std::uint32_t line_px_[kHeight] = {};
+  unsigned peak_line_prims_ = 0, peak_line_px_ = 0;
+  unsigned last_line_prims_ = 0, last_line_px_ = 0;
+  std::size_t handle_app_uses_ = 0;
 };
 
 }  // namespace o3sdk::sim

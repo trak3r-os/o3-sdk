@@ -3,6 +3,7 @@
 
 #include <o3sdk/eve/display_list_builder.h>
 #include <o3sdk/platform/host/fakes.h>
+#include <o3sdk/sim/eve_raster.h>
 #include <o3sdk/ui/boot_screen.h>
 #include <o3sdk/ui/renderer.h>
 #include <o3sdk/ui/style.h>
@@ -13,6 +14,10 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
+#include <fstream>
+#include <iterator>
+#include <map>
 #include <string>
 #include <vector>
 
@@ -168,6 +173,48 @@ TEST_CASE("boot screen: show_boot_screen commits the frame") {
   sink.set_busy(true);
   CHECK_FALSE(ui::show_boot_screen(sink, "O3-303", "x"));  // a busy display takes nothing; the caller tries again
   CHECK(sink.frames() == 1);
+}
+
+TEST_CASE("boot screen: the frames of the kit's default logo are the pinned ones (tests/digests/boot_screen.txt)") {
+  // The words of a boot frame, digested like the simulator's frames (EveRaster::last_frame_digest, FNV-1a): a change of the renderer or the screen
+  // that moves a word moves a digest. The pins are `<label> <digest>` lines; a moved one is printed below, for the review that accepts it.
+  std::map<std::string, std::string> pinned;
+  {
+    std::ifstream in(std::string(O3SDK_DIGESTS_DIR) + "/boot_screen.txt");
+    REQUIRE(in.good());
+    for (std::string line; std::getline(in, line);) {
+      if (!line.empty() && line[0] != '#') {
+        const std::size_t space = line.find(' ');
+        REQUIRE(space != std::string::npos);
+        pinned[line.substr(0, space)] = line.substr(space + 1);
+      }
+    }
+  }
+  struct Form {
+    const char* label;
+    const char* name;
+    std::string build;
+  };
+  const Form forms[] = {
+      {"hello_kit", "HELLO", std::string("o3sdk ") + kKitLabel},
+      {"o3_303_two_ids", "O3-303", std::string("ba9876543210 / o3sdk ") + kKitLabel},
+      {"o3_303_tagged_dirty", "O3-303", std::string(kTaggedLong) + " / o3sdk " + kTaggedLong},
+      {"no_build_line", "HELLO", ""},
+  };
+  for (const bool translate : {true, false}) {
+    for (const Form& f : forms) {
+      const std::string label = std::string(f.label) + (translate ? "_translate" : "_plain");
+      CAPTURE(label);
+      const Drawn d = boot_frame(translate, f.name, f.build);
+      REQUIRE(d.complete);
+      char text[16];
+      std::snprintf(text, sizeof(text), "%08x", static_cast<unsigned>(sim::EveRaster::digest_words(d.frame.data(), d.frame.size())));
+      INFO("the pin line is: " << label << " " << text);
+      REQUIRE(pinned.count(label) == 1);
+      CHECK(pinned[label] == text);
+    }
+  }
+  CHECK(pinned.size() == 2 * std::size(forms));  // no stale pin
 }
 
 // ---- The logo is data: any valid logo draws, and the list bound holds for the default and for the largest one -------------------------

@@ -66,6 +66,17 @@ the app's `setup()` had a call the engine refused (a route to a slot that does n
 `Harness::start()` returns `false` for the same reason and writes the same lines, so a test that `REQUIRE`s it shows why it failed;
 `Harness::setup_report()` returns the text.
 
+**Frame digests, line load, handle 0.** `<out>/digests.txt` gets one line per picture the run took (`<snap> <digest>`, or `<app> <digest>` without
+a scenario): the FNV-1a (32 bit, each word as four bytes, least significant first) of the display-list words of that frame, in 8 hex digits
+(`EveRaster::last_frame_digest()`). Words, not pixels: they are what a change of the kit must not move. `tests/digests/<app>.txt` pins them for
+the kit's apps (HELLO's scenarios, crashtest, fillrate, the two logo apps, the template app; `boot_screen_test` pins the boot screen's), and the
+ctests `digest_*` compare them through `tools/digest_check.py`. A change that moves a digest fails until the pin file is regenerated
+(`tools/digest_check.py ... --update`, whose usage text gives the run syntax) and reviewed with the change. A second summary line says `peak line N prims, M px;
+handle 0 used K times`: the most primitives and the most box pixels on one scan line of any frame of the run (`EveRaster::peak_line_prims()` and
+`peak_line_px()`; what a primitive's box is: eve_raster.h; `tests/raster_line_load_test.cpp` ties it to `apps/fillrate`'s band, so it reads in
+the unit's terms: a bitmap counts its `BITMAP_SIZE` box, ink or not), and how often bitmap handle 0, the app's (`ui/plot/canvas.h`), was configured or drawn
+with (`handle_app_uses()`; zero for every kit app, which `digest_check.py` asserts).
+
 ## What it is
 
 - **Time** moves only when the simulator moves it (`Harness::run_ms`): the main loop is polled every millisecond and the audio is
