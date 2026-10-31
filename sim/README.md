@@ -11,6 +11,7 @@ build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/midi.txt --out /
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/files.txt --card /tmp/hello-card --out /tmp/hello   # the file API on a card directory
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/config_pages.txt --card /tmp/hello-card --audio-in --out /tmp/hello   # HELLO's own Config page, brightness, MIDI learn, kept across a reboot
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/picker.txt --card /tmp/hello-card --out /tmp/hello   # the kit's file picker and name entry
+build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/help.txt --out /tmp/hello    # HELP, Shift + Config: the BUTTONS and PADS pages, in the three themes (`press shift`, `tap config`, `release shift`)
 build-host/apps/hello/hello_sim --scenario apps/hello/scenarios/audio_in.txt --out /tmp/hello --wav /tmp/hello.wav  # a tone in, the monitor, the radio (a fake codec input and radio)
 ```
 

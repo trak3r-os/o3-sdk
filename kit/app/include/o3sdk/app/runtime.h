@@ -19,9 +19,12 @@
 // The runtime owns the Config button: it opens the system Config screen (system_config.h) over the app's, and the app never sees the
 // button. While that screen is open, or the input is locked, the app gets no new press and no turn; the release of a button or pad
 // pressed before still reaches it, and a press the screen took is not released to the app either.
+// Shift + Config opens HELP instead (help_overlay.h, Screen::help()): the kit's drawing of what the buttons and the pads do on the screen, over it, with the same rules for the input;
+// Config (or F8) closes it, and so does a change of screen.
 
 #include <o3sdk/app/app.h>
 #include <o3sdk/app/context.h>
+#include <o3sdk/app/help_overlay.h>
 #include <o3sdk/app/pad_leds.h>
 #include <o3sdk/app/screen.h>
 #include <o3sdk/app/system_config.h>
@@ -143,6 +146,9 @@ class Runtime {
   // The system Config screen is open (and the app's input is suspended).
   bool system_open() const noexcept { return sys_.open(); }
   const SystemConfig& system() const noexcept { return sys_; }  // the screen's state, for a test or a diagnostic
+  // HELP (Shift + Config) is open, and the overlay's state for a test or a diagnostic. The app's input is suspended while it is, as under the system Config.
+  bool help_open() const noexcept { return help_.open(); }
+  const HelpOverlay& help_overlay() const noexcept { return help_; }
   // One line over the bottom of whatever is on screen, with a bar at `progress` (0..1000; else none): the platform's messages (the
   // power-off hold). Keep calling it to keep it up: it goes `hold_ms` after the last call. A null `text` takes it down.
   void system_strip(const char* text, int progress = -1, std::uint32_t hold_ms = SystemConfig::kStripMs) noexcept;
@@ -170,6 +176,7 @@ class Runtime {
   void poll_midi() noexcept;
   void switch_screen() noexcept;
   void route(const Input& in) noexcept;
+  bool open_help() noexcept;
   void draw_header(ui::Renderer& r) noexcept;
   void draw_keys(ui::Renderer& r) noexcept;
   void update_leds() noexcept;
@@ -184,6 +191,7 @@ class Runtime {
   Platform& platform_;
   Context ctx_;
   SystemConfig sys_;
+  HelpOverlay help_;
   bool locked_ = false;
   bool held_ = false;
   std::uint8_t backlight_applied_ = 2;  // the brightness index the backlight was last told (2: high, the hardware's own)

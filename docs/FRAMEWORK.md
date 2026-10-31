@@ -244,7 +244,7 @@ What follows is the maintainer's decision (2026-10-25) for what it is: the kit b
 LEDs, audio, the crash record) and owns the **Config button**; everything else (the pads, the other buttons, the encoder, every screen) is
 the app's. "Por defecto config lleva el flasheo de otro firmware": any engine built on o3sdk can change the unit to another engine.
 
-- The runtime takes Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back.
+- The runtime takes Config before `App::input()`: a press opens the system Config screen over the app's screen, Config again goes back (Shift + Config opens HELP instead, below).
   The app never sees the Config button, press or release. While the screen is open the app gets no new input (the release of a button
   or pad pressed before still reaches it, so no note is left on), its screen goes on running and sounding underneath, and the pad LEDs are
   dark. `Runtime::lock_input(bool)` locks input altogether, `Runtime::system_strip(text, progress, hold_ms)` puts one line over the bottom of
@@ -282,6 +282,35 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
 - The kit keeps its settings on the card for the app (M2c, slice FA, host only until the unit session): the theme, the MIDI settings and the audio in's source, gain and monitor and the radio's region and station (keys 10 to 14, slice AI) in `Apps/<app>/system.o3s`, read at
   boot over what `App::setup` set, written 1.5 s after the last change and at once when the power-off begins (`docs/formats/o3sdk-settings.md`). The app's own Config values
   join them as `APPV`, the MIDI learn bindings as `LRNB`, and the USB layout and stem map (keys 15 to 30, slice U). FIRMWARE says SAVING while a card job runs (`Files::busy()`).
+
+### Help (Shift + Config: `help.h`, `help_overlay.h`)
+
+**Status: built (slice HELP-K), host only**, with the scenario `apps/hello/scenarios/help.txt` (its frames are pinned in `tests/digests/hello.txt`) and `tests/help_overlay_test.cpp`. The unit checks (the 8 x 16 pad labels legible
+at arm's length, Shift + Config by hand) come with the next unit image.
+
+Shift held, then Config pressed, on any app screen opens HELP over it: the kit's drawing of what the buttons and the pads do **on that screen**. The app supplies only data, one `Help` from `Screen::help(const Context&, Help&)`
+(default: nothing); the kit draws it, in the screen's `theme()` (else the context's), with the full chrome whatever `Screen::chrome()` says (the header says `HELP` and the screen's title), and with no bitmap, so every app gets it
+without assets. Config alone opens the system Config as before.
+
+- **Input**, the same rules as under the system Config: while HELP is open the app gets no press and no turn; the release of something the app saw pressed still reaches it (the Shift that opened HELP, a held pad), and a press
+  HELP took is not released to the app. The screen goes on running and the sound on playing; the pad LEDs are dark; the power-off lock closes nothing. Config (with or without Shift) or F8 closes it, as does a change of screen
+  (`Context::show`). The system Config never opens over HELP, and Shift + Config while the Config is open closes the Config. Soft keys: F1 BUTTONS, F2 PADS, F8 CLOSE, the page in force hot; Left and Right also change the page.
+- **`Help`** (`help.h`; every text upper case, cut at its limit when drawn, never wrapped past its box; pointers valid while HELP is open: static tables, or the screen's own members; asked once at the opening, with Shift let
+  go of in `ctx.panel()` for the call): `summary` (two lines of 96, wrapped at a space or at a `\n`); `fkey[8]` (the soft keys' longer texts, two lines of 14) and `fkey_shift[8]` (the Shift row's labels, 9); `buttons` / `button_count`
+  (a table of `HelpButton{button, text, shift}`, one line of 28 each, the Shift line optional); `encoder` (28); `pad_label[48]` (5), `pad_group[48]` (0: none, n: `groups[n - 1]`), `groups` / `group_count` (at most 8 of
+  `HelpPadGroup{name (12), text (48), color}`, the colour a theme token) and `pads` (one line of 96). `help_pads(h, r0, c0, r1, c1, group, labels)` fills a rectangle of the grid. The kit describes CONFIG itself (the app never
+  sees it) and gives SHIFT a text when the screen gives none.
+- **BUTTONS**: the F row as eight key caps along the bottom, over the F keys (the screen's label from `soft_keys()` with Shift let go of, its longer text in two lines of the 6 x 12 face, the Shift row's label); above them the
+  25 other buttons as key caps in their printed groups (screen buttons, sample buttons and SONG, the column buttons, PATTERN, edit and transport, the arrows), two to a row, each with its text (8 x 16 face) and, under it, its
+  Shift line, and the encoder as a round cap; a button with no text is a hollow, dim cap with its name only. The summary is at the top. When the list does not fit, UP / DOWN and the encoder scroll it by rows
+  (`UP / DOWN FOR MORE`). Even with no text at all it does not fit (15 rows in 298 px), so most screens scroll once or twice.
+- **PADS**: the 4 x 12 grid as 48 rounded boxes (`ui::plot::Canvas`), each in its group's colour with its label (8 x 16 face, centred), the ink the one that reads on that fill; a pad in no group is dark; under the grid the legend
+  (a swatch, the name and the line per group) and the `pads` line; with no group at all `NO PAD HELP ON THIS SCREEN`.
+- **Budget**: a HELP frame stays under `HelpOverlay::kWordBudget` (1,400) display-list words whatever the texts say. The PADS page is bounded by the limits (about 1,250 with the system strip up). The BUTTONS list shows as
+  many rows as the budget leaves after the summary and the F row (a glyph is a word; the kit's header, strip and soft keys are held at 200 words, and the page's own colour passes at 90), so a worst case with every text at its limit
+  shows 4 of the 15 rows and scrolls for the rest, and a screen with short texts shows 12. `tests/help_overlay_test.cpp` measures the worst case on every scroll position, in the three themes, with the strip up
+  (1,344 words on BUTTONS, 1,251 on PADS; the simulator's header has no CPU figure, which is 8 words more on the unit, inside the margin).
+- Memory: the `Help` and the soft-key labels live in the runtime's `HelpOverlay` (about 0.5 KB on the unit), filled once at the opening; no heap.
 
 ### MIDI (`midi.h`)
 
@@ -451,7 +480,7 @@ for (;;) rt.poll();                        // input -> app -> screen; the card's
 
 A frame is the header strip (app name, screen title, tempo, transport, the render's load on the unit), the screen's content and the
 soft-key row, as one display list (2048 words at most; HELLO peaks under 900). A screen whose `chrome()` is `None` draws all of it
-itself, in its own `theme()` if it names one.
+itself, in its own `theme()` if it names one. Over the screen the runtime may show the system Config (Config) or HELP (Shift + Config), both with the full chrome.
 
 ## 7. The simulator
 
@@ -513,6 +542,7 @@ machine (the 303, HOOKS, a port) picks what it needs. Each capability has a driv
 | USB audio out | USB0 device, isochronous, 44.1 kHz, 16-bit, composite with the console | `hal::usb_audio::Device`, `Context::usb_audio()`, every app | the master streamed to the computer as a class-compliant interface (channels 7-8 of 8; 1-6 are silent until an app or the user maps a stem), per-slot stems, the computer's return mixed into the output and as the audio in's source, the USB profile, the card as a disk | **Verified on the unit** (M2b-R): AUDIO set, profile 8, 8 out / 2 in, configured, recorded. **Host only** (M2c slice U): the stems, the return, the profiles, the disk mode and the Config rows (`usb.txt`, `sim_usb_test`); P11, P10 duplex, `cpu` with stems and the disk against a computer: on the unit |
 | SD card | SDHC, FAT (FatFs) | `hal::storage` (read), `Context::files()` (`app::Files`) | the card is mounted and read; `fw put` writes `Firmware/`; an app saves, loads and lists its files in `Apps/<id>/` and the kit keeps its settings there | **Verified on the unit** for the read path and for the update path's writes (M2b-R). **The app file API** (M2c slice FA) is **host only**: built and tested on the host (an in-memory card cut at every write, a FAT32 image through the unit's FatFs writer, the simulator's directory card), the image carries it, but no save has run on a unit. `hal::storage` stays read-only by contract; the writer is `hal::storage_write` through `platform/mk66/save` and the guard `hal/app_guard.h`; the card has two writers with disjoint paths, the update path (`Firmware/`) and the files service (`Apps/<id>/`, `Samples/`), kept apart by the card claims (`check_writers.py`). Still to check on a unit: `files` after a HELLO save (bytes, `max-step`, write speed), `files crc` against the simulator's file, 0 underruns and 0 sheds over 20 scripted saves, `fw put` refused during a save, the theme kept after `reset`, and by hand a card pulled mid-save, the write-protect switch and the Power switch held during a save |
 | Firmware switcher | the bootloader (`.ptf` from `Firmware/`), track3r-os's update module | kit system screen, every app | Config, FIRMWARE: every app lists the `.ptf` images in a card folder, checks one, asks twice (F1 each), stages it and asks the bootloader to flash it, so the unit changes engine by changing image (the maintainer's requirement, 2026-10-25) | **Verified on the unit** in part (M2b round 2, slice F): the FIRMWARE section opened and worked over USB injection on 2026-10-26 (reported by the tester). **Host only** for the flow and its two questions (a fake sink, `config.txt`). Not verified: the final F1 INSTALL from the screen (it needs a finger); the path behind it is the USB console row |
+| HELP (Shift + Config) | — | kit, every app: `Screen::help()` | the buttons as key caps and the 48 pads as a grid, each with what it does on this screen (section 5, "Help") | **Host only** (slice HELP-K: `help.txt`, `help_overlay_test`). Unit check: the pad labels legible at arm's length, Shift + Config by hand |
 | System Config screen | — | kit, every app | the Config button and the kit's pages (section 5) | **Verified on the unit** in part (M2b round 2, slices F and K): FIRMWARE, DISPLAY and INFO opened and worked over USB injection on 2026-10-26 (reported by the tester; no `docs/hw` file yet). **Host only** (M2b round 2 and M2c): the MIDI section (when `Platform::midi` is set), AUDIO (slice AI; its USB rows, slice U), CARD (slice U), DISPLAY's brightness and pad lights, INFO's crash line, the app's own pages (slice CP). Unit check: each section by `--shot` and `state`, a MIDI channel kept after `reset`, brightness and pad lights by eye |
 | MIDI | DIN in/out (UART), USB MIDI | kit `hal::midi::Device`, `app::Midi`, console `midi` | notes into the engine through routes, every other message to `App::midi`, clock followed and sent on the transport; MIDI learn (`Midi::learn`, slice CP) | **Host only** (M2b round 2, slices MC, K, MD; M2c slice CP for learn): the MIDI core is ported from track3r-os (`platform/mk66/midi`, 1104b85); the kit API, routes, clock follow and `FakeMidi` are host-tested (slice K); the MK66 service, the DIN and USB drivers and console `midi` are built and host-tested (slice MD, 5937691: host ctest 147/147, ASan 147/147, mk66 25/25). HELLO's image grows by 19.4 KB of flash. Not run on a unit. Owed: the MD row of `docs/M2B2-PLAN.md` section 6, last column; the ISR latency and the render cost of MIDI; learn on a unit (a CC sent over USB MIDI binds, and the binding is kept after `reset`) |
 | Power switch | PTC3 | `core::PowerHold`, `platform/mk66/power` | a clean shutdown: silent, dark, card released | **Host only** (M2b round 2, slice P): the pure logic and the shutdown are ported from track3r-os's `platform/mk66/power` (11 files identical after the rename) and host-tested (`mk66_power_*`); console `power`, `power press/release/pin`, `power off [dry]`; `O3SDK_POWER_VLPR_OFF` ON as in track3r-os. Never run on a unit: the pin's pull and polarity, and the VLPR wake, are open |

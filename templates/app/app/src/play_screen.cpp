@@ -174,6 +174,25 @@ void PlayScreen::soft_keys(app::Context& ctx, app::SoftKeys& out) noexcept {
   out.hot = static_cast<std::uint8_t>(1u << keys_.focus());  // the key the encoder drives now
 }
 
+// HELP (Shift + Config, o3-sdk app/help.h): the kit draws it from this table, in the screen's theme. Uncomment it and its declaration in play_screen.h, then say what your controls do (upper case, static
+// tables; the limits are in docs/FRAMEWORK.md, "Help"). A button with no entry is shown dimmed. Look at it in the simulator: a scenario with `press shift`, `tap config`, `release shift`, `snap help`.
+//
+// void PlayScreen::help(const app::Context&, app::Help& h) const noexcept {
+//   static constexpr app::HelpButton kButtons[] = {
+//       {app::Button::Left, "KEYBOARD AN OCTAVE DOWN", nullptr},
+//       {app::Button::Right, "KEYBOARD AN OCTAVE UP", nullptr},
+//       {app::Button::Delete, "CLEAR THE PATTERN", nullptr},
+//   };
+//   static constexpr app::HelpPadGroup kGroups[] = {{"KEYS", "PLAY THE VOICE AND RECORD THE PATTERN", ui::Color::Sel}};
+//   h.summary = "THE PADS PLAY THE VOICE. F1-F3 AND THE ENCODER EDIT ITS VALUES.";
+//   h.buttons = kButtons;
+//   h.button_count = 3;
+//   h.encoder = "CHANGE THE VALUE OF THE F KEY";
+//   h.groups = kGroups;
+//   h.group_count = 1;
+//   app::help_pads(h, 0, 0, app::kPadRows - 1, app::kPadCols - 1, 1);  // every pad is a key; give a pad_label[] to name them
+// }
+
 void PlayScreen::leds(app::Context& ctx, app::PadLeds& leds) noexcept {
   // Monochrome LEDs: a few levels carry the meaning (app/pad_leds.h). A white key is dim, a held pad is full.
   for (unsigned pad = 0; pad < app::kPadCount; ++pad) {

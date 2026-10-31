@@ -10,6 +10,7 @@
 //   UP / DOWN     tempo +-1 BPM (SHIFT: +-10)
 //   CONFIG        the system Config screen (the kit's, not the app's): FIRMWARE, AUDIO (the input's source, gain and monitor; the radio), MIDI, CARD, DISPLAY (the theme, BRIGHTNESS and PAD LIGHTS),
 //                 INFO, and HELLO's own page after them: TEMPO and RIFF SHIFT (values the kit keeps in the settings file) and DEFAULT RIFF (an action: F1 asks, F1 again runs it)
+//   SHIFT+CONFIG  HELP, the kit's overlay: what each button and each pad does on this screen (PlayScreen::help() gives the texts; F1 BUTTONS, F2 PADS, F8 or CONFIG closes)
 //   PATTERN       a list of the riffs on the card (Apps/hello/*.o3a, app::FilePicker): the encoder or UP / DOWN choose, F1 loads it, F8 leaves
 //   MASTER        MIDI LEARN (Context::midi().learn()): the next control change moves the value the encoder points at, from then on and after a restart (the kit keeps the binding); MASTER
 //                 again, before one arrives, leaves learn. The LEARN line on the screen says what it waits for or which controller moves the value.
@@ -444,6 +445,61 @@ class PlayScreen final : public app::Screen {
     out.hot = static_cast<std::uint8_t>(1u << keys_.focus());
   }
 
+  // HELP (Shift + Config, help.h): the texts are static tables; the pads' labels are this screen's own (the note a pad plays moves with the octave), filled when HELP opens.
+  void help(const app::Context&, app::Help& h) const noexcept override {
+    static constexpr app::HelpButton kButtons[] = {
+        {Button::Params, "NEXT PAGE: SYNTH, DELAY", "PREVIOUS PAGE"},
+        {Button::File, "SAVE THE RIFF TO THE CARD", "SAVE THE TAKE AS A WAV"},
+        {Button::Master, "MIDI LEARN THE VALUE", nullptr},
+        {Button::SampleLoad, "LOAD THE RIFF FROM THE CARD", nullptr},
+        {Button::SamplePlay, "TAKE LENGTH: 1, 10, 30 S", nullptr},
+        {Button::SampleEdit, "TAKE SOURCE: INPUT, MASTER", nullptr},
+        {Button::SampleRec, "HOW A TAKE STARTS", nullptr},
+        {Button::Pattern, "PICK A RIFF FROM THE CARD", nullptr},
+        {Button::Play, "START / STOP THE DEMO RIFF", nullptr},
+        {Button::Rec, "RECORD A TAKE", "AUDIO IN THROUGH MASTER"},
+        {Button::Copy, "SAVE THE RIFF UNDER A NAME", nullptr},
+        {Button::Insert, "RIFF UP A SEMITONE", "RIFF DOWN A SEMITONE"},
+        {Button::Delete, "THE DEFAULT RIFF AGAIN", nullptr},
+        {Button::Up, "TEMPO UP 1 BPM", "TEMPO UP 10 BPM"},
+        {Button::Down, "TEMPO DOWN 1 BPM", "TEMPO DOWN 10 BPM"},
+        {Button::Left, "KEYBOARD AN OCTAVE DOWN", nullptr},
+        {Button::Right, "KEYBOARD AN OCTAVE UP", nullptr},
+    };
+    static constexpr app::HelpPadGroup kGroups[] = {
+        {"NATURALS", "THE WHITE KEYS OF THE SCALE", Color::Sel},
+        {"SHARPS", "THE SEMITONES BETWEEN THEM", Color::Instr},
+    };
+    h.summary = "A SYNTH AND A DELAY. PLAY THE PADS, POINT THE ENCODER AT A VALUE WITH F1-F8 (A TAP LATCHES IT) AND TURN IT, START THE DEMO RIFF WITH PLAY.";
+    h.buttons = kButtons;
+    h.button_count = sizeof kButtons / sizeof kButtons[0];
+    h.encoder = "CHANGE VALUE (SHIFT COARSE)";
+    h.groups = kGroups;
+    h.group_count = sizeof kGroups / sizeof kGroups[0];
+    h.pads = "ONE OCTAVE A ROW, THE BOTTOM ROW LOWEST. LEFT / RIGHT MOVE THE WHOLE KEYBOARD.";
+    app::help_pads(h, 0, 0, app::kPadRows - 1, app::kPadCols - 1, 1);
+    for (unsigned pad = 0; pad < app::kPadCount; ++pad) {
+      const int n = note_for(pad);
+      if (n < 0) {
+        h.pad_group[pad] = 0;
+        continue;
+      }
+      if (!is_natural(static_cast<unsigned>(n))) {
+        h.pad_group[pad] = 2;
+      }
+      static const char kNames[] = "C C#D D#E F F#G G#A A#B ";
+      char* s = pad_names_[pad];
+      const unsigned pc = static_cast<unsigned>(n) % 12u;
+      *s++ = kNames[pc * 2u];
+      if (kNames[pc * 2u + 1u] != ' ') {
+        *s++ = kNames[pc * 2u + 1u];
+      }
+      s = put_uint(s, static_cast<std::uint32_t>(n / 12 - 1 < 0 ? 0 : n / 12 - 1));
+      *s = '\0';
+      h.pad_label[pad] = pad_names_[pad];
+    }
+  }
+
   void leds(app::Context& ctx, app::PadLeds& leds) noexcept override {
     const int riff_note = riff_ != nullptr ? riff_->note() : -1;
     for (unsigned pad = 0; pad < app::kPadCount; ++pad) {
@@ -512,6 +568,7 @@ class PlayScreen final : public app::Screen {
   app::FilePicker* picker_ = nullptr;
   app::NameEntry* names_ = nullptr;
   int held_[app::kPadCount] = {};
+  mutable char pad_names_[app::kPadCount][4] = {};  // help(): the pads' labels, "C3", "F#4"
 };
 
 // ---- The app ----------------------------------------------------------------------------------------------------------------

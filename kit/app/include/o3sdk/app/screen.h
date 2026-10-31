@@ -7,6 +7,7 @@
 // Every call is in the main loop: no audio work here. A screen talks to the sound through Context::engine() (notes, parameters,
 // transport) and reads the render's state through the engine's statistics or the app's own snapshots.
 
+#include <o3sdk/app/help.h>
 #include <o3sdk/app/input.h>
 #include <o3sdk/app/pad_leds.h>
 #include <o3sdk/ui/renderer.h>
@@ -48,10 +49,14 @@ class Screen {
   virtual void update(Context&) noexcept {}
   // The content area between the header and the soft keys. The renderer is begun; draw into `area` only.
   virtual void draw(Context&, ui::Renderer&, const ui::Rect& area) noexcept = 0;
-  // The soft-key row. With Shift held (ctx.panel().shift()) a screen may give its Shift row.
+  // The soft-key row. With Shift held (ctx.panel().shift()) a screen may give its Shift row. Keep it a pure function of the screen's state: it is
+  // asked every frame, and once more when HELP opens (to copy the labels), and that call must change nothing.
   virtual void soft_keys(Context&, SoftKeys&) noexcept {}
   // The pad LEDs: `leds` is cleared before the call.
   virtual void leds(Context&, PadLeds&) noexcept {}
+  // What the controls do on this screen, for HELP (Shift + Config, help.h, docs/FRAMEWORK.md "Help"). Asked once when HELP opens, with Shift let go of in the panel's state (as the screen is without
+  // it); `help` starts empty. Pointers must stay valid while HELP is open: static tables, or the screen's own members. Default: nothing (HELP shows the soft keys only).
+  virtual void help(const Context&, Help&) const noexcept {}
 
  protected:
   Screen() = default;

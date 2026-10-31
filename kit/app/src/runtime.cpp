@@ -271,6 +271,7 @@ void Runtime::switch_screen() noexcept {
   if (next == ctx_.screen_) {
     return;
   }
+  help_.close();  // (what it says is about the screen that is leaving)
   if (ctx_.screen_ != nullptr) {
     ctx_.screen_->leave(ctx_);
   }
@@ -279,15 +280,18 @@ void Runtime::switch_screen() noexcept {
   ctx_.redraw_ = true;
 }
 
-// One input: the system layer's or the app's. The Config button is the runtime's and never reaches the app (press or release). While the
-// system screen is open (or the input is locked) a press or a turn is the system's, and a press it took is not released to the app
-// either; the release of something the app saw pressed does reach it, so a pad held when the screen opened does not leave a note on.
+// One input: the system layer's or the app's. The Config button is the runtime's and never reaches the app (press or release): it opens the system screen, or HELP with Shift held, and closes
+// whichever is open. While the system screen or HELP is open (or the input is locked) a press or a turn is theirs, and a press they took is not released to the app either; the release of something
+// the app saw pressed does reach it, so a pad held when the screen opened does not leave a note on, nor the Shift that opened HELP stay held.
 void Runtime::route(const Input& in) noexcept {
   if (in.is(Button::Config)) {
     if (in.type == Input::Type::Press && !locked_) {
-      if (sys_.open()) {
+      if (help_.open()) {
+        help_.close();
+        ctx_.redraw();
+      } else if (sys_.open()) {
         sys_.close(ctx_);  // (not past INSTALL)
-      } else {
+      } else if (!(in.shift && open_help())) {
         sys_.show(ctx_);
       }
     }
@@ -301,18 +305,40 @@ void Runtime::route(const Input& in) noexcept {
       *taken &= ~bit;  // its press was the system's
       return;
     }
-  } else if (locked_ || sys_.open()) {
+  } else if (locked_ || sys_.open() || help_.open()) {
     if (in.type == Input::Type::Press) {
       *taken |= bit;
     }
     if (!locked_) {
-      sys_.input(ctx_, in);
+      if (help_.open()) {
+        help_.input(in);
+        ctx_.redraw();
+      } else {
+        sys_.input(ctx_, in);
+      }
     }
     return;
   }
   if (!app_.input(ctx_, in) && ctx_.screen_ != nullptr) {
     ctx_.screen_->input(ctx_, in);
   }
+}
+
+// Shift + Config: asks the screen what its controls do (Screen::help) and opens HELP over it. Shift is let go of in the panel's state for the two calls (the screen's help and its soft keys are those
+// of the screen without Shift: the caps show its plain labels, the Shift row comes from Help::fkey_shift) and held again after. false: there is no screen yet.
+bool Runtime::open_help() noexcept {
+  Screen* const screen = ctx_.screen_;
+  if (screen == nullptr) {
+    return false;
+  }
+  const Panel held = ctx_.panel_;
+  ctx_.panel_.apply(core::InputEvent{ctx_.now_, core::InputKind::Button, static_cast<std::uint8_t>(Button::Shift), 0});
+  SoftKeys keys;
+  screen->soft_keys(ctx_, keys);
+  help_.show(*screen, ctx_, keys);
+  ctx_.panel_ = held;
+  ctx_.redraw();
+  return true;
 }
 
 void Runtime::poll() noexcept {
@@ -381,7 +407,8 @@ bool Runtime::draw() noexcept {
   // The app's screen decides the theme and the chrome while the system Config screen is closed; Config always has the context's theme and the full chrome.
   const Screen* const screen = sys_.open() ? nullptr : ctx_.screen_;
   const ui::Theme* const screen_theme = screen != nullptr ? screen->theme(ctx_) : nullptr;
-  const bool bare = screen != nullptr && screen->chrome(ctx_) == Chrome::None;
+  const bool helping = help_.open();  // (HELP always has the full chrome, in the screen's theme)
+  const bool bare = !helping && screen != nullptr && screen->chrome(ctx_) == Chrome::None;
   eve::DisplayListBuilder builder(platform_.display, list_.words, eve::kMaxDisplayListWords);
   ui::Renderer r(builder, screen_theme != nullptr ? *screen_theme : ui::theme(ctx_.theme_));
   busy_ = !r.begin(Color::Pane);
@@ -395,6 +422,8 @@ bool Runtime::draw() noexcept {
   }
   if (sys_.open()) {
     sys_.draw(ctx_, r, kContentArea);
+  } else if (helping) {
+    help_.draw(r, kContentArea);
   } else if (ctx_.screen_ != nullptr) {
     ctx_.screen_->draw(ctx_, r, bare ? kScreenArea : kContentArea);
   }
@@ -422,7 +451,13 @@ void Runtime::draw_header(ui::Renderer& r) noexcept {
 
   const char* name = app_.info().name;
   r.text(8, data_y, name, Color::ChromeText, Face::Data);
+  core::FixedString<48> help_title;
   const char* title = sys_.open() ? "CONFIG" : (ctx_.screen_ != nullptr ? ctx_.screen_->title() : nullptr);
+  if (help_.open() && !sys_.open()) {
+    help_title.assign("HELP  ");
+    help_title.append(title != nullptr ? title : "");
+    title = help_title.c_str();
+  }
   if (title != nullptr) {
     r.text(8 + r.text_width(name, Face::Data) + 14, label_y, title, Color::ChromeDim, Face::Label);
   }
@@ -450,6 +485,8 @@ void Runtime::draw_keys(ui::Renderer& r) noexcept {
   SoftKeys keys;
   if (sys_.open()) {
     sys_.soft_keys(ctx_, keys);
+  } else if (help_.open()) {
+    help_.soft_keys(keys);
   } else if (ctx_.screen_ != nullptr) {
     ctx_.screen_->soft_keys(ctx_, keys);
   }
@@ -464,7 +501,7 @@ void Runtime::draw_keys(ui::Renderer& r) noexcept {
 
 void Runtime::update_leds() noexcept {
   leds_.clear();
-  if (ctx_.screen_ != nullptr && !sys_.open()) {  // (the pads are not the app's while the system screen is up)
+  if (ctx_.screen_ != nullptr && !sys_.open() && !help_.open()) {  // (the pads are not the app's while the system screen or HELP is up)
     ctx_.screen_->leds(ctx_, leds_);
   }
   if (platform_.leds != nullptr) {

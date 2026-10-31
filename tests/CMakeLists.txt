@@ -51,6 +51,7 @@ if(TARGET hello_sim)
     "--run=config|${_hs}/config.txt|--firmware-dir ${_hs}/firmware"
     "--run=config_pages|${_hs}/config_pages.txt|--card {card} --audio-in"
     "--run=files|${_hs}/files.txt|--card {card}"
+    "--run=help|${_hs}/help.txt"
     "--run=midi|${_hs}/midi.txt"
     "--run=picker|${_hs}/picker.txt|--card {card}"
     "--run=record|${_hs}/record.txt|--card {card} --wav {wav}"

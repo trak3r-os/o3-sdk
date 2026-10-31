@@ -193,8 +193,12 @@ no pressure), one encoder (no push). Pads are numbered 0..47 from the top left, 
 - `app::Input` is raw: a press arrives at the press, so pads and keys play at once. `in.press(Button::Play)`, `in.pad_press()` / `in.pad()`,
   `in.turn()` / `in.delta()`, `in.shift`. What is held now is `ctx.panel()`. For holds and chords use `ctx.panel()` or `core/gesture.h`.
 - **Global keys** (Play, the screen buttons) go in `App::input()`: it sees every input first, and `true` consumes it. A screen's own keys go in
-  `Screen::input()`. **The Config button belongs to the kit** (the system Config screen, `docs/FRAMEWORK.md` section 5): do not give it
+  `Screen::input()`. **The Config button belongs to the kit** (the system Config screen, `docs/FRAMEWORK.md` section 5, and with Shift the HELP overlay): do not give it
   a meaning in a new app, so that nothing breaks when it lands. HELLO and o3-303 use it for a theme toggle today.
+- **Help for the user**: Shift + Config opens the kit's HELP over any screen (the buttons as key caps, the pads as a grid), and you only say what each control does: override `Screen::help(ctx, help)` and fill an `app::Help`
+  (`app/help.h`): a summary, the soft keys' longer texts, a static table of `HelpButton{button, text, shift}` (one line of 28 characters each, upper case), the encoder, and the pads' short labels (5 characters) and groups with their
+  colours (theme tokens; `help_pads()` fills a rectangle). A button you give no text is shown dimmed, a screen with no `help()` shows its soft keys only. Tables are static, texts are cut at their limits; `docs/FRAMEWORK.md`
+  ("Help") has them all, and HELLO's `PlayScreen::help()` with `apps/hello/scenarios/help.txt` is the example (run it and open the PNGs).
 - **Editing values**: `app::ParamKeys` (`app/param_keys.h`) is the kit's convention: tap F1..F8 latches the encoder on that key's parameter, hold an F
   key and turn for a moment, hold two to move both, Shift for coarse steps, a page button for the next page of eight. A `ParamPage` is a name,
   a unit and up to eight parameter ids. `knob_strip()` draws the eight cells (name, value, bar) above the soft keys. It is what the template's
