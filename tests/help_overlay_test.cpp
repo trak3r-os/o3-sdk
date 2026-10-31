@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 
 using namespace o3sdk;
 using app::Button;
@@ -589,4 +590,51 @@ TEST_CASE("budget: a screen with a few short texts shows more rows than the wors
   CHECK(heavy.rt().help_overlay().rows_shown() >= 4);  // still a useful page at the limit
   CHECK(heavy.rt().help_overlay().rows_shown() < light.rt().help_overlay().rows_shown());
   MESSAGE("rows shown of " << heavy.rt().help_overlay().rows() << ": " << heavy.rt().help_overlay().rows_shown() << " at the limits, " << light.rt().help_overlay().rows_shown() << " with a few short texts");
+}
+
+// help_check() counts the lines of the summary and of the soft keys' texts with help_wrap(), the function the overlay draws with: what the check calls too long is what the overlay does not draw.
+namespace {
+unsigned words_with(const char* summary, const char* fkey) {
+  Rig r;
+  r.screen().has_help = true;
+  r.screen().data.summary = summary;
+  r.screen().data.fkey[3] = fkey;
+  r.shift_config();
+  REQUIRE(r.rt().help_open());
+  r.h.run_ms(80);
+  return r.rt().last_frame_words();
+}
+}  // namespace
+
+TEST_CASE("check: the overlay draws as many lines as help_lines() counts, up to two") {
+  const std::string line = "AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA AAAAAAAAAAA";  // 8 x 11 + 7 = 95 characters
+  const std::string fk = "AAAAAAAAAAAA BBBBBBBBBBBB";                                                                         // two lines of 12 at 14
+  REQUIRE(line.size() <= app::kHelpSummaryLine);
+  REQUIRE(app::help_lines(line.c_str(), app::kHelpSummaryLine) == 1);
+  const std::string two = line + " " + line;
+  const std::string three = two + " CCCC";
+  REQUIRE(app::help_lines(two.c_str(), app::kHelpSummaryLine) == 2);
+  REQUIRE(app::help_lines(three.c_str(), app::kHelpSummaryLine) == 3);
+  const std::string fk3 = fk + " CCCC";
+  REQUIRE(app::help_lines(fk.c_str(), app::kHelpFKeyLine) == 2);
+  REQUIRE(app::help_lines(fk3.c_str(), app::kHelpFKeyLine) == 3);
+
+  const unsigned one_line = words_with(line.c_str(), fk.c_str());
+  const unsigned two_lines = words_with(two.c_str(), fk.c_str());
+  const unsigned three_lines = words_with(three.c_str(), fk3.c_str());
+  CHECK(two_lines > one_line);          // the second line is drawn
+  CHECK(three_lines == two_lines);      // the third (of the summary and of the F key) is not
+  // And the check calls exactly that Help too long.
+  Help h;
+  h.summary = three.c_str();
+  app::HelpProblem p;
+  CHECK_FALSE(app::help_check(h, &p));
+  CHECK(p.field == app::HelpField::Summary);
+  h.summary = two.c_str();
+  h.fkey[3] = fk3.c_str();
+  CHECK_FALSE(app::help_check(h, &p));
+  CHECK(p.field == app::HelpField::FKey);
+  CHECK(p.index == 3);
+  h.fkey[3] = fk.c_str();
+  CHECK(app::help_check(h));
 }

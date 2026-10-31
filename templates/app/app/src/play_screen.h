@@ -8,6 +8,7 @@
 
 #include <@APP_ID@/pattern.h>
 
+#include <o3sdk/app/help.h>
 #include <o3sdk/app/param_keys.h>
 #include <o3sdk/app/screen.h>
 #include <o3sdk/dsp/engine.h>
@@ -24,9 +25,9 @@ class PlayScreen final : public o3sdk::app::Screen {
   void draw(o3sdk::app::Context& ctx, o3sdk::ui::Renderer& r, const o3sdk::ui::Rect& area) noexcept override;
   void soft_keys(o3sdk::app::Context& ctx, o3sdk::app::SoftKeys& out) noexcept override;
   void leds(o3sdk::app::Context& ctx, o3sdk::app::PadLeds& leds) noexcept override;
-  // HELP (Shift + Config) draws what the buttons and the pads do here from the data this gives (o3-sdk app/help.h, docs/FRAMEWORK.md "Help"). Until you write it the screen's
-  // HELP shows its soft keys only; the example is in play_screen.cpp.
-  // void help(const o3sdk::app::Context& ctx, o3sdk::app::Help& help) const noexcept override;
+  // HELP (Shift + Config) draws what the buttons and the pads do here from the data this gives (o3-sdk app/help.h, docs/FRAMEWORK.md "Help"). Keep it true when you change a control:
+  // tests/app_test.cpp checks it against the kit's limits (help_check) and app/scenarios/help.txt shows it.
+  void help(const o3sdk::app::Context& ctx, o3sdk::app::Help& help) const noexcept override;
 
   // For the console's `state` (the app's describe_state) and the app's file jobs.
   int octave() const noexcept { return octave_; }
@@ -45,6 +46,7 @@ class PlayScreen final : public o3sdk::app::Screen {
   int octave_ = 0;
   Pattern pattern_;
   const char* note_ = nullptr;
+  mutable o3sdk::app::HelpPadNames help_names_ = {};  // help(): the pads' labels ("C3", "F#4"), which move with the octave; Screen::help() is const
   int held_[o3sdk::app::kPadCount] = {};  // the note each held pad started (-1: none), so the release names it even after an octave shift
 };
 

@@ -147,54 +147,9 @@ unsigned text_len(const char* s, unsigned max) noexcept {
   return n;
 }
 
-// `s` as at most `max_lines` lines of at most `width` characters, in `out` (`stride` = width + 1 bytes a line): a line ends at a newline, else after the last space that lets it fit, else (a word
-// longer than the line) at `width`. Text past the last line is dropped. Returns the lines made; the rest of `out` is not touched.
-unsigned wrap(const char* s, unsigned width, unsigned max_lines, char* out, unsigned stride) noexcept {
-  unsigned lines = 0;
-  while (s != nullptr && lines < max_lines) {
-    while (*s == ' ') {
-      ++s;
-    }
-    if (*s == '\0') {
-      break;
-    }
-    unsigned i = 0;
-    unsigned last_space = 0;
-    while (s[i] != '\0' && s[i] != '\n' && i < width) {
-      if (s[i] == ' ') {
-        last_space = i;
-      }
-      ++i;
-    }
-    unsigned take = i;
-    unsigned next = i;
-    if (s[i] == '\n') {
-      next = i + 1u;
-    } else if (s[i] != '\0') {  // full, and there is more
-      if (s[i] == ' ') {
-        next = i + 1u;
-      } else if (last_space > 0u) {
-        take = last_space;
-        next = last_space + 1u;
-      }
-    }
-    while (take > 0u && s[take - 1u] == ' ') {
-      --take;
-    }
-    char* line = out + lines * stride;
-    for (unsigned k = 0; k < take; ++k) {
-      line[k] = s[k];
-    }
-    line[take] = '\0';
-    s += next;
-    ++lines;
-  }
-  return lines;
-}
-
 unsigned wrapped_glyphs(const char* s, unsigned width, unsigned max_lines) noexcept {
   char buf[2 * (kHelpSummaryLine + 1)];
-  const unsigned n = wrap(s, width, max_lines, buf, width + 1u);
+  const unsigned n = help_wrap(s, width, max_lines, buf, width + 1u);
   unsigned words = 0;
   for (unsigned i = 0; i < n; ++i) {
     words += glyphs(buf + i * (width + 1u), width);
@@ -554,7 +509,7 @@ void HelpOverlay::draw_buttons(ui::Renderer& r, const Rect& area) const noexcept
     if (((label_dim_ >> i) & 1u) == 0u) {
       put(r, x + 22, label_y, label_[i], 9, Color::ChromeText, Face::Label);
     }
-    const unsigned n = wrap(help_.fkey[i], kHelpFKeyLine, 2, lines, kHelpFKeyLine + 1u);
+    const unsigned n = help_wrap(help_.fkey[i], kHelpFKeyLine, 2, lines, kHelpFKeyLine + 1u);
     for (unsigned k = 0; k < n; ++k) {
       r.text(x + 5, fy + 22 + static_cast<int>(k) * 12, lines + k * (kHelpFKeyLine + 1u), Color::ChromeText, Face::Micro);
     }
@@ -580,7 +535,7 @@ void HelpOverlay::draw_buttons(ui::Renderer& r, const Rect& area) const noexcept
   // On the pane: the summary and the texts (Text), the Shift lines (Instr), the dim names and the line that says there is more (TextDim).
   if (some(help_.summary) || no_help_) {
     char sum[2 * (kHelpSummaryLine + 1)];
-    const unsigned n = some(help_.summary) ? wrap(help_.summary, kHelpSummaryLine, 2, sum, kHelpSummaryLine + 1u) : wrap(kNoHelp, kHelpSummaryLine, 2, sum, kHelpSummaryLine + 1u);
+    const unsigned n = some(help_.summary) ? help_wrap(help_.summary, kHelpSummaryLine, 2, sum, kHelpSummaryLine + 1u) : help_wrap(kNoHelp, kHelpSummaryLine, 2, sum, kHelpSummaryLine + 1u);
     for (unsigned k = 0; k < n; ++k) {
       r.text(16, ui::caps_y(t, Face::Label, area.y + kSummaryY + static_cast<int>(k) * kSummaryPitch, kSummaryPitch), sum + k * (kHelpSummaryLine + 1u), Color::Text, Face::Label);
     }

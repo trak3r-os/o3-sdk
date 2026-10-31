@@ -11,7 +11,7 @@ Unofficial; not affiliated with or endorsed by Polyend. "Tracker" is used only t
 
 A starter from o3-sdk's `templates/app`: one unit (`VOICE`, a small monophonic instrument), one screen (`PLAY`: the pads are a chromatic
 keyboard that also records a 16-step pattern, F1-F3 and the encoder edit the voice), the card (FILE saves the pattern, SAMPLE LOAD loads it,
-the pattern and the octave come back after a reboot: the file API, `../o3-sdk/kit/app/include/o3sdk/app/files.h`), two scenarios, and tests.
+the pattern and the octave come back after a reboot: the file API, `../o3-sdk/kit/app/include/o3sdk/app/files.h`), HELP on Shift + Config (`PlayScreen::help()`: what each control does, drawn by the kit), three scenarios, and tests.
 Replace the voice with your engine and keep the shape.
 
 | Path | What |

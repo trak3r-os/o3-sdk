@@ -174,24 +174,40 @@ void PlayScreen::soft_keys(app::Context& ctx, app::SoftKeys& out) noexcept {
   out.hot = static_cast<std::uint8_t>(1u << keys_.focus());  // the key the encoder drives now
 }
 
-// HELP (Shift + Config, o3-sdk app/help.h): the kit draws it from this table, in the screen's theme. Uncomment it and its declaration in play_screen.h, then say what your controls do (upper case, static
-// tables; the limits are in docs/FRAMEWORK.md, "Help"). A button with no entry is shown dimmed. Look at it in the simulator: a scenario with `press shift`, `tap config`, `release shift`, `snap help`.
-//
-// void PlayScreen::help(const app::Context&, app::Help& h) const noexcept {
-//   static constexpr app::HelpButton kButtons[] = {
-//       {app::Button::Left, "KEYBOARD AN OCTAVE DOWN", nullptr},
-//       {app::Button::Right, "KEYBOARD AN OCTAVE UP", nullptr},
-//       {app::Button::Delete, "CLEAR THE PATTERN", nullptr},
-//   };
-//   static constexpr app::HelpPadGroup kGroups[] = {{"KEYS", "PLAY THE VOICE AND RECORD THE PATTERN", ui::Color::Sel}};
-//   h.summary = "THE PADS PLAY THE VOICE. F1-F3 AND THE ENCODER EDIT ITS VALUES.";
-//   h.buttons = kButtons;
-//   h.button_count = 3;
-//   h.encoder = "CHANGE THE VALUE OF THE F KEY";
-//   h.groups = kGroups;
-//   h.group_count = 1;
-//   app::help_pads(h, 0, 0, app::kPadRows - 1, app::kPadCols - 1, 1);  // every pad is a key; give a pad_label[] to name them
-// }
+// HELP (Shift + Config, o3-sdk app/help.h): the kit draws it from this data, in the screen's theme. Every control this screen uses is here, in upper case, from static tables (the limits are in
+// docs/FRAMEWORK.md, "Help", and tests/app_test.cpp checks them with help_check()). A button with no entry is shown dimmed. The pads' labels are built per call: the note a pad plays moves with
+// the octave. FILE and SAMPLE LOAD are handled in app.cpp. Look at it: app/scenarios/help.txt (Shift + Config, BUTTONS, PADS).
+void PlayScreen::help(const app::Context&, app::Help& h) const noexcept {
+  static constexpr app::HelpButton kButtons[] = {
+      {Button::File, "SAVE THE PATTERN", nullptr},
+      {Button::SampleLoad, "LOAD THE PATTERN", nullptr},
+      {Button::Delete, "CLEAR THE PATTERN", nullptr},
+      {Button::Left, "KEYBOARD AN OCTAVE DOWN", nullptr},
+      {Button::Right, "KEYBOARD AN OCTAVE UP", nullptr},
+  };
+  static constexpr app::HelpPadGroup kGroups[] = {
+      {"WHITE KEYS", "PLAY THE VOICE AND RECORD THE NOTE", Color::Sel},
+      {"BLACK KEYS", "THE SEMITONES: PLAY AND RECORD", Color::Instr},
+  };
+  h.summary = "THE PADS PLAY THE VOICE AND RECORD THEIR NOTES INTO A 16-STEP PATTERN. F1-F3 POINT THE ENCODER AT A VALUE (A TAP LATCHES IT) AND THE ENCODER CHANGES IT.";
+  h.fkey[0] = "SIN, TRI OR SAW";
+  h.fkey[1] = "HOW LONG A NOTE RINGS";
+  h.fkey[2] = "THE OUTPUT LEVEL";
+  h.buttons = kButtons;
+  h.button_count = sizeof kButtons / sizeof kButtons[0];
+  h.encoder = "CHANGE VALUE (SHIFT COARSE)";
+  h.groups = kGroups;
+  h.group_count = sizeof kGroups / sizeof kGroups[0];
+  h.pads = "ONE OCTAVE A ROW, THE BOTTOM ROW LOWEST. LEFT / RIGHT MOVE THE WHOLE KEYBOARD.";
+  for (unsigned pad = 0; pad < app::kPadCount; ++pad) {
+    const int note = key_note(pad, octave_);
+    if (note < 0) {  // past 0..127: not a key, drawn dark
+      continue;
+    }
+    h.pad_group[pad] = is_natural(note) ? 1 : 2;
+    (void)app::help_pad_note(h, help_names_, pad, note);  // "C3", "F#4": 60 is C4, as the screen's own names
+  }
+}
 
 void PlayScreen::leds(app::Context& ctx, app::PadLeds& leds) noexcept {
   // Monochrome LEDs: a few levels carry the meaning (app/pad_leds.h). A white key is dim, a held pad is full.

@@ -487,16 +487,7 @@ class PlayScreen final : public app::Screen {
       if (!is_natural(static_cast<unsigned>(n))) {
         h.pad_group[pad] = 2;
       }
-      static const char kNames[] = "C C#D D#E F F#G G#A A#B ";
-      char* s = pad_names_[pad];
-      const unsigned pc = static_cast<unsigned>(n) % 12u;
-      *s++ = kNames[pc * 2u];
-      if (kNames[pc * 2u + 1u] != ' ') {
-        *s++ = kNames[pc * 2u + 1u];
-      }
-      s = put_uint(s, static_cast<std::uint32_t>(n / 12 - 1 < 0 ? 0 : n / 12 - 1));
-      *s = '\0';
-      h.pad_label[pad] = pad_names_[pad];
+      (void)app::help_pad_note(h, pad_names_, pad, n);  // "C3", "F#4" (60 is C4)
     }
   }
 
@@ -568,7 +559,7 @@ class PlayScreen final : public app::Screen {
   app::FilePicker* picker_ = nullptr;
   app::NameEntry* names_ = nullptr;
   int held_[app::kPadCount] = {};
-  mutable char pad_names_[app::kPadCount][4] = {};  // help(): the pads' labels, "C3", "F#4"
+  mutable app::HelpPadNames pad_names_ = {};  // help(): the pads' labels, "C3", "F#4"
 };
 
 // ---- The app ----------------------------------------------------------------------------------------------------------------

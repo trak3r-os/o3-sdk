@@ -56,7 +56,7 @@ What you get, laid out like o3-303:
 myapp-repo/
   CMakeLists.txt            uses ../o3-sdk (add_subdirectory); -DO3SDK_DIR=<path> or $O3SDK_DIR elsewhere
   app/                      the app: CMakeLists.txt (o3sdk_app), src/app.cpp, src/play_screen.{h,cpp}, include/myapp/{pad_map,pattern}.h
-  app/scenarios/            boot.txt and files.txt, simulator scenarios (screens as PNG, audio as WAV; files.txt on the simulator's card)
+  app/scenarios/            boot.txt, files.txt and help.txt, simulator scenarios (screens as PNG, audio as WAV; files.txt on the simulator's card; help.txt is HELP, Shift + Config)
   units/voice/              one unit (DSP): voice.h, voice.cpp, CMakeLists.txt (o3sdk_unit)
   tests/                    doctest: voice_test (the unit against the engine), pad_map_test and pattern_test (pure logic, the file format), app_test (the app in the simulator, with a card)
   tools/ci.sh, remote_ci.sh, gate.py   the CI scripts and the release gate, identical to o3-sdk's (docs/ci.md)
@@ -183,6 +183,7 @@ A screen is a class (`app::Screen`, `kit/app/include/o3sdk/app/screen.h`); see `
 - The header strip (app name, screen title, tempo, transport, the render's load on the unit) and the soft-key row are the kit's and are drawn
   for you. An app with no sequencer still shows `120.0 BPM` and a transport badge: today they are not optional.
 - Look at the result: `<id>_sim --scenario ... --out <dir>`, then open the PNGs. A screen change without a scenario is not finished.
+- **Every screen gets HELP before it is done**: fill `help()` for its controls, check it with `app::help_check()` in a test, add a Shift + Config scenario and look at the BUTTONS and PADS pictures (`docs/FRAMEWORK.md`, "Help", "Give your app HELP").
 
 ## 5. Controls and pads
 
@@ -198,7 +199,8 @@ no pressure), one encoder (no push). Pads are numbered 0..47 from the top left, 
 - **Help for the user**: Shift + Config opens the kit's HELP over any screen (the buttons as key caps, the pads as a grid), and you only say what each control does: override `Screen::help(ctx, help)` and fill an `app::Help`
   (`app/help.h`): a summary, the soft keys' longer texts, a static table of `HelpButton{button, text, shift}` (one line of 28 characters each, upper case), the encoder, and the pads' short labels (5 characters) and groups with their
   colours (theme tokens; `help_pads()` fills a rectangle). A button you give no text is shown dimmed, a screen with no `help()` shows its soft keys only. Tables are static, texts are cut at their limits; `docs/FRAMEWORK.md`
-  ("Help") has them all, and HELLO's `PlayScreen::help()` with `apps/hello/scenarios/help.txt` is the example (run it and open the PNGs).
+  ("Help") has them all, and the template's `PlayScreen::help()` (a new app starts with it filled in) with `app/scenarios/help.txt` and `help_check()` in `tests/app_test.cpp` is the example (run it and open the PNGs).
+  `help_note_label()` and `HelpPadNames` name a keyboard's pads (60 is C4).
 - **Editing values**: `app::ParamKeys` (`app/param_keys.h`) is the kit's convention: tap F1..F8 latches the encoder on that key's parameter, hold an F
   key and turn for a moment, hold two to move both, Shift for coarse steps, a page button for the next page of eight. A `ParamPage` is a name,
   a unit and up to eight parameter ids. `knob_strip()` draws the eight cells (name, value, bar) above the soft keys. It is what the template's

@@ -285,7 +285,7 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
 
 ### Help (Shift + Config: `help.h`, `help_overlay.h`)
 
-**Status: built (slice HELP-K), host only**, with the scenario `apps/hello/scenarios/help.txt` (its frames are pinned in `tests/digests/hello.txt`) and `tests/help_overlay_test.cpp`. The unit checks (the 8 x 16 pad labels legible
+**Status: built (slices HELP-K and HELP-K2), host only**, with the scenario `apps/hello/scenarios/help.txt` (its frames are pinned in `tests/digests/hello.txt`), `tests/help_overlay_test.cpp` and `tests/help_check_test.cpp`; the template starts with it filled in. The unit checks (the 8 x 16 pad labels legible
 at arm's length, Shift + Config by hand) come with the next unit image.
 
 Shift held, then Config pressed, on any app screen opens HELP over it: the kit's drawing of what the buttons and the pads do **on that screen**. The app supplies only data, one `Help` from `Screen::help(const Context&, Help&)`
@@ -311,6 +311,25 @@ without assets. Config alone opens the system Config as before.
   shows 4 of the 15 rows and scrolls for the rest, and a screen with short texts shows 12. `tests/help_overlay_test.cpp` measures the worst case on every scroll position, in the three themes, with the strip up
   (1,344 words on BUTTONS, 1,251 on PADS; the simulator's header has no CPU figure, which is 8 words more on the unit, inside the margin).
 - Memory: the `Help` and the soft-key labels live in the runtime's `HelpOverlay` (about 0.5 KB on the unit), filled once at the opening; no heap.
+- **`help_check(const Help&, HelpProblem* first = nullptr)`** (`help.h`, `src/help.cpp`; host and MK66, no heap): true when the Help holds to every limit above, **measured with the overlay's own wrap function** (`help_wrap()` /
+  `help_lines()`: one rule that both call, so the check cannot drift from the drawing). It finds, in this order, the first of: the summary and each `fkey` text over two lines of their width, or with a word longer than a line
+  (it would be cut in the middle); a one-line text (`fkey_shift`, button text and shift, encoder, group name and text, pad label, `pads`) over its limit or with a `\n`; lower-case letters in any text; `group_count` over 8 or with
+  no table; a `pad_group` past `group_count`; `buttons` null with `button_count > 0`; a button listed twice (the overlay takes the first), a soft key in `buttons` (those go in `fkey`), `Config` in it (the kit describes it) or a
+  value that is not a button. `HelpProblem{field, index, what}` says where (`help_field_name(field)`: "FKEY", "PAD LABEL", ...; `index`: the F key, table entry, group or pad) and what (a short static text such as `TOO LONG`,
+  `TOO MANY LINES`, `LOWER CASE`). Not checked: that a button has a text (without one it is drawn dimmed), that every pad of the screen's map has a group, that the texts are true; those are the app's test.
+- **Keyboards**: `help_note_label(out, note)` writes a MIDI note's name ("C3", "C#3", "F#4", "C-1") and returns true, or `""` and false outside 0..127; **the octave is `note / 12 - 1`: 60 is C4, 48 is C3, 0 is C-1, 127 is
+  G9**, the convention HELLO's and o3-303's pads use (an app that counts 60 as C3 passes `note - 12`); at most 5 bytes with the terminator ("C#-1"). `HelpPadNames` (`char[48][kHelpPadLabel + 1]`) is the storage of labels a
+  screen builds when HELP opens, because they depend on its state (a `mutable` member: `Screen::help()` is const), and `help_pad_note(h, names, pad, note)` fills `names[pad]` and `h.pad_label[pad]` from a note (null label
+  when the note is out of range). The group stays the caller's (`help_pads()` or `pad_group[]`).
+
+### Give your app HELP
+
+1. **Fill `help()`** on each screen: the summary, the soft keys' texts (`fkey`), a static `HelpButton` table of the buttons the screen uses (not the soft keys, not Config), the encoder, the pad groups and a label on every pad the
+   map uses (`help_pads()` for a rectangle, `help_pad_note()` for a keyboard). The template's `PlayScreen::help()` is the smallest complete one; say only what the screen really does.
+2. **Check it in a test**: open HELP in the simulator (Shift, Config) and `app::help_check(rt.help_overlay().help(), &problem)` for each screen and each state that changes the texts (the octave, a mode). Failing messages come
+   from `help_field_name(problem.field)`, `problem.index` and `problem.what`; plus whatever is yours to say (every pad the map uses has a group).
+3. **Add a scenario** (`app/scenarios/help.txt`): `press shift`, `tap config`, `release shift`, `snap`, `tap f2`, `snap`, `tap f8`.
+4. **Look at the pictures**: BUTTONS and PADS, in the theme the screen uses. A cut text, a wrong label or a dim cap that should have a text shows at once; the sizes and the legibility on the unit come with a unit session.
 
 ### MIDI (`midi.h`)
 

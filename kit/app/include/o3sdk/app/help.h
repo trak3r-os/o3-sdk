@@ -57,4 +57,58 @@ struct Help {
 // from the rectangle's top left ((r1 - r0 + 1) * (c1 - c0 + 1) entries; a null entry: no label).
 void help_pads(Help& h, unsigned r0, unsigned c0, unsigned r1, unsigned c1, std::uint8_t group, const char* const* labels = nullptr) noexcept;
 
+// ---- The note names of a keyboard's pads -------------------------------------------------------------------------------------------------------------------
+
+// The storage of the pad labels a screen builds when HELP opens (Help::pad_label points into it: a member of the screen, `mutable` because Screen::help() is const).
+using HelpPadNames = char[kPadCount][kHelpPadLabel + 1];
+
+// The name of a MIDI note into `out` ("C3", "C#3", "F#4", "C-1"), upper case, letter, an optional sharp, the octave. The octave is note / 12 - 1: **60 is C4, 48 is C3, 0 is C-1, 127 is G9** (the MIDI
+// convention of o3-sdk's HELLO and o3-303; an app whose docs count 60 as C3 passes note - 12). Writes at most 5 bytes with the terminator ("C#-1" is the longest) and returns true; a note outside 0..127 writes ""
+// (no label) and returns false.
+bool help_note_label(char* out, int note) noexcept;
+
+// help_note_label() into names[pad] and Help::pad_label[pad] pointing at it (null when the note is outside 0..127, or `pad` is past the grid: false). The group is the caller's (help_pads() or pad_group[]).
+bool help_pad_note(Help& h, HelpPadNames& names, unsigned pad, int note) noexcept;
+
+// ---- The text rule, and the check of a filled Help ---------------------------------------------------------------------------------------------------------
+
+// The one rule of the summary's and the soft keys' wrapping, the overlay draws with it and help_check() measures with it, so the two cannot drift: `s` as lines of at most `width` characters (a line ends at a '\n', else
+// after the last space that lets it fit, else, for a word longer than the line, at `width`). Leading and trailing spaces of a line are dropped. At most `max_lines` lines are made and the text past them is lost. With `out`
+// not null each line is written to out + line * stride (`stride` = width + 1 or more: the line and its terminator); with null only the lines are counted. Returns the lines made. Not for `width` 0 (returns 0).
+unsigned help_wrap(const char* s, unsigned width, unsigned max_lines, char* out = nullptr, unsigned stride = 0) noexcept;
+// The lines `s` needs at `width`, with no limit of lines (help_wrap() counting): what a text must not exceed.
+unsigned help_lines(const char* s, unsigned width) noexcept;
+
+// The fields of a Help, for the first problem help_check() finds.
+enum class HelpField : std::uint8_t {
+  Summary,     // index 0
+  FKey,        // Help::fkey[index]
+  FKeyShift,   // Help::fkey_shift[index]
+  Buttons,     // the table as a whole (index 0), or the entry `index` (a button listed twice, a soft key or Config in it)
+  ButtonText,  // buttons[index].text
+  ButtonShift, // buttons[index].shift
+  Encoder,     // index 0
+  Groups,      // the table as a whole (group_count, a null table), index 0
+  GroupName,   // groups[index].name
+  GroupText,   // groups[index].text
+  PadLabel,    // pad_label[index]
+  PadGroup,    // pad_group[index]
+  Pads,        // index 0
+};
+// "SUMMARY", "FKEY", "FKEY SHIFT", "BUTTONS", ...: the field in a test's message.
+const char* help_field_name(HelpField field) noexcept;
+
+struct HelpProblem {
+  HelpField field = HelpField::Summary;
+  std::uint8_t index = 0;    // the f key, the table entry, the group or the pad
+  const char* what = "";     // a short text in capitals ("TOO LONG", "TOO MANY LINES", "LOWER CASE", ...), static
+};
+
+// Whether a filled Help holds to every limit above and to what the overlay draws with, exactly as the overlay draws it (the same help_wrap()): the summary and the soft keys' texts in at most 2 lines with no word
+// longer than a line; the one-line texts (button text and shift, encoder, group name and text, pad label, the Shift row's labels, the pads line) within their limits and without a newline; group_count within
+// kHelpMaxGroups and with a table, every pad_group within group_count; a buttons table that exists when button_count is not 0; no button listed twice (the overlay takes the first), no soft key and no Config in the
+// table (the soft keys go in fkey, the kit describes Config); no lower-case letter in any text. The first problem found goes to `first` (when not null; untouched when the Help is right). For a test of the app's
+// screens, and for a debug build; no heap, no double, a few hundred steps.
+bool help_check(const Help& h, HelpProblem* first = nullptr) noexcept;
+
 }  // namespace o3sdk::app

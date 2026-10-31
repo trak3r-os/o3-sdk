@@ -1,0 +1,14 @@
+# HELP (Shift + Config) on the template's one screen: the buttons as key caps, the pads as a grid, and the screen back as it was.
+# Commands: sim/README.md in o3-sdk. Run: <build dir>/app/@APP_ID@_sim --scenario app/scenarios/help.txt --out <dir>   (the dir must exist)
+wait 100
+snap 00_play
+press shift
+tap config
+release shift
+wait 50
+snap 01_buttons
+tap f2
+snap 02_pads
+tap f8
+wait 50
+snap 03_closed

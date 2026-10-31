@@ -6,9 +6,9 @@
     check_template.py mk66 --sdk <o3-sdk dir> --work <dir> --arm <toolchain dir> --nm <arm-none-eabi-nm> [--jobs N] [--ccache] ...
 
 host: tools/new_app.py into <work>/app/demo_app, configure and build it against --sdk (warnings are failures), run its four ctests
-(app_test, pad_map_test, pattern_test, voice_test) and its two scenarios in the simulator (exit 0, pictures and the WAV written, no frame
-refused): boot.txt, and files.txt on the simulator's card (a fresh directory), which saves, reboots and loads, and leaves its files. The
-frames of both are pinned: their digests (sim digests.txt) are compared with tests/digests/template.txt of --sdk (tools/digest_check.py).
+(app_test, pad_map_test, pattern_test, voice_test) and its three scenarios in the simulator (exit 0, pictures and the WAV written, no frame
+refused): boot.txt, files.txt on the simulator's card (a fresh directory), which saves, reboots and loads, and leaves its files, and help.txt (HELP,
+Shift + Config). The frames of all three are pinned: their digests (sim digests.txt) are compared with tests/digests/template.txt of --sdk (tools/digest_check.py).
 A meant change regenerates the pins from the last run: tools/digest_check.py --pins tests/digests/template.txt --have <work>/digests-have.txt
 --update (the failure prints that command).
 mk66: the same instance, cross-built with -DO3SDK_PLATFORM=mk66 -DARM_GNU_ROOT=<--arm>, then its image ctests (demo_app_image,
@@ -140,7 +140,16 @@ def check_host(args):
     for name in ("pattern.o3a", "pattern.o3a.bak", "config.o3a"):
         if not os.path.isfile(os.path.join(card, "Apps", APP, name)):
             raise Failure("the files scenario left no %s on the card" % name)
-    # The pinned frames: the digests of both runs against the committed pins (the name DEMO-APP is the check's, so they do not move with the id).
+    # HELP: Shift + Config opens the kit's overlay over the screen, from the data of PlayScreen::help().
+    text = run([os.path.join(build, "app", APP + "_sim"), "--scenario", os.path.join(src, "app", "scenarios", "help.txt"), "--out", sim_out],
+               what="the simulator, help.txt")
+    if "0 refused" not in text or "0 events dropped" not in text or "handle 0 used 0 times" not in text:
+        raise Failure("the simulator summary is not clean:\n" + text[-400:])
+    digests += keep_digests(sim_out, "help")
+    for name in ("01_buttons.png", "02_pads.png"):
+        if not os.path.isfile(os.path.join(sim_out, name)):
+            raise Failure("the help scenario did not write %s" % name)
+    # The pinned frames: the digests of all three runs against the committed pins (the name DEMO-APP is the check's, so they do not move with the id).
     have = os.path.join(work, "digests-have.txt")
     with open(have, "w") as f:
         f.write("".join(digests))

@@ -10,3 +10,7 @@ files/02_cleared 2448c514
 files/03_loaded 2bba086a
 files/04_after_reboot 65222a68
 files/05_no_card 263d529b
+help/00_play fc47c276
+help/01_buttons 018804f4
+help/02_pads 10ff4fb4
+help/03_closed fc47c276

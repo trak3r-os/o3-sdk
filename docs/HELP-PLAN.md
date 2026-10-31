@@ -1,6 +1,6 @@
 # HELP: Shift + Config explains the controls (plan)
 
-Status: HELP-K built, 2026-10-31 (the "As built" notes below say where it differs from the plan); HELP-A next, in o3-303. The maintainer asked: "mete el shift+config en el sdk y que sirva para explicar los botones, y si puedes que
+Status: HELP-K built, 2026-10-31 (the "As built" notes below say where it differs from the plan); HELP-A next, in o3-303. HELP-K2 (section 5) built the same day: help_check(), the note-label helpers and the template's HELP. The maintainer asked: "mete el shift+config en el sdk y que sirva para explicar los botones, y si puedes que
 tenga imagenes de los pads explicandolos tambien". Shift + Config opens a help overlay that the kit draws for any app. It has two pages:
 the buttons as a drawing of key caps with what each does on this screen, and the 48 pads as a drawn 4 x 12 grid with a label on each pad
 and a legend. The app supplies only data, one `Help` per screen. Two slices: **HELP-K** in o3-sdk (this repository) and **HELP-A** in
@@ -151,3 +151,29 @@ The single lane runs:
 4. SK2, SK3, the SU1 image, SG2, SK4 to SK8.
 
 The maintainer asked for HELP now, so it goes ahead of SK2.
+
+## 5. HELP-K2 (as built)
+
+The maintainer asked: "make this available through the sdk, for future engines, the shift config and pads diagrams". The overlay was already in the kit; K2 moves into it the pieces every app would otherwise rewrite
+(o3-303's `help_texts_test.cpp` re-implemented the wrap rule to check limits, and HELLO and o3-303 each had a note-name function), and makes a new app start with HELP filled in.
+
+- **`help_check(const Help&, HelpProblem* first = nullptr)`** (`help.h`, `kit/app/src/help.cpp`): true when a filled Help holds to every limit of section 2. It reports the first problem as `HelpProblem{field, index, what}`
+  (`help_field_name()` names the field). The wrap rule is **one function**, `help_wrap(s, width, max_lines, out, stride)` (with `out` null it only counts; `help_lines(s, width)` is the unbounded count): the overlay's
+  drawing calls it, and so does the check, so they cannot drift. Moving it out of `help_overlay.cpp` changed no pixel: every pin of `tests/digests/*.txt`, HELLO's `help/*` included, is as it was.
+  - Checked: the summary and each `fkey` in at most 2 lines of their width and with no word longer than a line; every one-line text within its limit (button text and shift 28, encoder 28, group name 12, group text 48, pad
+    label 5, Shift label 9, `pads` 96) and without a newline; no lower-case letter in any text; `group_count` at most 8 and with a table; `pad_group` within `group_count`; a buttons table when `button_count > 0`; no button
+    twice; no soft key and no Config in the table; no value that is not a button.
+  - Beyond the brief: the newline in a one-line text (the overlay cuts there), `NO GROUP TABLE`, `NOT A BUTTON`, the word-length rule on `fkey` too (the overlay splits a long word mid-word on any wrapped text).
+  - Not checked: that a button has a text (a dim cap is allowed), that each pad of a map has a group, that the texts are true: the app's tests.
+- **Keyboards**: `help_note_label(char* out, int note)` (true; `""` and false outside 0..127), `HelpPadNames` (`char[kPadCount][kHelpPadLabel + 1]`) and `help_pad_note(h, names, pad, note)`.
+  - **Octave convention: `note / 12 - 1`, so 60 is C4, 48 is C3, 0 is C-1.** HELLO's code and o3-303's `note_name` were already the same formula; they differed only below note 12 (HELLO clamped the octave to 0, o3-303
+    wrote `C-1`), which HELLO never reaches (its lowest key is note 12). An app that counts 60 as C3 passes `note - 12`.
+- **HELLO** uses `help_pad_note()` and a `HelpPadNames` member in place of its own spelling: its `help/*` digests are unchanged.
+- **The template** (`templates/app`): `PlayScreen::help()` is real and describes its own controls (FILE, SAMPLE LOAD, DELETE, LEFT / RIGHT, F1-F3 and the encoder, the white and black keys with their note names, which follow
+  the octave); `app/scenarios/help.txt` (Shift + Config, BUTTONS, PADS, close) is pinned in `tests/digests/template.txt` (`help/*`, run by `templates/check_template.py`); `tests/app_test.cpp` opens HELP at three octaves and
+  checks the Help with `help_check()`.
+- **Tests**: `tests/help_check_test.cpp` (every problem with field and index, every limit exactly and one character over, `help_wrap`/`help_lines`, `help_note_label` over 0..127 and outside it, `help_pad_note`);
+  `help_overlay_test.cpp` pins that the overlay draws as many lines as `help_lines()` counts (up to two) and that the check calls the third line too long; `sim_hello_test.cpp` checks HELLO's own Help at eight octaves.
+- **Docs**: FRAMEWORK.md "Help" (the check, the keyboard helpers, "Give your app HELP"), NEW-APP.md (the template line and a per-screen checklist line).
+- **For o3-303 (HELP-A follow-up, its own change)**: `tests/help_texts_test.cpp` can drop `wrapped_lines`, `check_wrapped`, `check_line` and `upper_case` and call `help_check()` on each screen's Help; `note_name()` in
+  `app/src/help_texts.cpp` can become `help_note_label()` (its `KeyNames` type, 5 bytes, is enough: the longest label is `C#-1`); its labels stay pixel-identical (same text).

@@ -4,6 +4,8 @@
 #include <doctest/doctest.h>
 
 #include <o3sdk/app/app.h>
+#include <o3sdk/app/help.h>
+#include <o3sdk/app/runtime.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
 
@@ -139,4 +141,35 @@ TEST_CASE("sim: hello's state line carries the kit's pairs and its own, and foll
   CHECK(s["octave"] == "-1");
   CHECK(s["page"] == "DELAY");
   CHECK(s["playing"] == "1");
+}
+
+TEST_CASE("sim: hello's HELP, as the overlay holds it, passes help_check(), on every keyboard octave") {
+  auto h = std::make_unique<sim::Harness>(o3sdk_app());
+  REQUIRE(h->start());
+  h->run_ms(100);
+  for (int octave = 0; octave < 8; ++octave) {  // Left to -3, then Right up to +2: -1 -2 -3 -2 -1 0 +1 +2, every label the screen builds
+    const app::Button move = octave < 3 ? app::Button::Left : app::Button::Right;
+    h->press(move);
+    h->run_ms(5);
+    h->release(move);
+    h->run_ms(40);
+    h->press(app::Button::Shift);
+    h->run_ms(2);
+    h->press(app::Button::Config);
+    h->run_ms(2);
+    h->release(app::Button::Config);
+    h->run_ms(2);
+    h->release(app::Button::Shift);
+    h->run_ms(60);
+    REQUIRE(h->runtime().help_open());
+    app::HelpProblem p;
+    const bool ok = app::help_check(h->runtime().help_overlay().help(), &p);
+    CHECK_MESSAGE(ok, app::help_field_name(p.field) << " " << static_cast<unsigned>(p.index) << ": " << p.what);
+    CHECK(h->runtime().help_overlay().help().pad_label[0] != nullptr);
+    h->press(app::Button::Config);  // closes it
+    h->run_ms(5);
+    h->release(app::Button::Config);
+    h->run_ms(40);
+    REQUIRE_FALSE(h->runtime().help_open());
+  }
 }

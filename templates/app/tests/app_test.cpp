@@ -5,6 +5,8 @@
 #include <doctest/doctest.h>
 
 #include <o3sdk/app/app.h>
+#include <o3sdk/app/help.h>
+#include <o3sdk/app/runtime.h>
 #include <o3sdk/platform/host/dir_card.h>
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
@@ -119,6 +121,35 @@ TEST_CASE("app: a pattern and an octave saved on the card come back after a rest
   h->run_ms(300);
   CHECK(state(*h).find("steps=3") != std::string::npos);
   CHECK(h->runtime().frame_failures() == 0u);
+}
+
+TEST_CASE("app: HELP holds to the kit's limits, names every pad the keyboard uses, and follows the octave") {
+  auto h = std::make_unique<sim::Harness>(o3sdk_app());
+  REQUIRE(h->start());
+  h->run_ms(100);
+  for (int step = 0; step < 3; ++step) {  // the octave moves the labels: look at the screen as it is, one octave down, and two
+    if (step != 0) {
+      tap(*h, app::Button::Left);
+    }
+    h->press(app::Button::Shift);
+    h->run_ms(2);
+    tap(*h, app::Button::Config);
+    h->release(app::Button::Shift);
+    h->run_ms(60);
+    REQUIRE(h->runtime().help_open());
+    const app::Help& help = h->runtime().help_overlay().help();
+    app::HelpProblem p;
+    const bool ok = app::help_check(help, &p);  // the same limits and the same wrap rule the kit draws with
+    CHECK_MESSAGE(ok, app::help_field_name(p.field) << " " << static_cast<unsigned>(p.index) << ": " << p.what);
+    CHECK(help.summary != nullptr);
+    for (unsigned pad = 0; pad < app::kPadCount; ++pad) {  // the template's keyboard is a key on every pad at these octaves
+      CHECK(help.pad_group[pad] != 0);
+      CHECK(help.pad_label[pad] != nullptr);
+    }
+    CHECK(std::string(help.pad_label[app::pad_at(app::kPadRows - 1u, 0u)]) == (step == 0 ? "C3" : (step == 1 ? "C2" : "C1")));
+    tap(*h, app::Button::Config);  // closes it
+    REQUIRE_FALSE(h->runtime().help_open());
+  }
 }
 
 TEST_CASE("app: the scenarios run as they are, write their pictures and the audio is not silent") {
