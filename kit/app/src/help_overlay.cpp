@@ -457,11 +457,13 @@ void HelpOverlay::draw_buttons(ui::Renderer& r, const Rect& area) const noexcept
     return !some(c.text) && !some(c.shift);
   };
 
-  // The boxes, in three colours: the caps, then the outlines of the dim ones and the encoder's centre, then the dim ones' insides.
+  // The boxes: the caps (Chrome), the encoder's centre (ChromeDim), then the dim ones: an Empty outline (the theme's quiet line on the pane, so a dim cap never
+  // reads as picked, whatever colour ChromeDim is) round a Pane inside.
   ui::plot::Canvas cv(r);
   cv.open();
   const ui::Rgb& chrome = t.rgb(Color::Chrome);
   const ui::Rgb& chrome_dim = t.rgb(Color::ChromeDim);
+  const ui::Rgb& empty = t.rgb(Color::Empty);
   const ui::Rgb& pane = t.rgb(Color::Pane);
   for (unsigned i = 0; i < kFKeyCount; ++i) {
     cv.round_rect(Rect{static_cast<int>(i) * kFSlot + (kFSlot - kFCapW) / 2, fy, kFCapW, kFCapH}, kCapRadius, chrome);
@@ -480,9 +482,9 @@ void HelpOverlay::draw_buttons(ui::Renderer& r, const Rect& area) const noexcept
     const bool encoder = placed[i].entry == kEncoderEntry;
     if (dim(placed[i])) {
       if (encoder) {
-        disc(cv, placed[i].x + 10, placed[i].y + 9, 9, chrome_dim);
+        disc(cv, placed[i].x + 10, placed[i].y + 9, 9, empty);
       } else {
-        cv.round_rect(Rect{placed[i].x, placed[i].y, kCapW, kCapH}, kCapRadius, chrome_dim);
+        cv.round_rect(Rect{placed[i].x, placed[i].y, kCapW, kCapH}, kCapRadius, empty);
       }
     } else if (encoder) {
       disc(cv, placed[i].x + 10, placed[i].y + 9, 4, chrome_dim);

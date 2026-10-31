@@ -290,7 +290,9 @@ at arm's length, Shift + Config by hand) come with the next unit image.
 
 Shift held, then Config pressed, on any app screen opens HELP over it: the kit's drawing of what the buttons and the pads do **on that screen**. The app supplies only data, one `Help` from `Screen::help(const Context&, Help&)`
 (default: nothing); the kit draws it, in the screen's `theme()` (else the context's), with the full chrome whatever `Screen::chrome()` says (the header says `HELP` and the screen's title), and with no bitmap, so every app gets it
-without assets. Config alone opens the system Config as before.
+without assets. Config alone opens the system Config as before. The caps are `Chrome` boxes on the `Pane` (their names in `ChromeText`), a dim cap is a
+`Pane` box in an `Empty` outline, the pads take their group's colour: a theme of the app's own keeps `Chrome` visibly apart from `Pane` (`kContrastPairs`
+has no pair for it; o3-303's obsidian theme holds it at 1.3:1 in its own test), or the caps vanish into the background.
 
 - **Input**, the same rules as under the system Config: while HELP is open the app gets no press and no turn; the release of something the app saw pressed still reaches it (the Shift that opened HELP, a held pad), and a press
   HELP took is not released to the app. The screen goes on running and the sound on playing; the pad LEDs are dark; the power-off lock closes nothing. Config (with or without Shift) or F8 closes it, as does a change of screen
