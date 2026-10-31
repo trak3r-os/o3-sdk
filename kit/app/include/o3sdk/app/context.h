@@ -74,6 +74,15 @@ class Context {
   // Asks for a frame at the next pass instead of waiting for the frame clock (a value changed and should show now).
   void redraw() noexcept { redraw_ = true; }
 
+  // True when the app has assets (App::assets()) and every byte of them is in RAM_G (app_assets.h). False with none, after a refused table or a chunk the display did not take, and when the kit's own
+  // upload failed. Set once, by Runtime::start(); an app that reads false runs without its bitmaps.
+  bool app_assets_ok() const noexcept { return app_assets_ok_; }
+
+  // What the header strip shows, for a screen that draws its own (Screen::chrome() None). The runtime publishes the flag at construction (Platform::cpu_meter: the engine has a real cycle counter, the unit)
+  // and the percent at the start of every frame it draws: the header's own formula, the last block's cycles over the block's budget, so above 100 when a block overran; 0 without a meter.
+  bool cpu_meter() const noexcept { return cpu_meter_; }
+  std::uint32_t cpu_percent() const noexcept { return cpu_percent_; }
+
  private:
   friend class Runtime;
   dsp::Engine* engine_ = nullptr;
@@ -94,6 +103,9 @@ class Context {
   std::uint8_t pad_lights_ = 2;
   ConfigView config_;
   bool redraw_ = false;
+  bool app_assets_ok_ = false;
+  bool cpu_meter_ = false;
+  std::uint32_t cpu_percent_ = 0;
 };
 
 }  // namespace o3sdk::app

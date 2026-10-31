@@ -8,6 +8,23 @@
 
 #include "sys_text.h"
 
+#include <cstdlib>
+
+// An app that hands the runtime a table the display cannot take (App::assets(): outside its region, misaligned, overlapping) has a programming error:
+// it aborts in a debug build and in every host build, and costs nothing in the MK66's release build (NDEBUG on an ARM target), where the table is refused.
+#if !defined(NDEBUG) || !defined(__arm__)
+#define O3SDK_APP_CHECK(cond) \
+  do {                       \
+    if (!(cond)) {           \
+      std::abort();          \
+    }                        \
+  } while (false)
+#else
+#define O3SDK_APP_CHECK(cond) \
+  do {                       \
+  } while (false)
+#endif
+
 namespace o3sdk::app {
 
 namespace {
@@ -126,6 +143,7 @@ Runtime::Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept
            platform.storage != nullptr && platform.writer != nullptr && platform.files_work != nullptr, platform.backlight != nullptr, platform.backlight != nullptr && platform.leds != nullptr, platform.crash) {
   ctx_.engine_ = &engine_;
   ctx_.app_ = &app_;
+  ctx_.cpu_meter_ = platform_.cpu_meter;
   ctx_.midi_.bind(platform_.midi, &engine_);
   ctx_.audio_in_.bind(platform_.capture, &engine_);
   ctx_.audio_in_.bind_usb(platform_.usb_audio);
@@ -226,6 +244,14 @@ bool Runtime::start() noexcept {
   ctx_.now_ = platform_.clock.now();
   ctx_.ms_ = platform_.clock.uptime_ms();
   const bool assets = ui::upload_assets(platform_.display) == hal::UploadResult::Ok;
+  if (assets) {
+    // The app's own bitmaps (app_assets.h), only on top of the kit's. Never part of the result: a table that did not land is the app's to read.
+    const AppAsset* rows = nullptr;
+    const std::size_t count = app_.assets(rows);
+    const AppAssetsResult up = upload_app_assets(platform_.display, rows, count);
+    O3SDK_APP_CHECK(up != AppAssetsResult::Refused);
+    ctx_.app_assets_ok_ = up == AppAssetsResult::Ok;
+  }
   ctx_.midi_.push_config();  // (the device starts from the kit's defaults; App::setup may change them)
   app_.setup(ctx_);
   ctx_.config_.build(app_);  // (the app's Config pages: constexpr tables, read once)
@@ -351,22 +377,33 @@ void Runtime::poll() noexcept {
 
 bool Runtime::draw() noexcept {
   update_leds();
+  ctx_.cpu_percent_ = platform_.cpu_meter ? cpu_percent(engine_.stats()) : 0u;
+  // The app's screen decides the theme and the chrome while the system Config screen is closed; Config always has the context's theme and the full chrome.
+  const Screen* const screen = sys_.open() ? nullptr : ctx_.screen_;
+  const ui::Theme* const screen_theme = screen != nullptr ? screen->theme(ctx_) : nullptr;
+  const bool bare = screen != nullptr && screen->chrome(ctx_) == Chrome::None;
   eve::DisplayListBuilder builder(platform_.display, list_.words, eve::kMaxDisplayListWords);
-  ui::Renderer r(builder, ui::theme(ctx_.theme_));
+  ui::Renderer r(builder, screen_theme != nullptr ? *screen_theme : ui::theme(ctx_.theme_));
   busy_ = !r.begin(Color::Pane);
   if (busy_) {
     ++frames_busy_;
     return false;
   }
   ctx_.redraw_ = false;
-  draw_header(r);
+  if (!bare) {
+    draw_header(r);
+  }
   if (sys_.open()) {
     sys_.draw(ctx_, r, kContentArea);
   } else if (ctx_.screen_ != nullptr) {
-    ctx_.screen_->draw(ctx_, r, kContentArea);
+    ctx_.screen_->draw(ctx_, r, bare ? kScreenArea : kContentArea);
   }
-  sys_.draw_strip(r, Rect{0, ui::kScreenH - kKeysH - kStripH, ui::kScreenW, kStripH});
-  draw_keys(r);
+  if (bare) {  // the strip goes last, over whatever the screen drew at the bottom
+    sys_.draw_strip(r, Rect{0, ui::kScreenH - kStripH, ui::kScreenW, kStripH});
+  } else {
+    sys_.draw_strip(r, Rect{0, ui::kScreenH - kKeysH - kStripH, ui::kScreenW, kStripH});
+    draw_keys(r);
+  }
   last_words_ = static_cast<std::uint32_t>(r.words());
   if (!r.end()) {
     ++frame_failures_;

@@ -25,10 +25,22 @@ struct SoftKeys {
   std::uint8_t dim = 0;
 };
 
+// Who draws the edges of the display. Full: the runtime's header strip and soft-key row, and draw() gets kContentArea. None: neither is
+// drawn and draw() gets kScreenArea (800 x 480): the screen shows its own title, tempo, transport and F labels.
+enum class Chrome : std::uint8_t { Full, None };
+
 class Screen {
  public:
   // Shown in the header strip, upper case ("PLAY", "PATTERN").
   virtual const char* title() const noexcept = 0;
+  // Asked every frame; default Full, the chrome as it has always been. With None the runtime draws no header and no soft-key row, never asks
+  // soft_keys(), and draws its system strip (the power-off hold, the card and USB notices) last, over the bottom 28 px of the screen. Ignored while
+  // the system Config screen is open: it always has the full chrome.
+  virtual Chrome chrome(const Context&) const noexcept { return Chrome::Full; }
+  // The theme the whole frame is drawn with while this screen is up: the clear, the chrome, the content, the text and the system strip. Null (the
+  // default): the context's theme (Context::theme()). The theme must live as long as the app. Ignored while the system Config screen is open (it is
+  // drawn with the context's theme). Asked every frame.
+  virtual const ui::Theme* theme(const Context&) const noexcept { return nullptr; }
   virtual void enter(Context&) noexcept {}
   virtual void leave(Context&) noexcept {}
   virtual void input(Context&, const Input&) noexcept {}

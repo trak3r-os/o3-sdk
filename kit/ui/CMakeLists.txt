@@ -49,11 +49,11 @@ o3sdk_library(ui
 #   python3 -I tools/logo_convert.py --png logo/o3.png --weak --out kit/ui/src/boot_logo_data.cpp
 
 # ---- ui::plot (OS-003d): part of ui, sources and headers under plot/ (ADR 0010 amendment 2) ----
-# Peak-cache mipmap, wave view (vector and bitmap), curves, XY scope, spectrum, meters, the RAM_G map. They draw through
+# Peak-cache mipmap, wave view (vector and bitmap), curves, XY scope, spectrum, meters, the RAM_G map, the app's Canvas (canvas.h). They draw through
 # ui::Renderer's raw sections and are built into the same library, so the MK66 `ui` size includes them.
 target_sources(ui PRIVATE
   plot/src/peak_cache.cpp plot/src/plot_math.cpp plot/src/wave_bitmap.cpp plot/src/wave_view.cpp plot/src/curve.cpp
-  plot/src/fft.cpp plot/src/spectrum.cpp plot/src/scope.cpp plot/src/meters.cpp)
+  plot/src/fft.cpp plot/src/spectrum.cpp plot/src/scope.cpp plot/src/meters.cpp plot/src/canvas.cpp)
 target_include_directories(ui PUBLIC plot/include)
 file(GLOB_RECURSE _plot_headers CONFIGURE_DEPENDS RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/plot/include"
   "${CMAKE_CURRENT_SOURCE_DIR}/plot/include/*.h")

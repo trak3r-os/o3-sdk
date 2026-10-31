@@ -10,7 +10,7 @@
 //     for (;;) rt.poll();                          // input -> app -> screen, a frame every kFrameUs, LEDs
 //
 // poll() never blocks. A frame is a whole display list: the header strip (app name, screen title, tempo, transport, CPU), the
-// screen's content and the soft-key row. The pads' LEDs are one frame per UI frame, sent a piece at a time (hal/leds.h).
+// screen's content and the soft-key row (a screen whose chrome() is None draws all of it itself, in its own theme if it gives one: screen.h). The pads' LEDs are one frame per UI frame, sent a piece at a time (hal/leds.h).
 //
 // MIDI (when Platform::midi is set). The render side of every block is: Device::begin_block, the routed notes injected into the engine
 // (Engine::inject), the clock frame (Engine::follow), Engine::render, Device::end_block with the transport and the hooks' messages. The main
@@ -92,6 +92,8 @@ struct Platform {
 inline constexpr int kHeaderH = 32;
 inline constexpr int kKeysH = 22;
 inline constexpr ui::Rect kContentArea{0, kHeaderH, ui::kScreenW, ui::kScreenH - kHeaderH - kKeysH};
+// What draw() gets from a screen whose chrome() is None: the whole display.
+inline constexpr ui::Rect kScreenArea{0, 0, ui::kScreenW, ui::kScreenH};
 
 class Runtime {
  public:
@@ -99,8 +101,8 @@ class Runtime {
 
   Runtime(App& app, dsp::Engine& engine, Platform& platform) noexcept;
 
-  // Main loop, once: uploads the UI's bitmaps, runs App::setup and starts the engine. false: the display refused the assets (the app
-  // still runs; the screen may show nothing).
+  // Main loop, once: uploads the UI's bitmaps and then the app's (App::assets(), app_assets.h), runs App::setup and starts the engine. false: the display refused the
+  // UI's assets (the app still runs; the screen may show nothing). The app's own bitmaps never change the result: Context::app_assets_ok() says whether they landed.
   bool start() noexcept;
   // One pass of the main loop.
   void poll() noexcept;

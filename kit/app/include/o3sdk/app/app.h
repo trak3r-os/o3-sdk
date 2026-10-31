@@ -9,6 +9,7 @@
 // which the platform's main (platform/mk66) and the simulator (sim/) call. Nothing else in the image names the app. The Config button
 // belongs to the runtime (the system Config screen): an app's input() never sees it.
 
+#include <o3sdk/app/app_assets.h>
 #include <o3sdk/app/config_page.h>
 #include <o3sdk/app/diag.h>
 #include <o3sdk/app/input.h>
@@ -64,6 +65,13 @@ class App {
 
   // The header strip's content (see HeaderStyle). Asked every frame; default: everything.
   virtual HeaderStyle header() const noexcept { return {}; }
+
+  // The bitmaps the runtime puts in the app's RAM_G region at boot (app_assets.h): points `rows` at a table that lives as long as the app (a constexpr array) and returns its length. Asked once, by
+  // Runtime::start(), after the kit's own bitmaps are up (and not at all when that upload failed), before setup(). A chunk the display did not take never fails start(): the app reads Context::app_assets_ok(). A refused table aborts the boot in host and debug builds (a programming error). Default: none.
+  virtual std::size_t assets(const AppAsset*& rows) const noexcept {
+    rows = nullptr;
+    return 0;
+  }
 
   // ---- Diagnostics (diag.h; the platform's console, docs/FRAMEWORK.md section 5). Both default to nothing. -----------------------
   // Extra console commands: points `rows` at a table that lives as long as the app (a constexpr array) and returns its length. Asked

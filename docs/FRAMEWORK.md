@@ -173,7 +173,11 @@ o3sdk::app::App& o3sdk_app() noexcept { static MyApp app; return app; }
   consumes it.
 - A **screen** (`screen.h`) is what the display, the pads, the soft keys and the encoder mean right now: `input()`, `update()`,
   `draw()` into the content area, `soft_keys()` (labels, the hot key, dimmed keys; a Shift row if it wants one), `leds()` (a whole frame
-  of 48 levels each UI frame). All in the main loop.
+  of 48 levels each UI frame). All in the main loop. Two optional overrides: `chrome()` (`Chrome::Full`, the default, or `Chrome::None`: no
+  header and no soft-key row, `draw()` gets the whole 800 x 480 (`kScreenArea`), the system strip is drawn last over the bottom 28 px) and
+  `theme()` (null, the default: the context's; or the theme the whole frame is drawn with). Both are asked every frame, and the system Config
+  screen ignores them (full chrome, the context's theme). A screen with `None` can show the render's load itself: `Context::cpu_meter()` (the
+  unit has a cycle counter) and `cpu_percent()` (the last block, published at each frame).
 - `Context` (`context.h`): the engine, the panel's held state, time, `show()` to switch screens, the theme, `redraw()`.
 - `Input` (`input.h`): presses, releases and turns, raw, with Shift's state. A press arrives at the press, so pads play at once.
 
@@ -415,19 +419,39 @@ files.remove_folder("Song 1");                         // DELETE: a `.deleted` m
 Monochrome, one level a pad. Shared levels give the same meaning on every screen: `kLedDim` (something is here), `kLedLow` (a second
 kind), `kLedMid` (selected), `kLedOn` (now: the playhead, a held pad). `PadLeds::blink()` gives a blink phase.
 
+### The app's bitmaps and shapes (`app_assets.h`, `ui/plot/canvas.h`)
+
+An app that brings its own bitmaps overrides `App::assets()` (rows of `AppAsset{offset, bytes, size}`, `bytes` and `size` on the word grid, rows
+disjoint: `app_assets_valid()` is `constexpr`, so a table is `static_assert`ed). `Runtime::start()` uploads them, in chunks of at most 4,096
+bytes, into the app's RAM_G region (`ui/plot/ram_g_map.h`: `kRamGApp`, 175.9 KiB from 0xD4000, 4 KB aligned; `offset` is relative to it) after the
+kit's own bitmaps. A chunk the display did not take never fails `start()`: the app reads `Context::app_assets_ok()` and runs without its bitmaps
+when it is false. A refused table (outside the region, misaligned, overlapping) is a programming error: it aborts the boot in every host build and
+in a MK66 build without NDEBUG (`O3SDK_APP_CHECK`), and only the MK66's release build runs on without the bitmaps. **Bitmap handle 0 is the app's**; every other handle is the kit's (named in `ui/assets.h` and
+`ram_g_map.h`; 15 is the coprocessor's) and `tests/handle_app_test.cpp` keeps them apart.
+
+`ui::plot::Canvas` draws the app's sprites (handle 0), discs, lines, rounded boxes and alpha in one raw section of a `Renderer` (`open()` ...
+`close()`, the wave view's way): text stays outside it, through `Renderer::text()`. A misuse (a call outside a section, a Renderer call between two
+Canvas calls, an invalid `BitmapDesc`) aborts on the host and in a debug build. Its cost in display-list words: open and close 2 (+ up to 2 from the
+Renderer's pending END and origin, + up to 2 re-emitted after), a bind 6, a sprite 1 (3 off the VERTEX2II range), a point 1, a line 2, a rect or a
+round_rect 2, plus the state a call changes (colour, alpha, point size, line width, scissor), each only when it differs: draw by layer and colour.
+`bitmap_desc_valid()` is `constexpr` too. The simulator draws a rounded box as the plain box (no corner curve): the corners are the chip's to show.
+What a change of the kit must not move, and how heavy a skinned frame is, are measured by the frame digests and the line load of the simulator
+(`sim/README.md`, "Frame digests, line load, handle 0"; `handle_app_uses()` is zero for every kit app).
+
 ## 6. The runtime
 
 `runtime.h`. The same main loop on every platform:
 
 ```cpp
 Runtime rt(o3sdk_app(), engine, platform);
-rt.start();                                // the UI's bitmaps, App::setup, Engine::start
+rt.start();                                // the UI's bitmaps, the app's (App::assets()), App::setup, Engine::start
 audio_device.start(rt.block_callback());   // the render context calls the engine once per block (int16 in and out)
 for (;;) rt.poll();                        // input -> app -> screen; the card's job a slice; a frame every 33 ms (or sooner after redraw()); LEDs
 ```
 
 A frame is the header strip (app name, screen title, tempo, transport, the render's load on the unit), the screen's content and the
-soft-key row, as one display list (2048 words at most; HELLO peaks under 900).
+soft-key row, as one display list (2048 words at most; HELLO peaks under 900). A screen whose `chrome()` is `None` draws all of it
+itself, in its own `theme()` if it names one.
 
 ## 7. The simulator
 
