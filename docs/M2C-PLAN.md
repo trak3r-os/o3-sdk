@@ -534,7 +534,8 @@ Memory [est, from track3r-os's sizes]:
   which track3r-os shows in its sample browser.
 - **The radio may not exist.** The Si4703 failed on its first unit run in track3r-os (OS-RAD1); the fix was never re-run. The board's radio
   wiring and the PTE26 polarity are unconfirmed. The first `radio` answer decides; Absent ends the FM row as "not on this unit", with the
-  code kept.
+  code kept. Update 2026-11-01: the maintainer reports the radio works in track3r-os ("radio funciona en track3r-os"), so the receiver is
+  on the board; o3-sdk's port has still not run on a unit.
 - **Audio in never proven.** A real line-in signal was never seen on a unit (track3r-os fqa.11, STATUS row 72) and the mic never measured.
   The loopback cable makes the line check remote; the mic needs a person.
 - **USB.** P11 was never measured; P10 duplex failed behind a hub. The stem staging and the return mix add render work: measure `cpu` with

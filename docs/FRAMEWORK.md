@@ -399,7 +399,7 @@ without MIDI, and then nothing arrives and nothing leaves. Slice K, host only.
 ### Audio in and the radio (`audio_in.h`, `radio.h`)
 
 `kit/app/include/o3sdk/app/audio_in.h` and `radio.h`, `Context::audio_in()` and `Context::radio()`. **Status: built (M2c, slice AI), host-tested and run in the simulator (`apps/hello/scenarios/audio_in.txt`, `audio_in_absent.txt`); not yet run on a unit
-(line in was never seen on one, the microphone never measured, and the radio may not be on this board: see `docs/M2C-PLAN.md` section 13).** They exist when the platform gives the runtime a `hal::capture::CaptureHw` (`Platform::capture`); without one every call is refused
+(line in was never seen on one, the microphone never measured; the radio works in track3r-os, the maintainer reported on 2026-11-01, but o3-sdk's port has not run: see `docs/M2C-PLAN.md` section 13).** They exist when the platform gives the runtime a `hal::capture::CaptureHw` (`Platform::capture`); without one every call is refused
 (`available()` is false), the Config has no AUDIO section and the render is untouched.
 
 ```cpp
