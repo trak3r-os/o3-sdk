@@ -41,6 +41,10 @@ function(o3sdk_digest_test name sim pins)
 endfunction()
 add_test(NAME digest_check_selftest COMMAND ${O3SDK_PYTHON} -I ${PROJECT_SOURCE_DIR}/tools/digest_check.py --self-test)
 set_tests_properties(digest_check_selftest PROPERTIES TIMEOUT 60 LABELS digest)
+# The documents' pictures (tools/doc_images.py, docs/TOUR.md): every docs/img picture a document shows exists and has a row of the table, every row
+# names a scenario and a snap it takes, nothing is left over. No build and no pixels: the frame digests above pin the drawing.
+add_test(NAME doc_images COMMAND ${O3SDK_PYTHON} -I ${PROJECT_SOURCE_DIR}/tools/doc_images.py --check)
+set_tests_properties(doc_images PROPERTIES TIMEOUT 60 LABELS docs)
 set(_digests ${PROJECT_SOURCE_DIR}/tests/digests)
 if(TARGET hello_sim)
   set(_hs ${PROJECT_SOURCE_DIR}/apps/hello/scenarios)

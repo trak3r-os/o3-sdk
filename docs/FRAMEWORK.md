@@ -2,8 +2,8 @@
 
 Status (2026-10-29): the kit, the simulator and the MK66 platform exist, and HELLO and o3-303 were installed and run on a unit over USB on
 2026-10-25 (`docs/hw/2026-10-25-usb.md`). M2b's second round and all of M2c are built and host-tested, every slice reviewed; their unit round
-is pending. Section 10 says, per capability, what is verified on the unit, what is host only and what is planned. This file is the reference; `docs/NEW-APP.md` is the path for a new instrument (zero to an image on the unit), `AGENTS.md` the guide
-for coding agents.
+is pending. Section 10 says, per capability, what is verified on the unit, what is host only and what is planned. This file is the reference; `docs/NEW-APP.md` is the path for a new instrument (zero to an image on the unit), `docs/TOUR.md` shows in pictures what
+every app gets, `docs/COOKBOOK.md` has short recipes for common tasks, and `AGENTS.md` is the guide for coding agents.
 
 ## 1. The idea
 
@@ -30,6 +30,48 @@ KIT      kit/             core · hal · eve · ui · dsp · app · usb; platfor
 
 Link dependencies enforce the layering: `core <- hal <- eve <- ui <- app`, `core <- dsp <- app`, `core <- formats <- app`, `core <- usb` (the USB device library, linked by
 the MK66 platform and never by an app); a unit depends on `dsp` only; an app on `app` and its units. `platform/<name>` and `sim` implement the HAL contracts (`kit/hal`) and run an app.
+
+The same, as a picture. An arrow means "links against" (the main edges: the `CMakeLists.txt` files have every one). The two dotted arrows are
+the whole-archive link that pulls `o3sdk_app()` out of the app's library into the simulator and into the image (`cmake/O3sdkTargets.cmake`,
+`platform/mk66/CMakeLists.txt`, `o3sdk_mk66_image`).
+
+```mermaid
+flowchart BT
+  subgraph kit["kit/"]
+    core["core<br/>rings, params, input events"]
+    hal["hal<br/>contracts only"]
+    eve["eve<br/>FT81x display lists"]
+    ui["ui<br/>renderer, themes, widgets"]
+    dsp["dsp<br/>the unit API, the engine"]
+    formats["formats<br/>CRC, WAV, chunk files"]
+    usb["usb<br/>the USB device library"]
+    app["app<br/>runtime, screens, services"]
+  end
+  units["your units<br/>o3sdk_unit()"]
+  yours["your app<br/>o3sdk_app(myapp ...): app_myapp"]
+  host["sim + platform/host<br/>myapp_sim"]
+  mk66["platform/mk66<br/>myapp.elf, .ptf"]
+  hal --> core
+  eve --> hal
+  ui --> eve
+  dsp --> core
+  formats --> core
+  usb --> core
+  app --> ui
+  app --> dsp
+  app --> formats
+  units --> dsp
+  yours --> app
+  yours --> units
+  host --> app
+  host --> usb
+  mk66 --> app
+  mk66 --> usb
+  host -. whole archive .-> yours
+  mk66 -. whole archive .-> yours
+```
+
+Nothing points from `app` or from your app to `usb`: the console reaches an app only through `App::describe_state` and `App::diag_commands`.
 
 | Library | What it holds |
 |---|---|
@@ -71,7 +113,7 @@ class Unit {
 
 Writing one: `docs/NEW-APP.md` section 3 is the step list, and `templates/app/units/voice/` the smallest worked unit (an instrument with
 three parameters, a click-free level, a test against the engine). `units/synth` (an instrument) and `units/delay` (an effect with SDRAM
-buffers) are the kit's; o3-303's `units/tb303` is a port with an oracle test. Add `o3sdk_unit(<name> SOURCES …)` and test the unit on the
+buffers) are the kit's; o3-303's `units/acid_voice` is a port with an oracle test. Add `o3sdk_unit(<name> SOURCES …)` and test the unit on the
 host against the engine (`tests/units_test.cpp`).
 
 **Smoothing is the unit's.** The engine never ramps a parameter: `set_param` and `step_param` clamp the value, keep it as the target
@@ -500,8 +542,102 @@ for (;;) rt.poll();                        // input -> app -> screen; the card's
 ```
 
 A frame is the header strip (app name, screen title, tempo, transport, the render's load on the unit), the screen's content and the
-soft-key row, as one display list (2048 words at most; HELLO peaks under 900). A screen whose `chrome()` is `None` draws all of it
+soft-key row, as one display list (2048 words at most; HELLO's PLAY screen peaks at about 1,200 words, about 1,600 with the name keyboard over it). A screen whose `chrome()` is `None` draws all of it
 itself, in its own `theme()` if it names one. Over the screen the runtime may show the system Config (Config) or HELP (Shift + Config), both with the full chrome.
+
+The four pictures below are drawn from the code (`kit/app/src/runtime.cpp`, `kit/dsp/src/engine.cpp`, `platform/mk66/src/main.cpp`,
+`platform/mk66/audio/src/audio.cpp`); `docs/TOUR.md` shows what they put on the screen.
+
+**An app's life on the unit.** `main.cpp` brings the machine up, hands the app to a `Runtime`, and loops. The simulator's `Harness::start()`
+runs the same `Runtime::start()` and calls the same render callback between two passes of `poll()`, in one thread.
+
+```mermaid
+flowchart TD
+  reset["reset sequence (startup.cpp)<br/>clocks, SDRAM test, .sdram_bss cleared, constructors"] --> early["crash record, display bring-up, input init"]
+  early --> rt["static Runtime rt(o3sdk_app(), g_engine, platform)"]
+  rt --> up["rt.start(): ui::upload_assets, the kit's bitmaps"]
+  up --> assets["App::assets(): the app's bitmaps into RAM_G<br/>(Context::app_assets_ok() says if they landed)"]
+  assets --> setup["App::setup(ctx): attach units, route slots,<br/>add hooks, ctx.show(the first screen)"]
+  setup --> estart["Engine::start(): every unit gets its stored values"]
+  estart --> enter["Screen::enter of the first screen"]
+  enter --> logo["ui::show_boot_screen: the boot logo"]
+  logo --> audio["audio start with the render callback<br/>usb_audio::wrap(record_service::wrap(rt.block_callback()))"]
+  audio --> card["SD card mount, then rt.load_settings()<br/>(the kit's settings over the app's defaults)"]
+  card --> usb["console::attach(rt), then USB"]
+  usb --> loop["loop: wfi, console::service, input, display, rt.poll()"]
+  loop --> loop
+```
+
+**One pass of `poll()`, and who gets a press.** The Config button is the runtime's: the app never sees it, press or release.
+
+```mermaid
+flowchart TD
+  ev["up to 32 input events:<br/>Panel::apply, then route()"] --> cfg{"the Config button?"}
+  cfg -- "yes, a release, or the input locked" --> ign["nothing happens"]
+  cfg -- "yes, HELP is open" --> h0["HELP closes"]
+  cfg -- "yes, the system Config is open" --> c0["the system Config closes"]
+  cfg -- "yes, Shift held" --> h1["HELP opens: Screen::help(ctx, help)"]
+  cfg -- "yes, otherwise" --> c1["the system Config opens"]
+  cfg -- no --> busy{"the system Config or HELP open,<br/>or the input locked?"}
+  busy -- yes --> theirs["a press or a turn is theirs, and so is<br/>the release of a press they took;<br/>the release of a press the app saw<br/>still reaches the app"]
+  busy -- no --> appin{"App::input(ctx, in)<br/>returns true?"}
+  appin -- yes --> done["consumed"]
+  appin -- no --> scr["Screen::input(ctx, in)"]
+  scr --> rest
+  done --> rest
+  theirs --> rest
+  rest["then: MIDI (routes, App::midi), audio in, USB audio, radio,<br/>App::update, Screen::update, Files::poll (2 ms budget),<br/>a frame when due, the pad LEDs"]
+```
+
+**A frame.** Every 33.3 ms, or 16.7 ms after `Context::redraw()`. The display list is built in the main loop and handed over whole: a list
+that does not fit 2,048 words is aborted and the previous frame stays on the screen.
+
+```mermaid
+flowchart LR
+  poll["Runtime::poll()"] --> draw["Runtime::draw()"]
+  draw --> leds["Screen::leds(ctx, leds)<br/>(dark under Config or HELP)"]
+  draw --> b["eve::DisplayListBuilder<br/>kMaxDisplayListWords = 2048"]
+  b --> r["ui::Renderer r(builder, theme)<br/>r.begin(Color::Pane)"]
+  r --> hd["draw_header()<br/>name, title, tempo, transport"]
+  r --> body["Screen::draw(ctx, r, kContentArea)<br/>or the system Config, or HELP"]
+  body -. "raw section" .-> cv["ui::plot::Canvas<br/>open() ... close()"]
+  r --> st["the system strip"]
+  r --> keys["draw_keys(): Screen::soft_keys"]
+  r --> fin["r.end(): end_frame()<br/>hal::Display::write"]
+  fin --> ft["unit: FT812 RAM_DL by DMA,<br/>then REG_DLSWAP"]
+  fin --> sim["simulator: sim::RasterDisplay,<br/>EveRaster, a PNG at each snap"]
+```
+
+**The real-time split.** Two contexts share the engine and never wait for each other. The main loop's calls (`note_on`, `set_param`,
+`set_mix`, `play`, `set_tempo`, ...) become commands on a lock-free single-producer ring; a full ring refuses the call and counts it. The few
+values that cross every block (the input gate, the monitor, the staged stems, the followed tempo) are single atomic words. The render reads
+neither the card nor the display and allocates nothing.
+
+```mermaid
+flowchart LR
+  subgraph mainloop["main loop (thread mode)"]
+    calls["Engine::note_on, set_param, set_mix,<br/>play, stop, set_tempo"]
+    setw["set_input_gate, set_input_monitor,<br/>set_stem_slots, set_input_peaks"]
+    reader["Engine::stats(), input_peaks(),<br/>following(), tempo()"]
+  end
+  ring[("command ring<br/>core::SpscRing, 512 commands")]
+  words[("single atomic words")]
+  seq[("EngineStats<br/>under a sequence counter")]
+  subgraph rtctx["render context (priority kRender)"]
+    isr["eDMA block boundary ISR<br/>DMA13_DMA29_IRQHandler"] -- pends IRQ 64 --> swi["SWI_IRQHandler:<br/>o3sdk_audio_pipeline.render()"]
+    swi --> wrap["usb_audio::wrap, record_service::wrap"]
+    wrap --> rb["Runtime::render_block:<br/>int16 to planes, MIDI in"]
+    rb --> er["Engine::render: drain() (256 commands at most),<br/>the hooks' Clocked::block, each unit's process(),<br/>inserts, sends, master"]
+  end
+  calls -- "push, never waits" --> ring
+  ring -- "frame 0 of the next block" --> er
+  setw -- store --> words
+  words -- load --> er
+  er -- "store: peaks, follow" --> words
+  er -- publish --> seq
+  words -- load --> reader
+  seq -- "one block's snapshot" --> reader
+```
 
 ## 7. The simulator
 

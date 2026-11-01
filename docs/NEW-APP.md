@@ -103,7 +103,7 @@ so change it with `-D` or use a fresh build directory).
 |---|---|---|---|
 | **App** | `app/src/app.cpp` | `apps/hello/src/hello_app.cpp`, o3-303 `app/src/o3_303_app.cpp` | owns the units and screens as plain objects, wires them in `setup()`, defines the one entry point `o3sdk_app()` |
 | **Screen** | `app/src/play_screen.cpp` | o3-303 `app/src/main_screen.cpp`, `vault_screen.cpp` | what the display, the pads, the soft keys and the encoder mean now: `input`, `update`, `draw`, `soft_keys`, `leds` |
-| **Unit** | `units/voice/` | `units/synth`, `units/delay`; o3-303 `units/tb303`, `units/distortion` | DSP only: a parameter table and `process()` per block |
+| **Unit** | `units/voice/` | `units/synth`, `units/delay`; o3-303 `units/acid_voice`, `units/distortion` | DSP only: a parameter table and `process()` per block |
 | **Hook** | (not in the template) | HELLO's `Riff`; o3-303 `app/seq/` | a `dsp::Clocked` that places events at any frame of the block: sequencers, arpeggiators |
 
 The kit supplies the rest: `kit/app` (`Runtime`: the main loop, the header strip, the soft-key row, the pad LEDs, the F-key and encoder
@@ -154,9 +154,9 @@ with big buffers.
 9. **State the cost** in the header as an estimate (cycles a sample, percent of a block) and measure it on the unit later: the render's
    CPU % is in the header strip and in `o3console.py cpu` (skill `rt-optimize`). A host test is not that measurement.
 10. **Porting open-source DSP** (Plaits, Open303, DaisySP, Faust output): skill `dsp-port` (licence gate, float-only, oracle test,
-    `THIRD_PARTY.md` row); o3-303's `units/tb303` is a worked port (`units/tb303/tests/tb303_oracle_test.cpp`).
+    `THIRD_PARTY.md` row); o3-303's `units/acid_voice` is a worked port (`units/acid_voice/tests/acid_voice_oracle_test.cpp`).
 
-Route it in `setup()`: an instrument is a slot's source (`set_source(slot, id)`, 8 slots), an effect an insert of a slot (`set_insert`, 2 per
+Route it in `setup()`: an instrument is a slot's source (`set_source(slot, id)`, 8 slots), an effect an insert of a slot (`set_insert`, 4 per
 slot), a send effect (`set_send_effect(bus, id)`, buses A and B; the slot's `MixField::SendA/SendB` is how much goes to it) or a master
 insert (`set_master_insert`). Up to 16 units and 4 clocked hooks. HELLO routes a delay to send A: `apps/hello/src/hello_app.cpp`, `setup()`.
 Each of these returns `false` (`attach`: `kNoUnit`) when the engine refuses the call, which the template ignores with `(void)`: the refusal is
@@ -178,10 +178,10 @@ A screen is a class (`app::Screen`, `kit/app/include/o3sdk/app/screen.h`); see `
   (`Display`, `Data`, `Label`, `Micro`). Components: `ui/components.h` (strip, badge, soft keys, bar, meter), `app/widgets.h` (`knob_strip`,
   `level_meter`, `step_row`), plots (waveform, spectrum, scope, meters, curves) in `kit/ui/plot/include/o3sdk/ui/plot/`. Flat fills, 1 px borders, no gradients.
 - **The display list holds 2048 words** and the frame is refused when it overflows (the previous frame stays). A glyph or a tile is one word,
-  plus one per colour change: group draws by colour. The simulator prints the peak (`peak list n/2048`) and `app_test` asserts it. HELLO peaks under
-  900; o3-303's busiest screens have a plan for it (`../o3-303/docs/M3B-PLAN.md`).
+  plus one per colour change: group draws by colour. The simulator prints the peak (`peak list n/2048`) and `app_test` asserts it. HELLO's PLAY screen
+  peaks at about 1,200 words, about 1,600 with the name keyboard; o3-303's busiest screens have a plan for it (`../o3-303/docs/M3B-PLAN.md`).
 - The header strip (app name, screen title, tempo, transport, the render's load on the unit) and the soft-key row are the kit's and are drawn
-  for you. An app with no sequencer still shows `120.0 BPM` and a transport badge: today they are not optional.
+  for you. An app with no sequencer drops the tempo and the transport badge with `App::header()` (a `HeaderStyle{tempo, transport}`, section 13).
 - Look at the result: `<id>_sim --scenario ... --out <dir>`, then open the PNGs. A screen change without a scenario is not finished.
 - **Every screen gets HELP before it is done**: fill `help()` for its controls, check it with `app::help_check()` in a test, add a Shift + Config scenario and look at the BUTTONS and PADS pictures (`docs/FRAMEWORK.md`, "Help", "Give your app HELP").
 
@@ -195,7 +195,7 @@ no pressure), one encoder (no push). Pads are numbered 0..47 from the top left, 
   `in.turn()` / `in.delta()`, `in.shift`. What is held now is `ctx.panel()`. For holds and chords use `ctx.panel()` or `core/gesture.h`.
 - **Global keys** (Play, the screen buttons) go in `App::input()`: it sees every input first, and `true` consumes it. A screen's own keys go in
   `Screen::input()`. **The Config button belongs to the kit** (the system Config screen, `docs/FRAMEWORK.md` section 5, and with Shift the HELP overlay): do not give it
-  a meaning in a new app, so that nothing breaks when it lands. HELLO and o3-303 use it for a theme toggle today.
+  a meaning in a new app: the runtime takes it before `App::input()`. The theme is in the system Config's DISPLAY section.
 - **Help for the user**: Shift + Config opens the kit's HELP over any screen (the buttons as key caps, the pads as a grid), and you only say what each control does: override `Screen::help(ctx, help)` and fill an `app::Help`
   (`app/help.h`): a summary, the soft keys' longer texts, a static table of `HelpButton{button, text, shift}` (one line of 28 characters each, upper case), the encoder, and the pads' short labels (5 characters) and groups with their
   colours (theme tokens; `help_pads()` fills a rectangle). A button you give no text is shown dimmed, a screen with no `help()` shows its soft keys only. Tables are static, texts are cut at their limits; `docs/FRAMEWORK.md`

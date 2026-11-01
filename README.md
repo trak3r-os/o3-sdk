@@ -11,6 +11,11 @@ input conventions, a simulator, the build, the tests, the image, the release gat
   clocked hooks), the header strip, the soft keys, the controls convention, widgets, a headless simulator, `o3sdk_app()` (one CMake call makes the
   simulator and the `.ptf` image with its checks), the CI scripts, the gate, and `o3console.py` to install and inspect an image over USB.
 
+![A new app on o3-sdk in the simulator: the template's PLAY screen with a chord held, and the 48 pads under it](docs/img/template-play.png)
+
+*What `tools/new_app.py` gives you, running in the simulator: one screen, one unit, the kit's header, knob strip and soft keys, a chord held on
+the pads. `docs/TOUR.md` shows the rest of what every app gets.*
+
 The first app is **[o3-303](https://github.com/trak3r-os/o3-303)**, an improved TB-303, in its own repository next to this one: the worked example of
 an app that uses o3-sdk as it is. `docs/NEW-APP.md` takes you from an empty directory to your own image on the unit.
 
@@ -89,7 +94,9 @@ inspects. `docs/NEW-APP.md` explains each one.
 | Read | For |
 |---|---|
 | `docs/NEW-APP.md` | **the tutorial**: a new instrument from zero to an image on the unit (unit, screen, controls, parameters, scenario, test, image, gate, install, the way back) |
-| `docs/FRAMEWORK.md` | the reference: layers, units, the engine, apps and the controls convention, the runtime, the simulator, **the capability map (what is verified, host only, planned)**, using o3-sdk from another repository |
+| `docs/TOUR.md` | **the pictures**: what every app gets from the kit (the frame, HELP, the system Config, files, recording, MIDI, USB, themes), one simulator picture each; read it first, to see what you will not have to write |
+| `docs/COOKBOOK.md` | **short recipes** for common tasks (a unit, a parameter, a screen, HELP, a Config page, a console command, bitmaps, files, MIDI, a take, a scenario, the CPU); read it when you know what you want to add |
+| `docs/FRAMEWORK.md` | the reference: layers, units, the engine, apps and the controls convention, the runtime (with diagrams of the layers, the main loop, a frame and the real-time split), the simulator, **the capability map (what is verified, host only, planned)**, using o3-sdk from another repository |
 | `AGENTS.md`, `CLAUDE.md` | for coding agents: how to build on the kit, the rules, the install rules and guard hooks, the agents and skills in `.claude/`, how to verify |
 | `platform/mk66/README.md`, `platform/mk66/tools/README.md` | the unit side: boot, memory map, the image and its checks, blink codes; the USB tools and static checks |
 | `sim/README.md` | the simulator and its scenario language |
@@ -117,7 +124,7 @@ inspects. `docs/NEW-APP.md` explains each one.
 `kit/` the framework (`core` `hal` `eve` `ui` `dsp` `app` `usb` `formats`) · `units/` the kit's example units (`synth`, `delay`) · `apps/` the kit's example apps
 (`hello`, `fillrate`, `crashtest`, a session-only app that provokes faults; a new instrument lives in its own repository) · `platform/` the HAL implementations (`host` for the simulator, `mk66` for the
 unit) · `sim/` the simulator · `templates/app/` the starter for a new app · `tests/` host tests · `docs/` · `tools/` (`ci.sh`, `remote_ci.sh`,
-`gate.py`, `new_app.py`, `o3install.py`, `fetch_toolchain.py`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, `o3sdk_app_test_suite`, the toolchain) · `.claude/` the agent
+`gate.py`, `new_app.py`, `o3install.py`, `fetch_toolchain.py`, `doc_images.py` for the pictures in `docs/img/`, the font, icon and logo converters) · `cmake/` (`o3sdk_app`, `o3sdk_unit`, `o3sdk_test_suite`, `o3sdk_app_test_suite`, the toolchain) · `.claude/` the agent
 harness · `third_party/` (see `THIRD_PARTY.md`).
 
 ## Licence and origin
