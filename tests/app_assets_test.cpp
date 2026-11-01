@@ -148,6 +148,8 @@ static_assert(!app::app_assets_valid(kNested, 2), "a row inside another");
 constexpr AppAsset kNestedBackwards[] = {{4, kB, 4}, {0, kA, 16}};
 static_assert(!app::app_assets_valid(kNestedBackwards, 2), "in either order");
 static_assert(!app::app_assets_valid(nullptr, 1), "a count without a table");
+constexpr AppAsset kNullBytes16[] = {{0, nullptr, 16}};
+static_assert(!app::app_assets_valid(kNullBytes16, 1), "a null source with a size");
 
 }  // namespace
 
@@ -215,10 +217,11 @@ TEST_CASE("app assets: a table out of the region, misaligned, overlapping or of 
   const AppAsset overlap[] = {{0, pattern().big, 8}, {4, pattern().small, 4}};
   const AppAsset empty_row[] = {{0, pattern().big, 0}};
   const AppAsset misaligned_bytes[] = {{0, pattern().big + 1, 8}};  // the source is one byte off a word
+  const AppAsset no_bytes[] = {{0, pattern().big, 8}, {16, nullptr, 8}};  // a null source
   const struct {
     const AppAsset* rows;
     std::size_t count;
-  } bad[] = {{out_of_region, 1}, {odd_offset, 1}, {odd_size, 1}, {overlap, 2}, {empty_row, 1}, {misaligned_bytes, 1}, {nullptr, 3}};
+  } bad[] = {{out_of_region, 1}, {odd_offset, 1}, {odd_size, 1}, {overlap, 2}, {empty_row, 1}, {misaligned_bytes, 1}, {no_bytes, 2}, {nullptr, 3}};
   for (const auto& t : bad) {
     platform::host::FakeDisplay inner;
     LogDisplay display(inner);
@@ -238,6 +241,21 @@ TEST_CASE("app assets: a table out of the region, misaligned, overlapping or of 
     Rig rig(misaligned_bytes, 1);
     (void)rig.runtime.start();
   }));
+}
+
+// Through a pointer and a count the optimiser cannot see (a volatile read), so the run-time comparison is what runs, at -O0 as at -O2.
+TEST_CASE("app assets: app_assets_valid() called at run time refuses a null table and a null source without reading through them") {
+  const AppAsset* volatile null_table = nullptr;
+  volatile std::size_t one = 1;
+  CHECK_FALSE(app::app_assets_valid(null_table, one));
+  const AppAsset null_bytes[] = {{0, nullptr, 16}};
+  const AppAsset* volatile table = null_bytes;
+  CHECK_FALSE(app::app_assets_valid(table, one));
+  const AppAsset good[] = {{0, pattern().big, 16}};
+  const AppAsset* volatile good_table = good;
+  CHECK(app::app_assets_valid(good_table, one));
+  volatile std::size_t zero = 0;
+  CHECK(app::app_assets_valid(null_table, zero));
 }
 
 TEST_CASE("app assets: a chunk the display does not take stops the upload at that chunk") {

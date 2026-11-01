@@ -23,6 +23,9 @@ o3sdk_strict_warnings(o3sdk_tests)
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/raster_line_load_test.cpp PROPERTIES INCLUDE_DIRECTORIES ${PROJECT_SOURCE_DIR}/apps/fillrate/src)
 # boot_screen_test.cpp compares the boot frames with tests/digests/boot_screen.txt.
 set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/boot_screen_test.cpp PROPERTIES COMPILE_DEFINITIONS "O3SDK_DIGESTS_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/digests\"")
+# An app's `inline constexpr` asset table must stay constant-evaluable when GCC does not fold an address against null (as in the O3SDK_SANITIZE
+# build): this file is compiled that way in every build, so a plain build catches it.
+set_source_files_properties(${CMAKE_CURRENT_SOURCE_DIR}/app_assets_linkage_test.cpp PROPERTIES COMPILE_OPTIONS -fno-delete-null-pointer-checks)
 # The tree builds without exceptions: REQUIRE then ends the run with std::terminate on a failure, which ctest reports.
 target_compile_definitions(o3sdk_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_WITH_ALL_ASSERTS)
 foreach(src IN LISTS test_sources)

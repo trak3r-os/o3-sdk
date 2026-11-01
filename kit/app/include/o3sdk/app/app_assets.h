@@ -26,16 +26,28 @@ struct AppAsset {
   std::uint32_t size;         // > 0, a multiple of hal::kUploadAlign
 };
 
+namespace detail {
+// "p is null". The address of an `inline constexpr` table has vague linkage, and GCC does not fold its comparison with null once
+// -fsanitize=null (O3SDK_SANITIZE=ON) or -fno-delete-null-pointer-checks switches -fdelete-null-pointer-checks off: `p == nullptr` is then not a
+// constant expression, and an app's static_assert on its table stopped compiling. In constant evaluation __builtin_constant_p keeps the test
+// where it is decidable (a null literal, a table of internal linkage) and skips it where it is not (such an address, which is never null
+// anyway). At run time it is a plain comparison.
+constexpr bool is_null(const void* p) noexcept {
+  return __builtin_is_constant_evaluated() ? (__builtin_constant_p(p == nullptr) && p == nullptr) : p == nullptr;
+}
+}  // namespace detail
+
 // The table's offsets and sizes: each row inside [0, kRamGAppBytes), aligned, bytes not null, size above zero, no two rows overlapping. An
-// empty table (count 0, any pointer) is valid. Constant-evaluable: an app static_asserts its table with it. (The alignment of a row's
-// `bytes` is an address, known at run time: app_assets_aligned().)
+// empty table (count 0, any pointer) is valid. Constant-evaluable, with and without the sanitizers: an app static_asserts its table with it
+// (a null `rows` or `bytes` is refused there and at run time). The alignment of a row's `bytes` is
+// an address, known at run time: app_assets_aligned().
 constexpr bool app_assets_valid(const AppAsset* rows, std::size_t count) noexcept {
-  if (count != 0 && rows == nullptr) {
+  if (count != 0 && detail::is_null(rows)) {
     return false;
   }
   for (std::size_t i = 0; i < count; ++i) {
     const AppAsset& a = rows[i];
-    if (a.bytes == nullptr || a.size == 0 || a.offset % hal::kUploadAlign != 0 || a.size % hal::kUploadAlign != 0) {
+    if (detail::is_null(a.bytes) || a.size == 0 || a.offset % hal::kUploadAlign != 0 || a.size % hal::kUploadAlign != 0) {
       return false;
     }
     if (std::uint64_t{a.offset} + a.size > ui::plot::kRamGAppBytes) {
@@ -56,13 +68,14 @@ bool app_assets_aligned(const AppAsset* rows, std::size_t count) noexcept;
 
 enum class AppAssetsResult : std::uint8_t {
   None,     // an empty table: nothing to do
-  Refused,  // the table fails app_assets_valid() or app_assets_aligned(): nothing was uploaded (Runtime::start() aborts on it but in a MK66 release build)
+  Refused,  // the table is null or has a row without bytes, or fails app_assets_valid() or app_assets_aligned(): nothing was uploaded (Runtime::start() aborts on it but in a MK66 release build)
   Failed,   // a chunk was not taken (the first that was not Ok stops the upload; what went before is in RAM_G)
   Ok,       // every byte of every row is in RAM_G
 };
 
 // Puts the table in RAM_G: each row in chunks of hal::kMaxUploadBytes to kRamGApp + offset + k * kMaxUploadBytes. Every chunk starts on a
-// word of an aligned array, so the source and the address keep the alignment the contract asks for. Main loop only. Runtime::start() calls it.
+// word of an aligned array, so the source and the address keep the alignment the contract asks for. A null table with a count above zero is
+// refused, as is a row without bytes (app_assets_valid() refuses both too). Main loop only. Runtime::start() calls it.
 AppAssetsResult upload_app_assets(hal::Display& display, const AppAsset* rows, std::size_t count) noexcept;
 
 }  // namespace o3sdk::app

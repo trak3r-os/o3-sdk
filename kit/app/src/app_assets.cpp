@@ -12,12 +12,25 @@ bool app_assets_aligned(const AppAsset* rows, std::size_t count) noexcept {
   return true;
 }
 
+// Defence in depth: the null tests of app_assets_valid(), made explicitly, before anything is read through the table.
+static bool app_assets_present(const AppAsset* rows, std::size_t count) noexcept {
+  if (rows == nullptr) {
+    return false;
+  }
+  for (std::size_t i = 0; i < count; ++i) {
+    if (rows[i].bytes == nullptr) {
+      return false;
+    }
+  }
+  return true;
+}
+
 AppAssetsResult upload_app_assets(hal::Display& display, const AppAsset* rows, std::size_t count) noexcept {
   static_assert(hal::kMaxUploadBytes % hal::kUploadAlign == 0, "a chunk keeps the word alignment");
   if (count == 0) {
     return AppAssetsResult::None;
   }
-  if (!app_assets_valid(rows, count) || !app_assets_aligned(rows, count)) {
+  if (!app_assets_present(rows, count) || !app_assets_valid(rows, count) || !app_assets_aligned(rows, count)) {
     return AppAssetsResult::Refused;
   }
   for (std::size_t i = 0; i < count; ++i) {
