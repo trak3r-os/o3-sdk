@@ -385,7 +385,7 @@ class PlayScreen final : public app::Screen {
            Face::Label);
     r.text(16, hy + 20, "PARAMS page   PLAY riff   UP/DOWN tempo   LEFT/RIGHT octave   CONFIG system", Color::TextDim, Face::Label);
     r.text(16, hy + 40, "INSERT riff +1 (SHIFT -1)   DELETE default riff   FILE save the riff   SAMPLE LOAD load it", Color::TextDim, Face::Label);
-    r.text(16, hy + 60, "PATTERN pick a riff   COPY save it as...   MASTER learn the CC that moves the value (then turn a knob)", Color::TextDim, Face::Label);
+    r.text(16, hy + 60, "PATTERN pick a riff   COPY save it as...   MASTER MIDI-learn the value (then turn a knob)", Color::TextDim, Face::Label);
     draw_rec(ctx, r, 16, hy + 90);
     // The card and the last job of the files service (Context::files()): polled, never waited for.
     const app::Files& files = ctx.files();

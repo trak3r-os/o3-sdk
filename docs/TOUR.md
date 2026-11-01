@@ -59,7 +59,6 @@ On the unit: in every image; seeing it needs eyes, a check of the pending card s
 
 HELLO's PLAY screen with F3 held and the encoder turned: RESO is the focused cell while F3 is down, and at the release the encoder goes back to
 CUTOFF, which a tap on F2 latched. The eight cells are `app::knob_strip()` over `app::ParamKeys`: the controls convention every kit app shares.
-(The last help line running off the right edge is HELLO's own text, not the kit's.)
 
 On the unit: every frame is drawn, `--shot` returns it clean; not looked at by eye yet. Read: `FRAMEWORK.md`
 [the controls convention](FRAMEWORK.md#the-controls-convention-param_keysh), [section 6](FRAMEWORK.md#6-the-runtime).

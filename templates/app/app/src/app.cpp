@@ -23,8 +23,8 @@
 // (App::diag_commands). The Config button is the kit's system Config screen (the theme, MIDI, audio in): this app does not use it.
 //
 // What else an app can reach through its Context (docs/FRAMEWORK.md has the pages): midi() (notes in, clock, the user's MIDI settings),
-// audio_in() (line and microphone input, the monitor), radio() (the FM radio) and, once slice RC of M2c lands, the recorder (audio to the
-// card). The template uses none of them; each is a short call like files() and a line in the app's state.
+// audio_in() (line and microphone input, the monitor), radio() (the FM radio) and recorder() (a take of the input or the master, saved to
+// the card as a WAV). The template uses none of them; each is a short call like files() and a line in the app's state.
 
 #include "play_screen.h"
 
