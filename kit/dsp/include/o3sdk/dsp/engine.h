@@ -419,28 +419,30 @@ class Engine {
   static_assert(kMaxBlockFrames % 2 == 0, "a stem block is a whole number of words");
   const std::int16_t* stem_table_[kStemSources] = {};
 
-  // MIDI, render side. The engine's own tempo is kept apart from the transport's, which a master's overwrites while it is followed.
+  // MIDI, render side. The engine's own tempo is kept apart from the transport's, which a master's overwrites while it is followed. The small members come first (four flags,
+  // then four 32-bit words: 20 bytes, so 4 bytes of padding remain before own_inc_), the 64-bit ones after them. Measured with sizeof(Engine) (arm-none-eabi and the host): this
+  // grouping alone changes nothing; what saved 8 bytes (25456 to 25448 on the MK66) is the published atomics below, a bool no longer between two words.
   core::ClockFrame follow_in_;      // follow()'s frame for the next render()
   bool follow_pending_ = false;     // follow() was given a frame with `follow` set since the last render()
   bool followed_ = false;           // the last block ran on a master's transport
+  bool run_valid_ = false;          // the last block played (note_continuity())
+  bool run_joined_ = false;         // a master took over or let go at this block: no continuity
   std::uint32_t own_tempo_ = 120'000;
+  std::uint32_t own_inc_lo_ = 0;    // the low 32 bits of its increment (transport.h, "Exact landing")
+  std::uint32_t dropped_midi_ = 0;
+  unsigned midi_out_n_ = 0;
   std::uint64_t own_inc_ = 0;
-  std::uint32_t own_inc_lo_ = 0;    // its 32 more fractional bits (transport.h, "Exact landing")
-  std::uint64_t inc_min_ = 0;       // the increments of the slowest and the fastest legal tempo: a master's is held between them
+  std::uint64_t inc_min_ = 0;       // the increments of the slowest and the fastest legal tempo: a master's is held to at least the first, and to at most the second plus the room to close a lag (kFollowCatchUpPercent)
   std::uint64_t inc_max_ = 0;
   core::ClockFrame block_;          // block_frame()
   // The last block's frame bound for the next block's Transport::prev_gap (note_continuity()): render side only.
   std::uint64_t run_last_ = 0;      // Q32.32 position of its last frame
-  bool run_valid_ = false;          // it played
-  bool run_joined_ = false;         // a master took over or let go at this block: no continuity
   core::MidiMessage midi_out_[kMaxMidiOut] = {};
-  unsigned midi_out_n_ = 0;
-  std::uint32_t dropped_midi_ = 0;
   // Published by the render, read by the main loop (single writer, relaxed: flags and numbers a block old at worst).
-  std::atomic<bool> following_{false};
   std::atomic<std::uint32_t> followed_tempo_{0};
-  std::atomic<bool> followed_playing_{false};
   std::atomic<std::uint32_t> released_{0};  // masters let go so far; the main loop's playing_main_ is void once it has moved
+  std::atomic<bool> following_{false};
+  std::atomic<bool> followed_playing_{false};
 
   // Statistics: written by the render, read by stats() (sequence counter: odd while a write is in progress).
   std::atomic<std::uint32_t> stats_seq_{0};

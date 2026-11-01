@@ -14,6 +14,8 @@ constexpr float kMaxMixGain = 1.5f;
 // How far past the fastest increment the previous block's last frame may be behind this block's position and still be that block's neighbour (note_continuity()): a master's position
 // is an integer of its own, a unit or so a frame off the sum of its increments.
 constexpr std::uint64_t kContinuitySlack = 0x10000;
+// The largest increment a followed block may have: the fastest legal tempo's, and the room a device has to close a lag (kFollowCatchUpPercent of it).
+constexpr std::uint64_t follow_inc_ceiling(std::uint64_t inc_max) noexcept { return inc_max + inc_max / 100u * kFollowCatchUpPercent; }
 constexpr float kQuarterPi = 0.785398163f;
 
 float clampf(float v, float lo, float hi) noexcept { return v < lo ? lo : (v > hi ? hi : v); }
@@ -590,9 +592,10 @@ void Engine::apply_follow() noexcept {
   if (f.tempo_mbpm != 0u) {
     transport_.tempo_mbpm = f.tempo_mbpm < kMinTempoMilliBpm ? kMinTempoMilliBpm : (f.tempo_mbpm > kMaxTempoMilliBpm ? kMaxTempoMilliBpm : f.tempo_mbpm);
   }
-  // The increment is the master's, held between the slowest and the fastest legal tempo (a hook's loop over a block is bounded by it).
+  // The increment is the master's, held between the slowest legal tempo and the fastest one plus the room to close a lag (a hook's loop over a block is bounded by it).
   if (f.inc != 0u) {
-    transport_.inc = f.inc < inc_min_ ? inc_min_ : (f.inc > inc_max_ ? inc_max_ : f.inc);
+    const std::uint64_t ceiling = follow_inc_ceiling(inc_max_);
+    transport_.inc = f.inc < inc_min_ ? inc_min_ : (f.inc > ceiling ? ceiling : f.inc);
   } else {
     transport_.inc = ticks_per_sample_q32(transport_.tempo_mbpm);
   }
@@ -610,8 +613,8 @@ void Engine::apply_follow() noexcept {
 
 // The previous block's last position for the Transport this block hands out (transport.h, "One owner a tick"): valid when that block played and this one
 // continues it. The position is continuous from block to block, whatever the increment does: it is the previous block's end, which is its last frame's position
-// plus one increment (the engine's own transport: within 1 unit; a master's: within a unit a frame, its position being an integer of its own): at most the fastest
-// increment and a little (kContinuitySlack), whatever the increment was. A Play, a Stop, a
+// plus one increment (the engine's own transport: within 1 unit; a master's: within a unit a frame, its position being an integer of its own): at most the largest
+// increment a followed block may have (follow_inc_ceiling, 1.25 times the fastest tempo's) and a little (kContinuitySlack), whatever the increment was, and well under a tick (2^32 units). A Play, a Stop, a
 // master taking over or letting go, a Start or a locate (which moves the position by a tick or more, 2^32 units, while the limit is a few hundred thousand at most)
 // all fail it, and the block then owns the ticks from one increment before its position.
 void Engine::note_continuity() noexcept {
@@ -621,7 +624,7 @@ void Engine::note_continuity() noexcept {
     return;
   }
   const std::uint64_t pos = transport_.pos;
-  if (run_last_ < pos && pos - run_last_ <= inc_max_ + kContinuitySlack) {
+  if (run_last_ < pos && pos - run_last_ <= follow_inc_ceiling(inc_max_) + kContinuitySlack) {
     transport_.prev_gap = static_cast<std::uint32_t>(pos - run_last_);
   }
 }

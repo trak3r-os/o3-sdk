@@ -328,7 +328,8 @@ void MidiService::apply_event(const TransportEvent& e) noexcept {
       break;
     case TransportEvent::Kind::Stop:
       if (!following_) {
-        // A run that was waiting for the loop to attach (see make_clock) is called off: the engine never saw it, so there is no stop to report.
+        // A run that was waiting for the loop to attach (see make_clock) is called off: the engine never saw it, so there is no stop to report. (A backstop: the loop attaches on
+        // the run's first clock, which is the Start's own event, so only a Stop in the same drain before an attach, or one with FOLLOW released, gets here.)
         playing_ = false;
         begin_run_ = false;
         want_play_ = false;
@@ -400,13 +401,22 @@ void MidiService::manage_follow() noexcept {
     }
     return;
   }
-  // Two clocks make a period; the first one's is the loop's nominal.
+  // Two clocks make a period, and a master's clocks alone attach the loop only once it has one (a stray clock must not take over the tempo). A Start or Continue that is waiting
+  // for the loop (playing_ and begin_run_, which make_clock's detached branch keeps) is a master that is about to run, as in track3r-os (seq/midi_link.cpp manage_follow: it
+  // attaches on a Start with one clock, has_phase): the loop attaches on the run's first clock, so that the run begins on it and not a clock period later (a cold start, which is
+  // how most hosts start, sends the Start and the first clock together). Until the second clock measures the period the frames carry no tempo and the slowest increment
+  // (make_clock); once attached on one clock the loop is kept while it has not gone stale, as the first clock is all there is of the period.
   const core::SQ32 now_rel = (static_cast<core::SQ32>(block_start_) - static_cast<core::SQ32>(dll_.origin())) * static_cast<core::SQ32>(core::kQ32One);
   const bool stale = dll_.stale(now_rel, kStaleClocks);
-  const bool alive = dll_.tick() >= 1u && !stale;
+  const bool run_waiting = playing_ && begin_run_;
+  // (A loop kept on one clock lasts only while its run does: a master that sent Start, one clock and Stop, and went quiet, is let go at once, not after the stale window, so
+  // that the unit's own Play starts the unit's run and is not held for a master that is not there.)
+  const bool alive = (dll_.tick() >= 1u || (following_ && playing_) || run_waiting) && !stale;
   if (following_) {
     if (!alive) {
-      ++stats_.stale_releases;  // the master went quiet: the transport stops, the loop is let go
+      if (stale) {
+        ++stats_.stale_releases;  // the master went quiet: the transport stops, the loop is let go
+      }  // (else a loop on one clock whose run is over: let go at once, see above)
       release_follow();
     }
   } else if (alive) {
@@ -459,9 +469,9 @@ core::ClockFrame MidiService::make_clock(std::uint32_t frames) noexcept {
   const bool prev_playing = prev_playing_;  // the block before was a followed, playing one
   prev_playing_ = false;                    // (set again at the end of a playing block)
   if (!following_) {
-    // A Start or Continue that arrived before the loop attached (the master's first clocks, or the first after a quiet spell: two clocks make a period) is the master's run that
-    // begins when the loop does, as track3r-os attaches on a Start (seq/midi_link.cpp drain_inputs); it is held, not cleared, until the attach (manage_follow), a Stop, a release,
-    // FOLLOW off, or kPendingRunSamples without the loop attaching (a master that started and died).
+    // A Start or Continue that arrived before the loop attached (the master's clock has not been seen, or the loop is being acquired after a quiet spell) is the master's run that
+    // begins when the loop does, on the master's first clock (manage_follow attaches on it, as track3r-os does: seq/midi_link.cpp drain_inputs); it is held, not cleared, until the
+    // attach, a Stop, a release, FOLLOW off, or kPendingRunSamples without the loop attaching (a master that started and died).
     if (!cfg_.follow || block_start_ - pending_since_ > kPendingRunSamples) {
       playing_ = false;
       begin_run_ = false;
@@ -471,14 +481,17 @@ core::ClockFrame MidiService::make_clock(std::uint32_t frames) noexcept {
     st_tempo_.store(0, std::memory_order_relaxed);
     return c;
   }
-  // The loop's tempo and increment: 40 ticks a clock, the period in samples a clock.
+  // The loop's tempo and increment: 40 ticks a clock, the period in samples a clock. With one clock only (a run that attached on its first clock, see manage_follow) the period
+  // is the loop's nominal, a guess, and the frame says so: no tempo (the engine keeps its own, Engine::apply_follow) and the slowest increment the engine accepts.
+  const bool one_clock = dll_.tick() == 0u;
   const std::uint32_t bpm_x100 = dll_.bpm_x100();
   // Held between the slowest and the fastest tempo the engine accepts, as Engine::follow holds it (kit/dsp/src/engine.cpp apply_follow): what the engine renders must be what this
   // service advanced its position by, or the tick ownership below no longer holds above 300 or below 20 BPM.
-  const std::int64_t inc_ref = clamp64(static_cast<std::int64_t>(core::q32_div(std::uint64_t{kTicksPerClock} << core::kQ32Frac, static_cast<std::uint64_t>(dll_.period()))), inc_min_, inc_max_);
+  const std::int64_t inc_loop = static_cast<std::int64_t>(core::q32_div(std::uint64_t{kTicksPerClock} << core::kQ32Frac, static_cast<std::uint64_t>(dll_.period())));  // the master's rate
+  const std::int64_t inc_ref = clamp64(inc_loop, inc_min_, inc_max_);
   c.follow = true;
-  c.tempo_mbpm = bpm_x100 * 10u;
-  c.inc = static_cast<std::uint64_t>(inc_ref);
+  c.tempo_mbpm = one_clock ? 0u : bpm_x100 * 10u;
+  c.inc = static_cast<std::uint64_t>(one_clock ? inc_min_ : inc_ref);
   st_tempo_.store(c.tempo_mbpm, std::memory_order_relaxed);
 
   if (want_play_ && dll_.tick() > play_floor_) {  // Play: on the master's next clock
@@ -503,10 +516,30 @@ core::ClockFrame MidiService::make_clock(std::uint32_t frames) noexcept {
   }
   // Where the master will be at the end of this block, and the increment that gets the position there: the loop's own, held to +-25 % of it while the position catches up with
   // the master (after a Start, a Continue, a correction of the loop). pos + inc * frames is the next block's pos, exactly.
-  const std::int64_t target = master_ticks_at(block_start_ + frames);
-  const std::int64_t span = inc_ref / 100 * static_cast<std::int64_t>(kSlewPercent);
-  const std::int64_t want = (target - static_cast<std::int64_t>(pos_)) / static_cast<std::int64_t>(frames != 0u ? frames : 1u);
-  std::int64_t inc = clamp64(clamp64(want, inc_ref - span, inc_ref + span), inc_min_, inc_max_);  // (the catch-up too stays in the engine's range)
+  //
+  // With one clock the master's next one has not been seen and nothing says when it comes (a 20 BPM master or a 300 BPM one: a factor of 15), so no increment is safe but the
+  // slowest the engine takes: that one is never ahead of a master within the engine's range, and a clock out never leaves before the clock in it matches. The position then
+  // starts to catch up at the first block after the second clock (below), 25 % a sample, as after any Start: every clock is on the master's grid, to 2 samples, from the 8th
+  // clock on (60 to 300 BPM), and a step is on it by the run's second step (six clocks) below 150 BPM and by its third (twelve clocks) from 150 BPM up; the first clocks after
+  // the second are late by up to a clock period and a half (60 BPM) or three quarters of one (300 BPM). A faster guess would put a slow master's clocks out ahead of it, and the nominal tempo is not the engine's (the device does
+  // not see it), so it would be a guess all the same.
+  std::int64_t inc = inc_min_;
+  if (!one_clock) {
+    const std::int64_t target = master_ticks_at(block_start_ + frames);
+    const std::int64_t span = inc_ref / 100 * static_cast<std::int64_t>(kSlewPercent);
+    const std::int64_t want = (target - static_cast<std::int64_t>(pos_)) / static_cast<std::int64_t>(frames != 0u ? frames : 1u);
+    // The engine's fastest increment is a ceiling for following, not for closing a lag: a run that began late behind a master at (or within the loop's own noise of) the
+    // limit would never catch up if it could go no faster than the master. So a position that is behind (it wants more than the master's rate, by more than a hundredth) may
+    // go up to kFollowCatchUpPercent above the fastest increment, as the engine accepts (Engine::follow), for a master that is at the limit or slower; a master beyond it is
+    // followed at the limit, as it always was: its lag never closes, and chasing it above the limit would be following it faster for good. With the lag closed the position
+    // wants the master's rate, and that is held at the limit again. The tolerance (kAtLimitPercent) is the loop's noise for a master at 300 BPM, and it has a price: a master
+    // up to 1 % above the limit (303 BPM) is followed at its own rate, a little above the limit (1.01 of it on average, single blocks up to about 1.02, in about half the blocks), and one above that at the limit.
+    static_assert(kSlewPercent == dsp::kFollowCatchUpPercent, "the catch-up ends where the engine's room for it does");
+    const bool master_ok = inc_loop <= inc_max_ + inc_max_ / 100 * static_cast<std::int64_t>(kAtLimitPercent);
+    const bool behind = want > inc_ref + inc_ref / 100;
+    const std::int64_t ceiling = master_ok && behind ? inc_max_ + inc_max_ / 100 * static_cast<std::int64_t>(dsp::kFollowCatchUpPercent) : inc_max_;
+    inc = clamp64(clamp64(want, inc_ref - span, inc_ref + span), inc_min_, ceiling);
+  }
   if (!begin) {
     // One block owns each whole tick (dsp::frame_at: the block's own increment decides which of two neighbours owns a tick near their boundary): block A owns up to
     // pos_ - inc_A, block B from pos_ - inc_B on, so a whole tick q* in the gap (pos_ - inc_A, pos_ - inc_B] would be owned by none and one in (pos_ - inc_B, pos_ - inc_A]

@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <functional>
 #include <utility>
 #include <vector>
@@ -123,6 +124,9 @@ class TickAudit {
     t.playing = true;
     t.pos = f.pos;
     t.inc = f.inc;
+    t.pos_lo = f.pos_lo;
+    t.inc_lo = f.inc_lo;
+    t.prev_gap = f.prev_gap;  // (the frame as the engine hands it to the hooks: the block owns the ticks after the previous block's last frame)
     t.frames = frames;
     std::uint64_t first = f.pos >> 32;
     first = first > 0u ? first - 1u : 0u;
@@ -259,6 +263,7 @@ struct Rig {
   std::uint64_t first;
   std::uint64_t block = 0;
   std::vector<core::ClockFrame> frames;
+  std::vector<core::ClockFrame> ran_log;  // what the engine rendered, block by block (Engine::block_frame)
   std::vector<Note> notes;
   std::vector<WireByte> wire;
   std::uint64_t wire_now = 0;
@@ -320,6 +325,7 @@ struct Rig {
     engine.render(nullptr, nullptr, l, r, kFrames);
     // What the engine rendered is what the tick ownership has to hold for (it holds the increment between its own tempo limits), and what the service assumed it would.
     const core::ClockFrame ran = engine.block_frame();
+    ran_log.push_back(ran);
     audit.feed(ran, kFrames);
     if (clock.follow && clock.playing && (ran.pos != clock.pos || ran.inc != clock.inc)) {
       ++mismatch;
@@ -1215,8 +1221,7 @@ TEST_CASE("midi service: a Continue at a Song Position before the loop attaches 
   {
     Rig rig;
     Master m;
-    m.send_before(0, {0xFA});
-    m.send_before(1, {0xFC});  // Stop before the loop could attach: the engine never saw the run
+    m.send_before(0, {0xFA, 0xFC});  // Stop before the first clock, which is where the Start would have taken effect: the engine never saw the run
     rig.masters.push_back(&m);
     rig.follow(true);
     rig.seconds(4.0);
@@ -1227,9 +1232,25 @@ TEST_CASE("midi service: a Continue at a Song Position before the loop attaches 
     CHECK(rig.hook.hits.empty());
     CHECK(rig.check.ok());
   }
+  {
+    Rig rig;
+    Master m;
+    m.send_before(0, {0xFA});
+    m.send_before(1, {0xFC});  // Stop on the second clock: the run began on the first, so the engine saw it, and sees it stop
+    rig.masters.push_back(&m);
+    rig.follow(true);
+    rig.seconds(4.0);
+    NEED(rig.following());
+    CHECK_FALSE(rig.engine.playing());
+    CHECK(rig.hook.started_ == 1u);
+    CHECK(rig.hook.stopped_ == 1u);
+    NEED(rig.hook.hits.size() == 1u);  // the first step, on the first clock
+    CHECK(rig.hook.hits[0].tick == 0u);
+    CHECK(rig.check.ok());
+  }
 }
 
-TEST_CASE("midi service: a Start whose master never gets a loop attached is forgotten, FOLLOW off drops it at once") {
+TEST_CASE("midi service: a Start whose master dies after its first clock runs until the quiet master is let go, and is forgotten; FOLLOW off drops it at once") {
   {
     Rig rig;
     Master m;
@@ -1237,14 +1258,22 @@ TEST_CASE("midi service: a Start whose master never gets a loop attached is forg
     m.send_before(0, {0xFA});
     rig.masters.push_back(&m);
     rig.follow(true);
-    rig.seconds(4.0);
+    rig.seconds(0.5);
+    CHECK(rig.following());  // the run began on the first clock, as a master that dies later would have left it
+    CHECK(rig.engine.playing());
+    rig.seconds(3.5);
     CHECK_FALSE(rig.following());
+    CHECK_FALSE(rig.engine.playing());
+    CHECK(rig.svc.stats().stale_releases == 1u);
+    CHECK(rig.hook.started_ == 1u);
+    CHECK(rig.hook.stopped_ == 1u);
+    CHECK(rig.check.ok());
     // A master that comes later with clocks only must not find a run waiting.
     m.quiet_from = ~0ull;
     rig.seconds(3.0);
     NEED(rig.following());
     CHECK_FALSE(rig.engine.playing());
-    CHECK(rig.hook.started_ == 0u);
+    CHECK(rig.hook.started_ == 1u);
   }
   {
     Rig rig;
@@ -1260,6 +1289,277 @@ TEST_CASE("midi service: a Start whose master never gets a loop attached is forg
     rig.seconds(3.0);
     NEED(rig.following());
     CHECK_FALSE(rig.engine.playing());  // (the Start went with FOLLOW off)
+  }
+}
+
+// ---- a run that starts cold: the Start and the first clock together ------------------------------------------------------------------------------------
+
+namespace {
+
+struct ClockOut {
+  std::uint64_t tick;
+  double sample;  // the timeline sample the clock is placed on
+};
+
+// The clocks of a followed run as the engine's frames put them out, each whole multiple of 40 ticks once, on the frame MidiService::send_clocks gives it.
+std::vector<ClockOut> clocks_out(const Rig& rig) {
+  std::vector<ClockOut> out;
+  for (std::size_t b = 0; b < rig.ran_log.size(); ++b) {
+    const core::ClockFrame& f = rig.ran_log[b];
+    if (!f.follow || !f.playing) {
+      continue;
+    }
+    const std::uint64_t block = rig.first + b * kFrames;
+    const std::uint64_t end = (f.pos + f.inc * kFrames) >> 32;
+    std::uint64_t k = (f.pos >> 32) / kClockTicks;
+    k = k > 0u ? k - 1u : 0u;
+    for (; k * kClockTicks <= end; ++k) {
+      const int fr = midi::MidiService::frame_of(f.pos, f.inc, kFrames, k * kClockTicks, f.pos_lo, f.inc_lo, f.prev_gap);
+      if (fr >= 0) {
+        out.push_back({k * kClockTicks, static_cast<double>(block + static_cast<std::uint64_t>(fr))});
+      }
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+// The instant the master's clock k reaches the unit, as a timeline sample: the cycle count of its edge, where the audio clock puts it. The render-ahead (kLead, two blocks) comes after
+// it: a message due at this sample is on the wire kLead later, so a clock that is out on the wire with the clock it matches is due at heard_sample(k), kLead before this.
+double arrival_sample(const Master& m, std::uint64_t k) { return m.edge[k] / kCps; }
+
+// A cold start: the master sends the Start (or an SPP and a Continue) and its first clock together, with no clock before, and the engine's own tempo is whatever it was.
+struct ColdRun {
+  Rig rig;
+  Master m;
+  std::uint64_t base = 0;  // the tick the run begins at: 0, or the song position's
+  std::vector<ClockOut> outs;
+  ColdRun(int port, double master_bpm, double engine_bpm, bool cont, double secs) {
+    NEED(rig.engine.set_tempo(static_cast<std::uint32_t>(engine_bpm * 1000.0)));
+    m.port = port;
+    m.bpm = [master_bpm](double) { return master_bpm; };
+    if (cont) {
+      m.send_before(0, {0xF2, 8, 0, 0xFB});  // SPP 8 (two beats), Continue, then the first clock
+      base = 8u * kStep;
+    } else {
+      m.send_before(0, {0xFA});
+    }
+    rig.masters.push_back(&m);
+    rig.follow(true, port == 0 ? hmidi::Port::Din : hmidi::Port::Usb);
+    rig.seconds(secs);
+    outs = clocks_out(rig);
+  }
+  // The clock of the master that the clock out at `tick` matches.
+  std::uint64_t index_of(const ClockOut& o) const { return (o.tick - base) / kClockTicks; }
+};
+
+TEST_CASE("midi service: a followed run that starts cold begins on the master's first clock, no clock goes out before the one it matches, and none is lost or doubled") {
+  for (const int port : {0, 1}) {
+    for (const double bpm : {60.0, 128.0, 200.0, 250.0, 280.0, 300.0}) {
+      for (const double engine_bpm : {bpm * 0.5, bpm * 1.6 > 300.0 ? 300.0 : bpm * 1.6}) {  // the engine's own tempo, below and above the master's
+        for (const bool cont : {false, true}) {
+          CAPTURE(port);
+          CAPTURE(bpm);
+          CAPTURE(engine_bpm);
+          CAPTURE(cont);
+          ColdRun r(port, bpm, engine_bpm, cont, 3.0);
+          Rig& rig = r.rig;
+          NEED(rig.following());
+          NEED(r.outs.size() > 40u);
+          check_run(rig, 8);
+          CHECK(rig.hook.started_ == (cont ? 0u : 1u));
+          CHECK(rig.svc.stats().follow_attached == 1u);
+
+          // The run's first clock and first step are on the master's first clock: within a block (the drain) and the quarter-block lead, after the clock arrived.
+          CHECK(r.outs[0].tick == r.base);
+          const double first = r.outs[0].sample - arrival_sample(r.m, 0);
+          CHECK(first >= 0.0);
+          CHECK(first <= kFrames + kFrames / 4);
+          CHECK(rig.hook.hits[0].tick == r.base);
+          const double step = static_cast<double>(rig.hook.hits[0].sample) - arrival_sample(r.m, 0);
+          CHECK(step >= 0.0);
+          CHECK(step <= kFrames + kFrames / 4);
+
+          // Every clock of the master once, in order, and none ahead of the clock it matches (to a block): the position cannot run before a clock whose time it does not know.
+          for (std::size_t i = 0; i < r.outs.size(); ++i) {
+            CHECK(r.outs[i].tick == r.base + i * kClockTicks);
+            CHECK(r.outs[i].sample >= r.m.heard_sample(i) - kFrames);
+          }
+          // The clocks out are the clocks in: the master's clocks heard by the end of the run, to the one in flight; DIN is the default out port and carries them all.
+          const double end = static_cast<double>(rig.first + rig.block * kFrames);
+          std::size_t clocks_in = 0;
+          while (r.m.heard_sample(clocks_in) < end) {
+            ++clocks_in;
+          }
+          CHECK(r.outs.size() + 1u >= clocks_in);
+          CHECK(r.outs.size() <= clocks_in);
+          CHECK(rig.count(0xF8) + 1u >= r.outs.size());
+          CHECK(rig.count(0xF8) <= r.outs.size());
+
+          // The catch-up (25 % a sample, as after any Start, and above the engine's fastest increment where the master is at it: Engine::follow takes up to 25 % more to close a lag) has
+          // the position on the master's grid, to a sample, from the 8th clock on, at every tempo to the engine's limit. A step is on it by the first one after that: the run's second
+          // step (clock 6) below 150 BPM, its third (clock 12) above, where the clocks are close and the 25 % takes more of them.
+          for (std::size_t i = 8; i < r.outs.size(); ++i) {
+            CHECK(std::abs(r.outs[i].sample - r.m.heard_sample(i)) <= 2.0);
+          }
+          const std::size_t on_grid = bpm < 150.0 ? 1u : 2u;
+          CHECK(std::abs(static_cast<double>(rig.hook.hits[on_grid].sample) - r.m.heard_sample(on_grid * 6u)) <= 2.0);
+          // No increment above the engine's own for good: once the lag is closed (from the 10th clock) the position goes no faster than a 300 BPM master, and never more than 25 % above.
+          const std::uint64_t inc_max = dsp::ticks_per_sample_q32(dsp::kMaxTempoMilliBpm);
+          std::uint64_t worst = 0;
+          std::uint64_t worst_closed = 0;
+          for (std::size_t b = 0; b < rig.ran_log.size(); ++b) {
+            if (!rig.ran_log[b].playing) {
+              continue;
+            }
+            worst = std::max(worst, rig.ran_log[b].inc);
+            if (rig.ran_log[b].pos >= (r.base + 10u * kClockTicks) << 32) {
+              worst_closed = std::max(worst_closed, rig.ran_log[b].inc);
+            }
+          }
+          CHECK(worst <= inc_max + inc_max / 100u * dsp::kFollowCatchUpPercent);
+          CHECK(worst_closed <= inc_max);
+        }
+      }
+    }
+  }
+}
+
+TEST_CASE("midi service: a master beyond 300 BPM is followed at 300 and never faster, however the run began, and one that comes back under the limit has its lag closed") {
+  const std::uint64_t inc_max = dsp::ticks_per_sample_q32(dsp::kMaxTempoMilliBpm);
+  for (const int port : {0, 1}) {
+    for (const bool cold : {true, false}) {
+      CAPTURE(port);
+      CAPTURE(cold);
+      Rig rig;
+      Master m;
+      m.port = port;
+      m.bpm = [](double) { return 330.0; };
+      rig.masters.push_back(&m);
+      rig.follow(true, port == 0 ? hmidi::Port::Din : hmidi::Port::Usb);
+      if (cold) {
+        m.send_before(0, {0xFA});
+      } else {
+        rig.seconds(1.0);
+        NEED(rig.following());
+        m.send_before(m.next_index() + 6, {0xFA});
+      }
+      rig.seconds(6.0);
+      NEED(rig.following());
+      CHECK(rig.engine.playing());
+      CHECK(rig.engine.tempo() == dsp::kMaxTempoMilliBpm);
+      check_run(rig, 20);
+      std::uint64_t worst = 0;
+      for (const core::ClockFrame& f : rig.ran_log) {
+        if (f.playing) {
+          worst = std::max(worst, f.inc);
+        }
+      }
+      CHECK(worst <= inc_max);  // not one block above the engine's fastest increment: a lag that cannot close is not chased
+    }
+  }
+  // 240 -> 330 -> 280: the lag the 330 phase leaves is closed (above the limit, 25 % at most) once the master is back under it.
+  Rig rig;
+  Master m;
+  m.bpm = [](double t) { return t < 6.0 ? 240.0 + 15.0 * t : (t < 12.0 ? 330.0 : 280.0); };
+  m.send_before(0, {0xFA});
+  rig.masters.push_back(&m);
+  rig.follow(true);
+  rig.seconds(40.0);
+  NEED(rig.following());
+  check_run(rig, 20);
+  const auto outs = clocks_out(rig);
+  NEED(outs.size() > 200u);
+  std::uint64_t worst = 0;
+  for (const core::ClockFrame& f : rig.ran_log) {
+    worst = std::max(worst, f.inc);
+  }
+  CHECK(worst <= inc_max + inc_max / 100u * dsp::kFollowCatchUpPercent);
+  const std::size_t last = outs.size() - 1u;
+  CHECK(std::abs(outs[last].sample - m.heard_sample(last)) <= 2.0);  // back on the master's grid
+}
+
+TEST_CASE("midi service: a master that sends Start, one clock and Stop and goes quiet is let go at once, and the unit's own Play then starts the unit's run") {
+  for (const int port : {0, 1}) {
+    CAPTURE(port);
+    Rig rig;
+    Master m;
+    m.port = port;
+    m.quiet_from = 1;  // the first clock, then silence
+    m.send_before(0, {0xFA});
+    m.send_before(1, {0xFC});  // the Stop, where the second clock would have been
+    rig.masters.push_back(&m);
+    rig.follow(true, port == 0 ? hmidi::Port::Din : hmidi::Port::Usb);
+    rig.seconds(0.4);  // (the first clock is at 0.22 s, the Stop about 20 ms after it)
+    CHECK_FALSE(rig.following());
+    CHECK_FALSE(rig.engine.playing());
+    CHECK(rig.hook.started_ == 1u);
+    CHECK(rig.hook.stopped_ == 1u);
+    CHECK(rig.svc.stats().stale_releases == 0u);  // (not the stale window: that is a second away)
+    // Play on the unit is the unit's own run, at once: it is not held for a master that is not there.
+    const unsigned started = rig.hook.started_;
+    CHECK(rig.engine.play());
+    rig.run(4);
+    CHECK_FALSE(rig.following());
+    CHECK(rig.engine.playing());
+    CHECK(rig.hook.started_ == started + 1u);
+    CHECK(rig.svc.stats().requests == 0u);
+  }
+}
+
+TEST_CASE("midi service: a master up to 1 % above 300 BPM is followed at its own rate, one above that at 300") {
+  const std::uint64_t inc_max = dsp::ticks_per_sample_q32(dsp::kMaxTempoMilliBpm);
+  for (const int port : {0, 1}) {
+    for (const double bpm : {302.0, 304.0}) {
+      CAPTURE(port);
+      CAPTURE(bpm);
+      ColdRun r(port, bpm, 120.0, false, 6.0);
+      Rig& rig = r.rig;
+      NEED(rig.following());
+      NEED(r.outs.size() > 100u);
+      check_run(rig, 20);
+      CHECK(rig.engine.tempo() == dsp::kMaxTempoMilliBpm);
+      std::uint64_t worst = 0;  // the largest increment, and the mean one, from the 10th clock on
+      double sum = 0.0;
+      std::size_t above = 0;
+      std::size_t blocks = 0;
+      for (const core::ClockFrame& f : rig.ran_log) {
+        if (f.playing && f.pos >= (std::uint64_t{10} * kClockTicks) << 32) {
+          worst = std::max(worst, f.inc);
+          sum += static_cast<double>(f.inc);
+          above += f.inc > inc_max ? 1u : 0u;
+          ++blocks;
+        }
+      }
+      NEED(blocks > 100u);
+      // The clocks out are the clocks in, however fast the master.
+      const double end = static_cast<double>(rig.first + rig.block * kFrames);
+      std::size_t clocks_in = 0;
+      while (r.m.heard_sample(clocks_in) < end) {
+        ++clocks_in;
+      }
+      if (bpm < 303.0) {
+        // Followed at its own rate: the mean increment is the master's (at most a hundredth above the limit, the tolerance), single blocks go to about 2 % above it as the
+        // position corrects the lag the limit builds, and about half of them are above the limit; on the grid, none lost.
+        CHECK(sum / static_cast<double>(blocks) <= static_cast<double>(inc_max) * 1.0101);
+        CHECK(sum / static_cast<double>(blocks) > static_cast<double>(inc_max));
+        CHECK(worst <= inc_max + inc_max / 50u);
+        CHECK(above > blocks / 4u);
+        CHECK(r.outs.size() + 1u >= clocks_in);
+        CHECK(r.outs.size() <= clocks_in);
+        const std::size_t last = r.outs.size() - 1u;
+        CHECK(std::abs(r.outs[last].sample - r.m.heard_sample(last)) <= 2.0);
+      } else {
+        // Held at 300: the lag never closes and is not chased, so no increment is above the fastest and the clocks fall behind the master's, one for one.
+        CHECK(worst <= inc_max);
+        CHECK(above == 0u);
+        CHECK(r.outs.size() < clocks_in);
+        for (std::size_t i = 1; i < r.outs.size(); ++i) {
+          CHECK(r.outs[i].tick == r.outs[i - 1].tick + kClockTicks);
+        }
+      }
+    }
   }
 }
 

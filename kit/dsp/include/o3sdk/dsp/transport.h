@@ -38,6 +38,11 @@ inline constexpr std::uint32_t kTicksPerMidiClock = kPpqn / 24u;
 
 inline constexpr std::uint32_t kMinTempoMilliBpm = 20'000;   // 20 BPM
 inline constexpr std::uint32_t kMaxTempoMilliBpm = 300'000;  // 300 BPM
+// A followed master's increment is held between the slowest and the fastest legal tempo, except that a device closing a lag behind a master (a run that began late: a cold
+// start, a Start whose first clock was a block behind) may take it up to this much above the fastest (Engine::follow): a master at the limit would otherwise never be caught.
+// Not a steady rate beyond a hundredth: a master up to 1 % above the limit (MidiService::kAtLimitPercent: 303 BPM) is followed at its own rate, whatever it measures, and one above
+// that at the limit (hal/midi.h).
+inline constexpr std::uint32_t kFollowCatchUpPercent = 25;
 
 struct Transport {
   bool playing = false;

@@ -392,7 +392,9 @@ without MIDI, and then nothing arrives and nothing leaves. Slice K, host only.
 - **Everything else**: every channel message no route took (controllers, program changes, pitch bend, the notes of another channel) reaches
   `App::midi(Context&, const core::MidiMessage&)` in the main loop, in order.
 - **Clock**: nothing to write. With FOLLOW on in the system Config, the engine's transport is the master's clock (section 4) and every clocked
-  hook follows. With the engine playing, the clock and the transport go out on the ports the user chose. `ctx.midi().send(m)` sends one message
+  hook follows (without a Start, the loop attaches on the master's second clock; a Start or Continue that arrives with the first clock, as a host starts cold,
+  attaches it on that clock, so the first step is on the master's first clock; the second clock gives the period, and the position, run at the slowest tempo until then, catches
+  up within a few clocks). With the engine playing, the clock and the transport go out on the ports the user chose. `ctx.midi().send(m)` sends one message
   from the main loop.
 - **Settings**: `ctx.midi().config()` and `set_config()` are the user's `hal::midi::Config`; an app that sets them in `setup()` sets the defaults.
 

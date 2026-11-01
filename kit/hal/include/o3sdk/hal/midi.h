@@ -33,6 +33,9 @@
 // The follow contract (what the engine relies on; every clocked hook follows with no change):
 //   * ClockFrame::pos at frame 0 is the master's tick at that sample (40 ticks a clock), inc the DLL's ticks a sample, tempo_mbpm its tempo.
 //   * The loop slews and never jumps: pos(next block) == pos + inc * frames, whatever the correction does to inc.
+//   * The engine holds inc between the slowest and the fastest legal tempo (20 and 300 BPM), a device that is closing a lag behind its master may take it up to
+//     dsp::kFollowCatchUpPercent above the fastest. A master up to 1 % above 300 BPM (the platform's tolerance for a master at the limit that measures a hair fast) is
+//     followed at its own rate, so a little above 300; one above that is followed at 300, and no increment of the frames is above the fastest.
 //   * Start: `started` with pos 0, on the block the run begins at. A position cannot be negative, so a Start whose first clock falls
 //     inside a block begins the run on that block's boundary (the run is then up to one block, 1.45 ms, early or late for good, the same
 //     for every step); a hook that begins at the first whole tick not passed (o3-303) takes a small pos as well. Continue after an SPP:

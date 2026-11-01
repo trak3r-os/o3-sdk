@@ -440,8 +440,15 @@ TEST_CASE("follow: a frame is sanitised: an absurd increment is held to a legal 
   wild.inc = 1ull << 60;
   wild.tempo_mbpm = 5'000'000;  // 5000 BPM
   rig.block(wild);
-  CHECK(rig.hook.last_inc_ <= dsp::ticks_per_sample_q32(dsp::kMaxTempoMilliBpm));
+  // (A device closing a lag may take the increment up to kFollowCatchUpPercent past the fastest tempo's: that is the ceiling; the tempo is held at the legal one.)
+  const std::uint64_t fastest = dsp::ticks_per_sample_q32(dsp::kMaxTempoMilliBpm);
+  const std::uint64_t ceiling = fastest + fastest / 100u * dsp::kFollowCatchUpPercent;
+  CHECK(rig.hook.last_inc_ == ceiling);
   CHECK(rig.hook.last_tempo_ == dsp::kMaxTempoMilliBpm);
+  core::ClockFrame catching = m.next();
+  catching.inc = fastest + fastest / 10u;  // 10 % over the fastest: inside the room, taken as it is
+  rig.block(catching);
+  CHECK(rig.hook.last_inc_ == fastest + fastest / 10u);
   core::ClockFrame slow = m.next();
   slow.inc = 3;
   rig.block(slow);

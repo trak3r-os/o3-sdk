@@ -19,7 +19,8 @@
 //                 4. drain both ports' rings: the clock of the followed port goes to the ClockDll, Start / Continue / Stop / SPP become transport events, every other byte goes
 //                    to the channel-message parser: each whole message is queued for poll(), and a note, or an all-sound / all-notes-off controller, is handed to the engine at
 //                    its frame (the first `cap` of them; the rest wait for the next block);
-//                 5. look after the follow state: attach once the master's clock is there (two clocks seen), let go when it has been quiet for 48 clocks or the user turned FOLLOW off;
+//                 5. look after the follow state: attach once the master's clock is there (two clocks seen, or the first one when a Start or Continue is waiting), let go when it
+//                    has been quiet for 48 clocks or the user turned FOLLOW off;
 //                 6. the block's ClockFrame: the master's position at frame 0 and the increment that takes the engine to where the master will be at the end of the block.
 //   end_block     the hooks' messages (BlockContext::send_midi) and the main loop's send()s into MidiOut at their frames; the clock (24 a quarter note, one at every
 //                 frame_at(t, k * 40) of the block, to a fraction of a sample), Start at `started`, SPP + Continue where a run begins elsewhere, Stop at `stopped` (and
@@ -31,9 +32,14 @@
 // a sample; the next block starts where this one ends (pos + inc * frames), exactly. To keep both promises the service keeps the engine's position itself and chases the
 // DLL's: each block's inc is the one that lands the position on the DLL's value at the end of the block, held to +-25 % of the DLL's own increment. In steady state the
 // position is the DLL's (a step lands on the master's clock to the sample); after a Start, a Continue, or a correction of the DLL (it re-acquires after a tempo jump, it
-// rebases its origin) the position approaches the master's at at most 25 % of a sample a sample, never jumping. A Start begins the run with pos 0 on the block that sees
+// rebases its origin) the position approaches the master's at at most 25 % of a sample a sample, never jumping. The engine's fastest tempo (300 BPM) caps the increment of
+// following, not of closing a lag: a position that is behind a master at the limit may go up to 25 % above it (dsp::kFollowCatchUpPercent, which the engine accepts), a master
+// beyond 300 BPM is followed at 300 (a master up to 1 %, kAtLimitPercent, above it is followed at its own rate: the loop's noise for a master at the limit). A Start begins the run with pos 0 on the block that sees
 // it: the master's clock was stamped at the instant it was HEARD, which is the render-ahead (two blocks) before the block now rendering, so the run begins about three
 // blocks (4 ms) behind the master and the position catches up in a few more.
+// A COLD START (the Start and the first clock together, no clock before) attaches the loop on that first clock, so the run begins on it. One clock gives no period: until the
+// second one the frames carry no tempo and the slowest increment the engine takes (20 BPM), which is never ahead of a master within the engine's range, so no clock goes out
+// before the clock it matches; the position then catches up at the 25 % above, and is on the master's grid within a few clocks (the first step, tick 0, is on the first clock).
 //
 // CONTEXTS (each shared object has ONE writer and ONE reader, and says which):
 //   render (priority 128)     begin_block, end_block and everything they call: MidiIn, ClockDll, MidiOut, the parser, the rings' consumer / producer ends below.
@@ -145,11 +151,12 @@ class MidiService final : public hal::midi::Device {
   static constexpr std::uint32_t kMaxMessagesPerBlock = 32;  // the hooks' messages end_block takes (the engine's kMaxMidiOut)
   static constexpr std::uint32_t kRxLog = 16;            // the last non-timing bytes received, for the console
   static constexpr std::uint32_t kTxLog = 8;             // the last messages sent, for the console
-  static constexpr std::uint32_t kNominalBpmX100 = 12000;  // the loop's period until two clocks have been seen
+  static constexpr std::uint32_t kNominalBpmX100 = 12000;  // the loop's period until two clocks have been seen (it is also the stale window of a loop with one clock; make_clock's frames do not use it)
   static constexpr std::uint32_t kTicksPerClock = 40;    // 960 ppqn / 24
   static constexpr std::uint32_t kTicksPerBeat = 240;    // an SPP beat is six clocks
-  static constexpr std::uint64_t kPendingRunSamples = 88200;  // a Start waits this long (2 s) for the loop to attach, then is forgotten
+  static constexpr std::uint64_t kPendingRunSamples = 88200;  // a Start waits this long (2 s) for the loop to attach, then is forgotten (a backstop that the attach on the first clock makes almost unreachable: a Start now waits only for a loop that cannot attach)
   static constexpr std::uint32_t kSlewPercent = 25;      // the increment may differ from the loop's by this much while the position chases it
+  static constexpr std::uint32_t kAtLimitPercent = 1;    // a master up to this much above the engine's fastest tempo counts as at it (the loop's own noise): it may be caught up with above the limit, and is followed at its own rate
   // The loop's origin follows the timeline while no master is there, so that no difference of it overflows: it is moved when it is this far back (the loop rebases its own at
   // 2^30 samples, 6.7 hours at 44.1 kHz, and a Q32 span overflows at 2^31).
   static constexpr std::uint64_t kOriginRefreshSamples = (std::uint64_t{1} << 30) + (std::uint64_t{1} << 29);
@@ -253,7 +260,7 @@ class MidiService final : public hal::midi::Device {
 
   MidiServiceHooks hooks_;
   std::uint32_t lead_samples_ = 0;        // hooks_.lead_cycles in whole samples
-  std::int64_t inc_min_ = 0;              // the engine's slowest and fastest increments (dsp::kMinTempoMilliBpm, kMaxTempoMilliBpm): the frames' inc is held between them
+  std::int64_t inc_min_ = 0;              // the engine's slowest and fastest increments (dsp::kMinTempoMilliBpm, kMaxTempoMilliBpm): the frames' inc is held between them, but for closing a lag (make_clock)
   std::int64_t inc_max_ = 0;
   core::Q32 nominal_period_ = 0;          // the loop's period until two clocks have been seen
 
