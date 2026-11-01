@@ -406,7 +406,7 @@ if (ctx.recorder().state() == hal::record::State::Done && !ctx.files().busy()) (
 ```
 
 While a take runs, `App::update_blocker()` can return `"RECORDING"` so that Config, FIRMWARE refuses an update. A full buffer ends the take
-(`overrun()` counts what did not fit, nothing is overwritten). An unarmed recorder costs the render one load and a branch a block.
+(`full()`; `overrun()` is only for a take that was to end at a boundary it did not reach; nothing is overwritten). An unarmed recorder costs the render one load and a branch a block.
 
 **Proof.** HELLO's `apps/hello/scenarios/record.txt`, run with `--card`: `expect state rec=recording`, `expect state rec=done`,
 `expect file Apps/hello/take_001.wav`; `tests/sim_record_test.cpp` reads the WAVs back and checks them to the sample. The cost while recording

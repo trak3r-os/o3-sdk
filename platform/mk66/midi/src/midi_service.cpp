@@ -632,33 +632,41 @@ void MidiService::send_transport(EventKind kind, std::uint64_t sample, std::int3
   log_tx(out_ports(), status, static_cast<std::uint8_t>(value & 0x7F), static_cast<std::uint8_t>((value >> 7) & 0x7F));
 }
 
-int MidiService::frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick) noexcept {
-  if (inc == 0u || frames == 0u) {
-    return -1;
-  }
-  const std::uint64_t q = tick << 32;
-  const std::uint64_t last = pos + inc * (frames - 1u);
-  if (q + inc <= pos || q > last) {
-    return -1;
-  }
-  return q <= pos ? 0 : static_cast<int>((q - pos + inc - 1u) / inc);
+int MidiService::frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick, std::uint32_t pos_lo, std::uint32_t inc_lo, std::uint32_t prev_gap) noexcept {
+  dsp::Transport t;
+  t.playing = true;
+  t.pos = pos;
+  t.inc = inc;
+  t.pos_lo = pos_lo;
+  t.inc_lo = inc_lo;
+  t.prev_gap = prev_gap;
+  t.frames = frames;
+  return dsp::frame_at(t, tick);  // (-1 for no increment or no frames)
 }
 
 // A MIDI clock at every whole multiple of 40 ticks the block owns, placed to a fraction of a sample (the one event timed finer than a sample): the nearest sample, and the
 // signed rest within half a sample either way (EventKind::MidiClock's `value`), which MidiOut turns into CPU cycles.
 void MidiService::send_clocks(const core::ClockFrame& t, std::uint32_t frames) noexcept {
-  const std::uint64_t last = t.pos + t.inc * (frames - 1u);
+  dsp::Transport tr;  // (the block as the engine's hooks see it: the position and the increment with their low words, which the engine's own transport carries)
+  tr.playing = true;
+  tr.pos = t.pos;
+  tr.inc = t.inc;
+  tr.pos_lo = t.pos_lo;
+  tr.inc_lo = t.inc_lo;
+  tr.prev_gap = t.prev_gap;
+  tr.frames = frames;
+  const std::uint64_t last = tr.last();
   std::uint64_t k = (t.pos >> 32) / kTicksPerClock;
   k = k > 0u ? k - 1u : 0u;
   for (; k * kTicksPerClock <= (last >> 32); ++k) {
     const std::uint64_t tick = k * kTicksPerClock;
-    const int f = frame_of(t.pos, t.inc, frames, tick);
+    const int f = dsp::frame_at(tr, tick);
     if (f < 0) {
       continue;
     }
-    // The exact time is f + rest samples, rest in (-1, 0]: (tick - pos) - f * inc is in (-inc, 0] ticks, divided by inc.
+    // The exact time is f + rest samples, rest in (-1, 0]: (tick - pos) - (position of frame f - pos) is in (-inc, 0] ticks, divided by inc.
     const std::int64_t diff = static_cast<std::int64_t>((tick << 32) - t.pos);
-    const std::int64_t rem = diff - static_cast<std::int64_t>(f) * static_cast<std::int64_t>(t.inc);
+    const std::int64_t rem = diff - static_cast<std::int64_t>(tr.at(static_cast<std::uint32_t>(f)) - t.pos);
     std::int64_t rest = (rem * kOne) / static_cast<std::int64_t>(t.inc);  // Q32 samples, (-2^32, 0]
     std::int64_t sample = f;
     if (rest < -(kOne / 2)) {  // nearer the sample before

@@ -353,6 +353,7 @@ class Engine {
   void drain() noexcept;
   void apply_follow() noexcept;    // render side: the frame follow() was given becomes the block's transport
   void release_follow() noexcept;  // render side: the master is let go
+  void note_continuity() noexcept; // render side: Transport::prev_gap for this block
   void run_unit(UnitId unit, const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames) noexcept;
   // The optional features (render side), each called only when it is in use.
   void gate_input(const float* in_l, const float* in_r, float* out_l, float* out_r, std::uint32_t frames, float from, float to) noexcept;
@@ -424,9 +425,14 @@ class Engine {
   bool followed_ = false;           // the last block ran on a master's transport
   std::uint32_t own_tempo_ = 120'000;
   std::uint64_t own_inc_ = 0;
+  std::uint32_t own_inc_lo_ = 0;    // its 32 more fractional bits (transport.h, "Exact landing")
   std::uint64_t inc_min_ = 0;       // the increments of the slowest and the fastest legal tempo: a master's is held between them
   std::uint64_t inc_max_ = 0;
   core::ClockFrame block_;          // block_frame()
+  // The last block's frame bound for the next block's Transport::prev_gap (note_continuity()): render side only.
+  std::uint64_t run_last_ = 0;      // Q32.32 position of its last frame
+  bool run_valid_ = false;          // it played
+  bool run_joined_ = false;         // a master took over or let go at this block: no continuity
   core::MidiMessage midi_out_[kMaxMidiOut] = {};
   unsigned midi_out_n_ = 0;
   std::uint32_t dropped_midi_ = 0;

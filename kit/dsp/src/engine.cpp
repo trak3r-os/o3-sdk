@@ -11,6 +11,9 @@ namespace o3sdk::dsp {
 namespace {
 
 constexpr float kMaxMixGain = 1.5f;
+// How far past the fastest increment the previous block's last frame may be behind this block's position and still be that block's neighbour (note_continuity()): a master's position
+// is an integer of its own, a unit or so a frame off the sum of its increments.
+constexpr std::uint64_t kContinuitySlack = 0x10000;
 constexpr float kQuarterPi = 0.785398163f;
 
 float clampf(float v, float lo, float hi) noexcept { return v < lo ? lo : (v > hi ? hi : v); }
@@ -130,8 +133,10 @@ Engine::Engine() noexcept {
   }
   transport_.tempo_mbpm = tempo_main_;
   transport_.inc = ticks_per_sample_q32(tempo_main_);
+  transport_.inc_lo = ticks_per_sample_lo(tempo_main_);
   own_tempo_ = tempo_main_;
   own_inc_ = transport_.inc;
+  own_inc_lo_ = transport_.inc_lo;
   inc_min_ = ticks_per_sample_q32(kMinTempoMilliBpm);
   inc_max_ = ticks_per_sample_q32(kMaxTempoMilliBpm);
   ctx_.engine_ = this;
@@ -541,6 +546,7 @@ void Engine::drain() noexcept {
           transport_.playing = true;
           transport_.started = true;
           transport_.pos = 0;
+          transport_.pos_lo = 0;
           transport_.stopped = false;
         }
         break;
@@ -549,15 +555,18 @@ void Engine::drain() noexcept {
           transport_.playing = false;
           transport_.started = false;
           transport_.pos = 0;
+          transport_.pos_lo = 0;
           transport_.stopped = true;
         }
         break;
       case Op::Tempo:
         own_tempo_ = c.arg;
         own_inc_ = ticks_per_sample_q32(c.arg);
+        own_inc_lo_ = ticks_per_sample_lo(c.arg);
         if (!followed_) {
           transport_.tempo_mbpm = own_tempo_;
           transport_.inc = own_inc_;
+          transport_.inc_lo = own_inc_lo_;
         }
         break;
     }
@@ -575,6 +584,7 @@ void Engine::apply_follow() noexcept {
   const core::ClockFrame& f = follow_in_;
   const bool was_playing = transport_.playing;
   const bool joining = !followed_;
+  run_joined_ = joining;  // (a master takes over: its position has nothing to do with the run before)
   followed_ = true;
   transport_.following = true;
   if (f.tempo_mbpm != 0u) {
@@ -586,6 +596,8 @@ void Engine::apply_follow() noexcept {
   } else {
     transport_.inc = ticks_per_sample_q32(transport_.tempo_mbpm);
   }
+  transport_.inc_lo = 0;  // (a master's transport has the precision its device gave it: Q32.32)
+  transport_.pos_lo = 0;
   transport_.playing = f.playing;
   transport_.started = f.playing && f.started;
   // A run of the engine's own ends when the master takes over (or stops): the hooks see a stop once, and a master that plays starts them again.
@@ -596,15 +608,36 @@ void Engine::apply_follow() noexcept {
   followed_playing_.store(f.playing, std::memory_order_relaxed);
 }
 
+// The previous block's last position for the Transport this block hands out (transport.h, "One owner a tick"): valid when that block played and this one
+// continues it. The position is continuous from block to block, whatever the increment does: it is the previous block's end, which is its last frame's position
+// plus one increment (the engine's own transport: within 1 unit; a master's: within a unit a frame, its position being an integer of its own): at most the fastest
+// increment and a little (kContinuitySlack), whatever the increment was. A Play, a Stop, a
+// master taking over or letting go, a Start or a locate (which moves the position by a tick or more, 2^32 units, while the limit is a few hundred thousand at most)
+// all fail it, and the block then owns the ticks from one increment before its position.
+void Engine::note_continuity() noexcept {
+  transport_.prev_gap = 0;
+  if (!transport_.playing || transport_.started || !run_valid_ || run_joined_) {
+    run_joined_ = false;
+    return;
+  }
+  const std::uint64_t pos = transport_.pos;
+  if (run_last_ < pos && pos - run_last_ <= inc_max_ + kContinuitySlack) {
+    transport_.prev_gap = static_cast<std::uint32_t>(pos - run_last_);
+  }
+}
+
 void Engine::release_follow() noexcept {
   followed_ = false;
+  run_joined_ = true;  // (the engine's own run starts again from the main loop's ask)
   transport_.following = false;
   transport_.tempo_mbpm = own_tempo_;
   transport_.inc = own_inc_;
+  transport_.inc_lo = own_inc_lo_;
   if (transport_.playing) {  // the master's run ends with the master; the engine's own starts when the main loop asks
     transport_.playing = false;
     transport_.started = false;
     transport_.pos = 0;
+    transport_.pos_lo = 0;
     transport_.stopped = true;
   }
   following_.store(false, std::memory_order_relaxed);
@@ -659,6 +692,7 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   }
   follow_pending_ = false;
   transport_.frames = frames;
+  note_continuity();
 
   // The clocked hooks place their events; a stop is seen once (Transport::stopped, the block after the command) by every hook.
   midi_out_n_ = 0;
@@ -815,11 +849,13 @@ void Engine::render(const float* in_l, const float* in_r, float* out_l, float* o
   const bool clipped = peak_l > 0.8f || peak_r > 0.8f;
 
   block_ = core::ClockFrame{followed_, transport_.playing, transport_.started, transport_.stopped, transport_.pos, transport_.inc,
-                            transport_.tempo_mbpm};
+                            transport_.tempo_mbpm, transport_.pos_lo, transport_.inc_lo, transport_.prev_gap};
   transport_.started = false;
   transport_.stopped = false;
+  run_last_ = transport_.last();  // (what the next block owns the ticks after, if it continues this one)
+  run_valid_ = transport_.playing;
   if (transport_.playing) {
-    transport_.pos += transport_.inc * frames;
+    transport_.advance(frames);
   }
   ++blocks_;
   const std::uint32_t spent = cycles_ != nullptr ? cycles_() - t0 : 0u;

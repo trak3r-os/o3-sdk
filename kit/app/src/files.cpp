@@ -181,6 +181,11 @@ void Files::note_card() noexcept {
     last_card_ = c;
     last_card_id_ = id;
     ++generation_;
+    wr_bytes_ = wr_us_ = 0;  // another card, another speed
+    wr_probed_ = false;
+    wr_last_ = 0;
+    sweep_due_ = true;
+    sweep_tries_ = 0;
   }
 }
 
@@ -352,7 +357,7 @@ Files::Status Files::status() const noexcept {
   s.phase = phase_;
   s.text = text_;
   s.permille = phase_ == Status::Done ? 1000u : 0u;
-  if (phase_ == Status::Running && kind_ != Kind::None && kind_ != Kind::Settings && slot_ >= 0) {
+  if (phase_ == Status::Running && app_busy_job()) {
     s.permille = static_cast<std::uint16_t>(job_progress());
   }
   return s;
@@ -372,7 +377,7 @@ void Files::drop_pending(const char* text) noexcept {
 
 void Files::cancel() noexcept {
   drop_pending("CANCELLED");
-  if (kind_ != Kind::None && kind_ != Kind::Settings && slot_ >= 0) {
+  if (app_busy_job()) {
     jobs_.cancel(static_cast<unsigned>(slot_));
     reap();
   }
@@ -495,6 +500,87 @@ void Files::launch_settings() noexcept {
   }
 }
 
+// The sweep: a job of two steps (look, remove) over the one path Apps/<id>/_o3save.tmp; nothing else is named, and the scoped writer admits it as any file of the app's folder.
+void Files::launch_sweep() noexcept {
+  if (!guard::join(w_->path, sizeof w_->path, guard::kAppsDir, id_, guard::kTempName)) {
+    sweep_due_ = false;  // (a bug: the id was checked)
+    return;
+  }
+  kind_ = Kind::Sweep;
+  stage_ = Stage::Run;
+  sweep_found_ = false;
+  fail_text_ = "";
+  ++sweep_tries_;
+  set_label("SWEEP", guard::kTempName);
+  writer_->begin_save();  // as every job that changes the card: it is not ejected under the removal
+  pinned_ = true;
+  if (!start_job()) {
+    finish(false, false);
+  }
+}
+
+core::JobStatus Files::step_sweep() noexcept {
+  if (!sweep_found_) {
+    bool is_dir = false;
+    const St e = storage_->exists(w_->path, &is_dir);
+    if (e == St::NotFound || (e == St::Ok && is_dir)) {
+      return core::JobStatus::Done;  // nothing stale (a FOLDER of that name is the user's: never touched)
+    }
+    if (e != St::Ok) {
+      return fail(read_text(e));
+    }
+    sweep_found_ = true;
+    return core::JobStatus::Running;
+  }
+  const WriteStatus g = writer_->gate();
+  if (g != WriteStatus::Ok) {
+    return fail(write_text(g));
+  }
+  const WriteStatus r = writer_->remove(w_->path);
+  if (r != WriteStatus::Ok) {
+    return fail(write_text(r));
+  }
+  ++stats_.stale_removed;
+  return core::JobStatus::Done;
+}
+
+// What the card has shown of its write speed: the bytes and the microseconds of the steps that wrote, halved together once they cover a second so the picture follows the card. A step that
+// took no time on the clock (the simulator's does not move inside a pass) tells nothing.
+void Files::learn_write(std::uint32_t bytes, std::uint32_t us, std::uint32_t asked) noexcept {
+  if (bytes == 0u) {
+    return;  // (not a write step: the gate, the probe of the names, the read-back)
+  }
+  wr_probed_ = true;
+  if (bytes >= asked || wr_last_ == 0u) {
+    wr_last_ = bytes;  // (a step that wrote less than it was asked is the end of the file: it says nothing of what the card can do in a step)
+  }
+  if (us == 0u) {
+    return;
+  }
+  wr_bytes_ += bytes;
+  wr_us_ += us;
+  if (wr_us_ > kLearnWindowUs) {
+    wr_bytes_ /= 2u;
+    wr_us_ /= 2u;
+  }
+}
+
+// The microseconds to hand AtomicSave (it writes budget_us * kBytesPerUs bytes, at least a sector): the first write step of a card is one sector (a probe: the card's speed is not known, and
+// the 4,000 bytes of the slice's guess took 48 ms on the card U5 measured); once a write step ran on a clock that moved, the bytes the card is seen to write in half a slice, and no more
+// than twice what the last write step wrote (a probe that landed in the filesystem's sector cache looks like a very fast card: the estimate may not jump from 512 bytes to the cap on
+// it, one more step teaches the real speed); and when the clock did not move inside that step (the simulator's), the slice's, so a simulated save is not slowed.
+std::uint32_t Files::write_budget(std::uint32_t budget_us) const noexcept {
+  if (wr_us_ == 0u || wr_bytes_ == 0u) {
+    return wr_probed_ ? budget_us : AtomicSave::kMinStepBytes / AtomicSave::kBytesPerUs;
+  }
+  std::uint64_t bytes = static_cast<std::uint64_t>(wr_bytes_) * (budget_us / 2u) / wr_us_;
+  if (bytes > 2u * static_cast<std::uint64_t>(wr_last_)) {
+    bytes = 2u * static_cast<std::uint64_t>(wr_last_);
+  }
+  const std::uint64_t us = bytes / AtomicSave::kBytesPerUs;
+  return us >= budget_us ? budget_us : static_cast<std::uint32_t>(us);
+}
+
 // ---- The job ----------------------------------------------------------------------------------------------------------------------
 
 core::JobStatus Files::Pump::step(std::uint32_t budget_us) noexcept { return f_.run_step(budget_us); }
@@ -539,6 +625,8 @@ core::JobStatus Files::run_step(std::uint32_t budget_us) noexcept {
       return step_list(budget_us);
     case Kind::Marker:
       return step_marker();
+    case Kind::Sweep:
+      return step_sweep();
     case Kind::None:
       break;
   }
@@ -554,7 +642,17 @@ core::JobStatus Files::step_save(std::uint32_t budget_us) noexcept {
     stage_ = kind_ == Kind::Wav ? Stage::Number : Stage::Run;
     return core::JobStatus::Running;
   }
-  const core::JobStatus s = w_->save.step(budget_us);
+  // The bytes of a step are what the card does in the time asked for (write_budget); the bytes the step wrote and the time it took teach the next (learn_write). The read-back of a Replace
+  // save (CompareRead) takes its budget from the same estimate: a slow card reads 512 bytes a pass there, and a fast one what the slice gives.
+  const std::uint32_t before = w_->save.bytes();
+  const core::Tick began = clock_ != nullptr ? clock_->now() : 0u;
+  const std::uint32_t asked_us = write_budget(budget_us);
+  const core::JobStatus s = w_->save.step(asked_us);
+  if (clock_ != nullptr) {
+    const std::uint64_t asked = static_cast<std::uint64_t>(asked_us) * AtomicSave::kBytesPerUs;
+    learn_write(w_->save.bytes() - before, core::tick_elapsed(clock_->now(), began),
+                static_cast<std::uint32_t>(asked < AtomicSave::kMinStepBytes ? AtomicSave::kMinStepBytes : (asked > AtomicSave::kMaxStepBytes ? AtomicSave::kMaxStepBytes : asked)));
+  }
   if (s == core::JobStatus::Failed) {
     fail_text_ = w_->save.detail()[0] != '\0' ? w_->save.detail() : "SAVE FAILED";
   }
@@ -892,6 +990,17 @@ void Files::finish(bool done, bool cancelled) noexcept {
     writer_->end_save();
     pinned_ = false;
   }
+  if (k == Kind::Sweep) {  // silent and not counted: its one number is stale_removed
+    if (slot_ >= 0) {
+      jobs_.release(static_cast<unsigned>(slot_));
+      slot_ = -1;
+    }
+    kind_ = Kind::None;
+    if (done || (!cancelled && sweep_tries_ >= kSweepTries)) {
+      sweep_due_ = false;  // looked at, or tried enough: not again for this card. A cancelled one (it gave way) is asked again
+    }
+    return;
+  }
   if (slot_ >= 0) {
     const core::JobStats& js = jobs_.stats(static_cast<unsigned>(slot_));
     ++stats_.jobs;
@@ -968,7 +1077,7 @@ bool Files::strip(Strip& out) noexcept {
     notice_fresh_ = false;
     return false;
   }
-  if (kind_ != Kind::None && kind_ != Kind::Settings && slot_ >= 0) {
+  if (app_busy_job()) {
     std::strncpy(out.text, label_.c_str(), sizeof out.text - 1u);
     out.text[sizeof out.text - 1u] = '\0';
     out.progress = static_cast<int>(job_progress());
@@ -1004,6 +1113,10 @@ void Files::poll(const hal::Clock& clock, std::uint32_t budget_us, const KitValu
     jobs_.cancel(static_cast<unsigned>(slot_));  // the settings give way to the app: they are asked again once it is done
     reap();
   }
+  if (kind_ == Kind::Sweep && (pend_ != Kind::None || power_) && slot_ >= 0) {
+    jobs_.cancel(static_cast<unsigned>(slot_));  // the sweep gives way to the app (and to the power-off)
+    reap();
+  }
   if (kind_ == Kind::None) {
     if (pend_ != Kind::None) {
       launch();
@@ -1014,6 +1127,8 @@ void Files::poll(const hal::Clock& clock, std::uint32_t budget_us, const KitValu
       poll_settings_read(sig_);  // (before anything is written to this card, or after it was changed for another)
     } else if (sread_ == SettingsRead::Writable && seen_ && sig_ != saved_ && !gave_up_ && (power_ || flush_ || now_ms - moved_ms_ >= kSettingsDebounceMs) && card() == Card::Ready) {
       launch_settings();  // (a card that cannot be written now keeps them: they go when it can)
+    } else if (sweep_due_ && !power_ && sread_ == SettingsRead::Writable && read_id_ == writer_->card_id() && card() == Card::Ready) {
+      launch_sweep();  // the last of the idle work: once for each card, after its settings were read and while nothing waits
     }
   }
   if (kind_ != Kind::None) {

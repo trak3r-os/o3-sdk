@@ -39,11 +39,11 @@ snap 02_card_out_mid_save
 tap file
 wait 20
 snap 03_no_card
-# The card back: the next save heals what the cut left (a stale temporary file, the old file moved aside) and goes through.
+# The card back: the kit sweeps the stale temporary file the cut left (once for each card, silently), and the next save heals the rest (the old file moved aside) and goes through.
 card in
 wait 100
 expect state card=ready
-expect file Apps/hello/_o3save.tmp
+expect nofile Apps/hello/_o3save.tmp
 tap file
 wait 100
 expect state files=done

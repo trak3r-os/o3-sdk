@@ -37,7 +37,7 @@
 //   files      slice FA (o3-sdk's own): the app file API's state and cost (console/files_command.h), and `files crc <path>`, the CRC-32 of a file of the card. A read.
 //   radio      OS-RAD1 (slice AI of M2c): the FM radio driver's state, step, last failure (step/cause), last I2C result, registers as last read and pin levels; `radio retry` runs the power-up again from the
 //              reset while the radio is the selected input. A read apart from the retry.
-//   rec        slice RC of M2c: the recorder's state (idle, waiting, listening, recording, done), the take's frames and their length, the frames that did not fit (overrun), the tap and the pattern
+//   rec        slice RC of M2c: the recorder's state (idle, waiting, listening, recording, done), the take's frames and their length, the frames lost before the take's own end (overrun), whether the buffer filled (full), the tap and the pattern
 //              length (Context::recorder()). A read: the app arms a take, its own keys or hooks.
 //   mon        slice AI of M2c: the audio-in monitor's level (`mon`, `mon off`, `mon on`, `mon 0..100`), Context::audio_in().monitor(). The one command that changes the sound.
 //   midi       slice MD (o3-sdk's own): the MIDI service's snapshot and the DIN and USB drivers' counters (console/midi_report.h says each word). A read.
@@ -699,6 +699,7 @@ void cmd_rec(shell::Shell& sh, const shell::Args& a) {
   char buf[160];
   audio::diag::Text t(buf, sizeof buf);
   t.str("rec ").str(state).str(", frames ").dec(frames).str(" (").dec(ms / 1000u).chr('.').dec(ms % 1000u / 100u).str(" s), overrun ").dec(g_recorder->overrun());
+  t.str(", full ").dec(g_recorder->full() ? 1u : 0u);  // the take ended because the buffer filled (overrun counts only frames lost before a take's own end)
   t.str(", tap ").str(g_recorder->tap() == hal::record::Tap::Master ? "master" : "input").nl();
   send(sh, t.size(), buf);
 }

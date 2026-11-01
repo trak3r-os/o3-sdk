@@ -652,6 +652,13 @@ TEST_CASE("follow: the host fake maps ticks to frames and tempo to increments as
     t.pos = pos;
     for (std::uint64_t tick = (pos >> 32) > 3 ? (pos >> 32) - 3 : 0; tick < (pos >> 32) + 10; ++tick) {
       CHECK(platform::host::FakeMidi::frame_of(t.pos, t.inc, t.frames, tick) == dsp::frame_at(t, tick));
+      t.prev_gap = static_cast<std::uint32_t>(t.inc / 2u);  // (and with the previous block's last frame, a different increment before it, and the low words)
+      t.pos_lo = 0x80000000u;
+      t.inc_lo = 0xC0000000u;
+      CHECK(platform::host::FakeMidi::frame_of(t.pos, t.inc, t.frames, tick, t.pos_lo, t.inc_lo, t.prev_gap) == dsp::frame_at(t, tick));
+      t.prev_gap = 0;
+      t.pos_lo = 0;
+      t.inc_lo = 0;
     }
   }
 }

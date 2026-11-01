@@ -63,6 +63,7 @@ class FakeRecorder final : public hr::Recorder {
   hr::State state() const noexcept override { return st; }
   std::uint32_t frames() const noexcept override { return nframes; }
   std::uint32_t overrun() const noexcept override { return lost; }
+  bool full() const noexcept override { return is_full; }
   std::uint32_t settle() noexcept override {
     ++settles;
     return lead;
@@ -83,6 +84,7 @@ class FakeRecorder final : public hr::Recorder {
   hr::LineMap line_map = hr::LineMap::AsIs;
   std::uint32_t arms = 0, disarms = 0, settles = 0, releases = 0;
   std::uint32_t nframes = 0, lost = 0, lead = 0, pattern = 16;
+  bool is_full = false;
   hr::Tap tap_ = hr::Tap::Input;
 };
 
@@ -164,6 +166,9 @@ TEST_CASE("app recorder: each call reaches the recorder as made") {
   rig.fake.lost = 5;
   CHECK(r.frames() == 77u);
   CHECK(r.overrun() == 5u);
+  CHECK_FALSE(r.full());
+  rig.fake.is_full = true;
+  CHECK(r.full());
   r.release();
   CHECK(rig.fake.releases == 1u);
   CHECK(r.state() == hr::State::Idle);

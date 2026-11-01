@@ -17,7 +17,7 @@ expect state tap=input
 snap 00_idle
 
 # 1. A FREE take of the INPUT, one second long (SAMPLE PLAY twice: 10 s, 30 s, 1 s). The buffer fills: the take is Done with 44,100 frames, and the 60 frames of the last block that did
-# not fit are counted (over=60), nothing is written past them. SHIFT + FILE saves it; once the file is on the card the recorder is free again.
+# not fit are not an overrun (over=0: a full buffer is the end of a free take), nothing is written past them; the screen says FULL. SHIFT + FILE saves it; once the file is on the card the recorder is free again.
 tap sampleplay
 tap sampleplay
 expect state len=1
@@ -28,7 +28,7 @@ snap 01_recording
 wait 1100
 expect state rec=done
 expect state take=44100
-expect state over=60
+expect state over=0
 snap 02_full
 press shift
 tap file

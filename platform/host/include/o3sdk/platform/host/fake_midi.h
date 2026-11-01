@@ -141,17 +141,27 @@ class FakeMidi final : public hal::midi::Device {
   const hal::midi::Config& config() const { return cfg_; }
   bool following() const { return following_; }
 
-  // The tick -> frame mapping of dsp::frame_at (the tests hold the two equal): the first frame f of the block with pos + f * inc >= tick, or -1.
-  static int frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick) {
+  // The tick -> frame mapping of dsp::frame_at (the tests hold the two equal): the first frame f of the block with pos + f * inc >= tick (with the low words of the engine's own transport,
+  // pos_lo and inc_lo, 32 more fractional bits: 0 for a master's), or -1. With a `prev_gap` the block owns the ticks after pos - prev_gap (the previous block's last frame), else from one increment
+  // before its position (dsp::Transport).
+  static int frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick, std::uint32_t pos_lo = 0, std::uint32_t inc_lo = 0, std::uint32_t prev_gap = 0) {
     if (inc == 0u || frames == 0u) {
       return -1;
     }
+    const auto at = [&](std::uint64_t f) { return pos + inc * f + ((static_cast<std::uint64_t>(pos_lo) + static_cast<std::uint64_t>(inc_lo) * f) >> 32); };
     const std::uint64_t q = tick << 32;
-    const std::uint64_t last = pos + inc * (frames - 1u);
-    if (q + inc <= pos || q > last) {
+    const bool before = prev_gap != 0u ? q <= pos - prev_gap : q + inc + (pos_lo < inc_lo ? 1u : 0u) <= pos;
+    if (before || q > at(frames - 1u)) {
       return -1;
     }
-    return q <= pos ? 0 : static_cast<int>((q - pos + inc - 1u) / inc);
+    if (q <= pos) {
+      return 0;
+    }
+    std::uint64_t f = (q - pos + inc - 1u) / inc;
+    if (f > 0u && f - 1u < frames && at(f - 1u) >= q) {
+      --f;
+    }
+    return static_cast<int>(f);
   }
   // Q32.32 ticks per sample at `mbpm` (960 ppqn, the engine's rate): dsp::ticks_per_sample_q32 with the same arithmetic.
   static std::uint64_t inc_for(std::uint32_t mbpm) {
@@ -199,11 +209,12 @@ class FakeMidi final : public hal::midi::Device {
         }
       }
       if (cfg_.clock_out && t.playing) {
-        const std::uint64_t last = t.pos + t.inc * (frames_ > 0u ? frames_ - 1u : 0u);
+        const std::uint32_t tail = frames_ > 0u ? frames_ - 1u : 0u;  // frames after the block's first
+        const std::uint64_t last = t.pos + t.inc * tail + ((static_cast<std::uint64_t>(t.pos_lo) + static_cast<std::uint64_t>(t.inc_lo) * tail) >> 32);
         std::uint64_t k = (t.pos >> 32) / kTicksPerClock;
         k = k > 0u ? k - 1u : 0u;
         for (; k * kTicksPerClock <= (last >> 32); ++k) {
-          const int f = frame_of(t.pos, t.inc, frames_, k * kTicksPerClock);
+          const int f = frame_of(t.pos, t.inc, frames_, k * kTicksPerClock, t.pos_lo, t.inc_lo, t.prev_gap);
           if (f >= 0) {
             put(block_start_ + static_cast<std::uint32_t>(f), cfg_.out_ports, core::kMidiClock, 0, 0);
           }

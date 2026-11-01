@@ -225,9 +225,10 @@ class MidiService final : public hal::midi::Device {
   };
   void diag(Diag& d) const noexcept;
 
-  // Timeline arithmetic the tests and the console share. The first frame f of a block of `frames` with pos + f * inc >= tick (Q32.32 ticks, whole `tick`), or -1: dsp::frame_at, which
-  // the tests hold equal.
-  static int frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick) noexcept;
+  // Timeline arithmetic the tests and the console share. The first frame f of a block of `frames` with pos + f * inc >= tick (Q32.32 ticks, whole `tick`; `pos_lo` and `inc_lo` are the
+  // 32 more fractional bits of the engine's own transport, 0 for a master's), or -1: dsp::frame_at, which the tests hold equal.
+  // `prev_gap` is how far the previous block's last frame is behind `pos` (dsp::Transport; 0: none): the block owns the ticks after it.
+  static int frame_of(std::uint64_t pos, std::uint64_t inc, std::uint32_t frames, std::uint64_t tick, std::uint32_t pos_lo = 0, std::uint32_t inc_lo = 0, std::uint32_t prev_gap = 0) noexcept;
 
  private:
   void apply_config(const hal::midi::Config& c) noexcept;

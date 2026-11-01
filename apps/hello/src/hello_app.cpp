@@ -527,6 +527,8 @@ class PlayScreen final : public app::Screen {
     if (rec.overrun() != 0u) {
       p = put_str(p, "  OVERRUN ");
       p = put_uint(p, rec.overrun());
+    } else if (st == hal::record::State::Done && rec.full()) {
+      p = put_str(p, "  FULL");
     }
     *p = '\0';
     r.text(x, y, "REC", Color::TextDim, Face::Label);

@@ -29,10 +29,12 @@ bool RecordService::arm(const hr::Take& take) noexcept {
   armed_tap_ = tap();
   armed_align_ = take.align;
   stop_rule_.store(static_cast<std::uint8_t>(hr::Align::Free), std::memory_order_relaxed);
-  if (take.align == hr::Align::Level) {
-    return tap_.arm_level(take.buf, take.capacity_frames, channels, take.threshold, take.preroll_frames, take.auto_steps);
+  const bool ok = take.align == hr::Align::Level ? tap_.arm_level(take.buf, take.capacity_frames, channels, take.threshold, take.preroll_frames, take.auto_steps)
+                                                 : tap_.arm(take.buf, take.capacity_frames, channels, rec_align(take.align), take.auto_steps);
+  if (ok) {
+    capacity_ = take.capacity_frames;
   }
-  return tap_.arm(take.buf, take.capacity_frames, channels, rec_align(take.align), take.auto_steps);
+  return ok;
 }
 
 hal::audio::BlockCallback RecordService::wrap(hal::audio::BlockCallback inner, const dsp::Engine& engine) noexcept {
@@ -67,6 +69,9 @@ void RecordService::record_block(const hal::audio::BlockIo& io, RecTap::State s)
     t.tempo_mbpm = f.tempo_mbpm;
     t.pos = f.pos;
     t.inc = f.inc;
+    t.pos_lo = f.pos_lo;  // (the engine's own transport has them: the take lands on the sample a hook's step does)
+    t.inc_lo = f.inc_lo;
+    t.prev_gap = f.prev_gap;  // (the take's boundary is owned once across a tempo change, like a hook's step)
     t.frames = n;
     t.following = f.follow;
     const std::uint32_t pattern = pattern_steps_.load(std::memory_order_relaxed);

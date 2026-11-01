@@ -23,6 +23,7 @@
 #include <utility>
 #include <vector>
 
+#include "support/exact_grid.h"
 #include "support/need.h"
 #include "support/rng.h"
 
@@ -642,6 +643,39 @@ TEST_CASE("midi service: the engine's own clock goes out 24 a quarter note on th
   CHECK(rig.kicks > 0u);
 }
 
+// A tempo change between two blocks moves the bound of a block's ticks (dsp/transport.h, "One owner a tick"): a clock between the last frame of one block and the first of the next, with the
+// increment different on either side, used to go out twice or not at all. A tempo at random every block, and the clocks counted against the exact arithmetic.
+TEST_CASE("midi service: the clock out has one pulse for each 40 ticks, none lost and none doubled, when the tempo changes between blocks") {
+  Rig rig;
+  rig.run(3);
+  CHECK(rig.engine.set_tempo(120'000));
+  CHECK(rig.engine.play());
+  Rng rng(0x5EEDu);
+  constexpr unsigned kBlocks = 24000;
+  std::uint64_t pos = 0;  // in units of 1 / (60 * rate_mhz) ticks: the exact position of the run's frame 0 of the block
+  std::uint64_t last = 0;
+  const std::uint64_t scale = 60u * o3sdk::test::kRateMilliHz;
+  std::uint32_t mbpm = 120'000;
+  for (unsigned b = 0; b < kBlocks; ++b) {
+    if (b != 0u && rng.below(3) != 0u) {  // (two blocks in three: anywhere in the range, a tempo up as often as down)
+      mbpm = dsp::kMinTempoMilliBpm + rng.below(dsp::kMaxTempoMilliBpm - dsp::kMinTempoMilliBpm + 1u);
+      CHECK(rig.engine.set_tempo(mbpm));
+    }
+    rig.run(1);
+    const std::uint64_t slope = static_cast<std::uint64_t>(mbpm) * dsp::kPpqn;
+    last = pos + (kFrames - 1u) * slope;
+    pos += kFrames * slope;
+  }
+  CHECK(rig.engine.stop());
+  rig.run(40);  // (the Stop and the last clocks leave the wire)
+  CHECK(rig.count(0xFA) == 1u);
+  CHECK(rig.count(0xFC) == 1u);
+  // the clocks at ticks 0, 40, 80, ... that the position reached by the last frame of the run
+  const std::uint64_t expect = last / (dsp::kTicksPerMidiClock * scale) + 1u;
+  CHECK(rig.count(0xF8) == expect);
+  CHECK(expect > 400u);
+}
+
 TEST_CASE("midi service: CLOCK OUT and TRANSPORT OUT are separate switches, and no out port is silence") {
   for (unsigned variant = 0; variant < 3; ++variant) {
     Rig rig;
@@ -1061,6 +1095,10 @@ TEST_CASE("midi service: frame_of is dsp::frame_at") {
     t.pos = (std::uint64_t{rng.next() % 5000u} << 32) | rng.next();
     const std::uint64_t tick = (t.pos >> 32) + rng.below(40) - std::min<std::uint64_t>(t.pos >> 32, 3u);
     CHECK(midi::MidiService::frame_of(t.pos, t.inc, t.frames, tick) == dsp::frame_at(t, tick));
+    t.pos_lo = rng.next();  // the engine's own transport: the low words, and the previous block's last frame (a different increment before it: anywhere in two increments before the position)
+    t.inc_lo = rng.next();
+    t.prev_gap = rng.below(2) == 1 ? static_cast<std::uint32_t>(1u + rng.next() % (2u * t.inc)) : 0u;
+    CHECK(midi::MidiService::frame_of(t.pos, t.inc, t.frames, tick, t.pos_lo, t.inc_lo, t.prev_gap) == dsp::frame_at(t, tick));
   }
   CHECK(midi::MidiService::frame_of(0, 0, 64, 0) == -1);
   CHECK(midi::MidiService::frame_of(0, 1000, 0, 0) == -1);

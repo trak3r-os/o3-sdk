@@ -82,7 +82,7 @@ picker/04_picker e96cb0f9
 picker/05_loaded 8fda30de
 record/00_idle be161e4c
 record/01_recording cbc89e29
-record/02_full 5d05baec
+record/02_full 0f82b19e
 record/03_waiting e6ef21e8
 record/04_listening a03e5326
 record/05_triggered d0805f8a
@@ -103,6 +103,6 @@ usb/04_return eb96e474
 usb/05_input_usb a2b3d545
 usb/06_disk_ask 63e2662c
 usb/07_disk_out a9f99002
-usb/08_save_refused 72401c64
+usb/08_save_refused f2a0034b
 usb/09_disk_ejected 88b0a22d
-usb/10_saved 8873ce83
+usb/10_saved 9dab0a0c

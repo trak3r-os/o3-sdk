@@ -19,6 +19,8 @@
 #include <o3sdk/sim/harness.h>
 #include <o3sdk/sim/scenario.h>
 
+#include "support/exact_grid.h"
+
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -196,8 +198,8 @@ TEST_CASE("sim record: a take on a step starts at the sample of the sixteenth, f
     }
   }
   REQUIRE(found);
-  const std::uint64_t inc = dsp::ticks_per_sample_q32(rig.h.engine().tempo());
-  const auto step_sample = [&](std::uint64_t k) { return base + (((k * dsp::kTicksPerSixteenth) << 32) + inc - 1u) / inc; };
+  const std::uint32_t tempo = rig.h.engine().tempo();
+  const auto step_sample = [&](std::uint64_t k) { return base + test::exact_frame(tempo, k * dsp::kTicksPerSixteenth); };  // (exact: the engine lands on the sample the rational gives)
   Pcm buf(64);
   unsigned inside = 0;  // steps that begin inside a block (not on its first frame)
   for (unsigned round = 0; round < 50; ++round) {
@@ -237,6 +239,34 @@ TEST_CASE("sim record: a stop on a step makes the take exactly the frames betwee
   CHECK(rig.rec().overrun() == 0u);
 }
 
+// U5 row 33: a one-bar take that begins at Play's first sample was 84,673 frames at 125 BPM (the transport's floored increment put every step after position 0 one sample late). The
+// engine's own transport lands on the exact sample now (dsp/transport.h), so the take is the bar, to the sample.
+TEST_CASE("sim record: a take of n bars that begins at Play's first sample is exactly n bars, at 125 and 150 BPM") {
+  for (const std::uint32_t mbpm : {125'000u, 150'000u}) {
+    for (const std::uint32_t bars : {1u, 2u, 4u}) {
+      Rig rig("sim-record-bars");
+      REQUIRE(rig.h.start());
+      rig.h.run_ms(5);
+      REQUIRE(rig.h.engine().set_tempo(mbpm));
+      rig.h.run_ms(5);
+      const std::uint32_t bar = static_cast<std::uint32_t>(test::exact_frame(mbpm, 16u * dsp::kTicksPerSixteenth));
+      CHECK(bar % 16u == 0u);  // (whole-sample sixteenths: 5,292 and 4,410)
+      Pcm buf(5u * bar);
+      hr::Take t = take_of(buf, 5u * bar, hr::Channels::Mix, hr::Align::Bar);
+      t.auto_steps = 16u * bars;
+      REQUIRE(rig.rec().arm(t));
+      CHECK(rig.rec().state() == hr::State::Waiting);
+      rig.h.press(app::Button::Play);
+      rig.h.run_ms(1);
+      rig.h.release(app::Button::Play);
+      REQUIRE(rig.wait_state(hr::State::Done, bars * 2200u));
+      INFO("tempo " << mbpm << " bars " << bars);
+      CHECK(rig.rec().frames() == bars * bar);
+      CHECK(rig.rec().overrun() == 0u);
+    }
+  }
+}
+
 TEST_CASE("sim record: a level take keeps 50 ms before the signal in order") {
   Rig rig("sim-record-level");
   rig.capture.input_wav(level_wav());
@@ -271,18 +301,19 @@ TEST_CASE("sim record: a level take keeps 50 ms before the signal in order") {
   }
 }
 
-TEST_CASE("sim record: a full buffer is counted and the take holds all that fit; the save is a WAV that reads back equal") {
+TEST_CASE("sim record: a full buffer ends the take (full, no overrun) and the take holds all that fit; the save is a WAV that reads back equal") {
   Rig rig("sim-record-save");
   rig.capture.input_wav(ramp_wav());
   REQUIRE(rig.h.start());
   rig.h.run_ms(10);
-  constexpr std::uint32_t kCap = 1000;  // 15 blocks and 40 frames: the 24 frames of the 16th block that do not fit are the overrun
+  constexpr std::uint32_t kCap = 1000;  // 15 blocks and 40 frames: the 24 frames of the 16th block that do not fit are no take's frames, so not an overrun
   Pcm buf(kCap + 64u, 0x5A5A);
   REQUIRE(rig.rec().arm(take_of(buf, kCap, hr::Channels::Mix, hr::Align::Free)));
   const std::uint64_t armed_at = rig.h.samples_rendered();
   REQUIRE(rig.wait_state(hr::State::Done, 200));
   CHECK(rig.rec().frames() == kCap);
-  CHECK(rig.rec().overrun() == 24u);
+  CHECK(rig.rec().overrun() == 0u);
+  CHECK(rig.rec().full());
   // The take is the input from a block boundary on, unbroken.
   std::uint64_t first = armed_at;
   while (ramp_at(first) != buf[0]) {

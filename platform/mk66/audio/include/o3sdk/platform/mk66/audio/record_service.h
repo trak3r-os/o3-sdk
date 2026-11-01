@@ -55,7 +55,14 @@ class RecordService final : public hal::record::Recorder {
   void disarm() noexcept override { tap_.disarm(); }
   hal::record::State state() const noexcept override;
   std::uint32_t frames() const noexcept override { return tap_.frames(); }
-  std::uint32_t overrun() const noexcept override { return tap_.overrun_frames(); }
+  // The tap counts every frame a cut block lost (RecTap::overrun_frames), a full buffer of a take with no end of its own included; the service tells the two apart (hal/record.h):
+  //   overrun(): frames the take was meant to hold and the memory could not: only a take that has an end (a stop_at() or auto_steps boundary, RecTap::end_offset()) counts, and only the frames
+  //              before that end. A Free take that fills the buffer, an auto_steps take that fills it and waits for a step that does not come, lose none: they are full.
+  //   full():    the buffer is what ended the take: Done with every frame of the memory written and no end of its own, or a block cut by the memory (overrun_frames() != 0).
+  // A take that ends exactly at the capacity on its own boundary is neither. Both are read by the main loop once state() is Done: the tap's end and its overrun are written by the render
+  // context (plain words), and the Done state is the release that publishes them, so both check it first (0 and false before: a cut block always ends the take, Done).
+  std::uint32_t overrun() const noexcept override { return tap_.state() == RecTap::State::Done && has_end() ? tap_.overrun_frames() : 0u; }
+  bool full() const noexcept override { return tap_.state() == RecTap::State::Done && (tap_.overrun_frames() != 0u || (!has_end() && capacity_ != 0u && tap_.frames() >= capacity_)); }
   std::uint32_t settle() noexcept override { return tap_.settle_ring(); }
   void release() noexcept override { tap_.release(); }
   void set_tap(hal::record::Tap tap) noexcept override {
@@ -85,11 +92,15 @@ class RecordService final : public hal::record::Recorder {
   }
 
  private:
+  // RecTap's kNoEnd (private): end_offset() answers it while the take has no end of its own. record_service_test pins it.
+  static constexpr std::uint32_t kNoEndOffset = 0xFFFFFFFFu;
+  bool has_end() const noexcept { return tap_.end_offset() != kNoEndOffset; }
   static RecTap::Align rec_align(hal::record::Align a) noexcept { return static_cast<RecTap::Align>(a); }  // the enumerators are the same, in the same order
   static void block(void* user, const hal::audio::BlockIo& io) noexcept;
   void record_block(const hal::audio::BlockIo& io, RecTap::State state) noexcept;
 
   RecTap tap_;
+  std::uint32_t capacity_ = 0;  // the frames of the take's memory (arm() writes it while the tap is Idle, the main loop reads it)
   std::atomic<std::uint8_t> tap_sel_{0};
   std::atomic<std::uint32_t> pattern_steps_{kDefaultPatternSteps};
   std::atomic<std::uint8_t> line_map_{0};   // hal::record::LineMap: the main loop writes, the render reads

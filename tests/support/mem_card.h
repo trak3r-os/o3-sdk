@@ -43,6 +43,8 @@ class MemCard final : public hs::Storage, public hs::StorageWriter {
   std::string read_fault;                         // read() of this file (its key: lower case) fails with Io; empty: none
   std::size_t ops = 0;                            // mutating calls so far
   int open_handles = 0;                           // files open() gave and close() has not taken back (a job that ends or is cancelled must leave none)
+  void (*write_hook)(void* ctx, std::size_t n) = nullptr;  // called with the size of every write() that went through (a test that gives the card a speed advances its clock here)
+  void* hook_ctx = nullptr;
   std::size_t exists_calls = 0;                   // exists() lookups so far (a directory lookup each on a real card)
   unsigned violations = 0;                        // mutating calls the guard refused
   bool dead = false;
@@ -328,6 +330,9 @@ class MemCard final : public hs::Storage, public hs::StorageWriter {
     Bytes& f = files[write_path_];
     f.insert(f.end(), static_cast<const std::uint8_t*>(src), static_cast<const std::uint8_t*>(src) + n);
     log.push_back("write " + std::to_string(n));
+    if (write_hook != nullptr) {
+      write_hook(hook_ctx, n);
+    }
     return hs::WriteStatus::Ok;
   }
   hs::WriteStatus finish() noexcept override {

@@ -25,6 +25,7 @@ void Recorder::disarm() noexcept {
 Recorder::State Recorder::state() const noexcept { return hw_ != nullptr ? hw_->state() : State::Idle; }
 std::uint32_t Recorder::frames() const noexcept { return hw_ != nullptr ? hw_->frames() : 0u; }
 std::uint32_t Recorder::overrun() const noexcept { return hw_ != nullptr ? hw_->overrun() : 0u; }
+bool Recorder::full() const noexcept { return hw_ != nullptr && hw_->full(); }
 std::uint32_t Recorder::settle() noexcept { return hw_ != nullptr ? hw_->settle() : 0u; }
 
 void Recorder::release() noexcept {

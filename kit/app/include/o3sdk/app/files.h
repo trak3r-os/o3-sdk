@@ -20,6 +20,20 @@
 //   (app/atomic_save.h has the sequence and what a power cut leaves): a power cut, a pulled card or a failing write at any step leaves the old file or the new one, whole.
 //   A load whose file is gone reads the `.bak`. The next save of that file heals the name.
 //
+//   The size of a step. A save writes bytes in steps of one pass of the main loop; the card is blocking, so a step is as long as the card takes for its bytes. On a card whose speed is not known
+//   (the first save after boot or after another card came) the first write step is one sector, 512 bytes, as a probe; the bytes and the time of the write steps then teach the service the card's
+//   speed, and from the second write step on it asks for the bytes the card does in half a slice (never more than atomic_save.h's 2 bytes a microsecond of the slice, 4,000, and AtomicSave
+//   never writes less than one sector). If the clock did not move inside the probe (the simulator's does not) the slice's 4,000 bytes stand. The limit is the sector: on a card slower than
+//   512 bytes per half slice (the U5 unit's, 83 KB/s) every step is still about 6 ms, over the job runner's bound of about 2.5 ms (slice + a quarter + 20 us), so a 30 s take counts about
+//   10,000 overruns there, with steps about 8 times shorter than the 48 ms of the 4,000-byte guess. Stats::max_step_us and overruns (the console's `files` line) say what a step cost on the
+//   unit; read them from the second save after boot. The file written is the same whatever the step.
+//
+//   A stale temporary file. A reset or a power cut in the middle of a save leaves `_o3save.tmp` (hal/save_guard.h kTempName) beside the file it was writing; the next save into that folder replaces it, but
+//   one that never comes leaves it there. Once for each card, in the first idle pass after its settings were read and while it can be written, the service looks for that one name in the app's own
+//   folder (`Apps/<id>/`: not a project folder, which the next save into it cleans, never Samples/, never another app's folder) and removes it when it is a file. It is a silent job like the
+//   settings' (no status, no strip line, not in Stats but for stale_removed): it never runs while another job does or a request waits, it gives way to the app's next request, and a card that is write
+//   protected, protected by a newer settings file, or the computer's is not touched. A second card, or the same one put back, is looked at again.
+//
 //   Reporting. Every call that returns false, and every job that ends, sets status() (polled) and, unless set_quiet(true), a line on the kit's strip (the progress while it runs,
 //   the result for a few seconds). The settings save is always silent. An app that never calls files() pays nothing in the render; the runtime still keeps the settings.
 //
@@ -82,10 +96,13 @@ class Files {
     std::uint32_t overruns = 0;      // steps that took clearly longer than their slice (core::JobRunner::overran)
     std::uint32_t last_bytes = 0;    // the last save's bytes, and
     std::uint32_t last_us = 0;       // the time its steps took, so bytes / us is the card's write speed
+    std::uint32_t stale_removed = 0; // `_o3save.tmp` files the sweep removed (a save that was cut left them)
   };
 
   static constexpr std::uint32_t kJobBudgetUs = 2000;       // what the running job gets of one pass of the main loop (track3r-os's kJobBudgetUs)
   static constexpr std::size_t kLoadBytesPerPass = 16 * 1024;  // a load reads this much a pass (track3r-os's, about 2 ms of card at 8 MB/s)
+  static constexpr std::uint32_t kLearnWindowUs = 1000000;   // the write speed is the average over about the last second of writing
+  static constexpr unsigned kSweepTries = 3;                 // jobs of the sweep that failed before the card is left alone
   static constexpr std::uint32_t kSettingsDebounceMs = 1500;   // the kit's settings are written this long after the last change (track3r-os's)
   static constexpr std::size_t kStripChars = 72;
 
@@ -97,7 +114,7 @@ class Files {
   // The volume of the mounted card (the CARD section shows it); empty (FsKind::None) when none is mounted or there is no card capability.
   hal::storage::VolumeInfo volume() const noexcept { return ready_ && storage_ != nullptr ? storage_->volume() : hal::storage::VolumeInfo{}; }
   // A card job (or a request waiting to start) is there: no new call is taken, and the FIRMWARE section says SAVING.
-  bool busy() const noexcept { return kind_ != Kind::None || pend_ != Kind::None; }
+  bool busy() const noexcept { return (kind_ != Kind::None && kind_ != Kind::Sweep) || pend_ != Kind::None; }
 
   // Saves `bytes` at `data` as `folder`/`name` (Replace: the old one kept as .bak; NewOnly: refused when the name is taken). `data` stays unchanged until the job is Done or Failed.
   // false: refused now (busy, no card, a name or folder the guard refuses, nothing to save); status() says why.
@@ -200,12 +217,12 @@ class Files {
     return kind_ == Kind::Settings || (seen_ && sig_ != saved_ && sread_ == SettingsRead::Writable && !gave_up_ && card() == Card::Ready);
   }
   // A job of the app (a save, a load, a listing, a request waiting to start), not the kit's own settings write.
-  bool app_busy() const noexcept { return (kind_ != Kind::None && kind_ != Kind::Settings) || pend_ != Kind::None; }
+  bool app_busy() const noexcept { return (kind_ != Kind::None && kind_ != Kind::Settings && kind_ != Kind::Sweep) || pend_ != Kind::None; }
   // The settings that are due are written in the next pass, without the rest of the 1.5 s of quiet.
   void flush_settings() noexcept { flush_ = true; }
 
  private:
-  enum class Kind : std::uint8_t { None, Save, SaveStream, Wav, Load, LoadStream, List, Marker, Settings };
+  enum class Kind : std::uint8_t { None, Save, SaveStream, Wav, Load, LoadStream, List, Marker, Settings, Sweep };
   enum class Stage : std::uint8_t { CheckFolder, Number, Open, Run, Sizes };
 
   // The runner's job: a thin adapter, so that the app-facing cancel() is not the runner's.
@@ -245,6 +262,9 @@ class Files {
 
   void launch() noexcept;
   void launch_settings() noexcept;
+  void launch_sweep() noexcept;
+  // A job of the app's (or the one the strip shows) is running: not the silent ones, the settings save and the sweep.
+  bool app_busy_job() const noexcept { return kind_ != Kind::None && kind_ != Kind::Settings && kind_ != Kind::Sweep && slot_ >= 0; }
   bool begin_save_job(const char* name, Mode mode, SaveSource& source) noexcept;
   bool start_job() noexcept;
   void set_label(const char* verb, const char* name) noexcept;
@@ -261,6 +281,9 @@ class Files {
   core::JobStatus step_load(std::uint32_t budget_us) noexcept;
   core::JobStatus step_list(std::uint32_t budget_us) noexcept;
   core::JobStatus step_marker() noexcept;
+  core::JobStatus step_sweep() noexcept;
+  std::uint32_t write_budget(std::uint32_t budget_us) const noexcept;
+  void learn_write(std::uint32_t bytes, std::uint32_t us, std::uint32_t asked) noexcept;
   bool open_for_load() noexcept;
   void close_file() noexcept;
   core::JobStatus step_collect(std::uint32_t budget_us) noexcept;
@@ -315,6 +338,17 @@ class Files {
   std::uint32_t read_ = 0;
   std::size_t stage_have_ = 0;
   std::size_t stage_pos_ = 0;
+
+  // The card's write speed as the steps of the saves showed it: bytes and microseconds, halved together when the sum grows (a running average). Zero until a step was timed; cleared when another card comes.
+  std::uint32_t wr_bytes_ = 0;
+  std::uint32_t wr_us_ = 0;
+  std::uint32_t wr_last_ = 0;  // the bytes the last write step wrote: the next asks for twice that at most (write_budget)
+  bool wr_probed_ = false;  // a write step has run on this card (its clock may not have moved: then the slice's guess stands)
+
+  // The sweep of stale temporary files: due once for each card, and the state of its one job.
+  bool sweep_due_ = true;
+  bool sweep_found_ = false;  // the first step saw the file: the second removes it
+  unsigned sweep_tries_ = 0;  // jobs started for this card that did not finish (a card that fails them is left alone)
 
   // The listing and the WAV's number.
   std::size_t list_pos_ = 0;  // the next entry of the scan's index to look at

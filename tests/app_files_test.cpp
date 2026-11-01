@@ -1550,3 +1550,360 @@ TEST_CASE("files: a card with a settings file that is newer, too big or unreadab
     CHECK(settings_on_card(card, on_card));
   }
 }
+
+// ---- The size of a step: it follows the card ---------------------------------------------------------------------------------------
+
+namespace {
+
+// A card with a write speed: every write moves the rig's clock by `us_per_byte` microseconds a byte and counts the bytes (the card is blocking: that is how a step gets long).
+struct CardClock {
+  host::FakeClock* clock = nullptr;
+  std::uint32_t us_per_byte = 0;
+  std::uint64_t bytes = 0;  // written since the counter was last taken
+  std::uint32_t fast_bytes = 0;  // the first bytes written cost fast_us in all, not us_per_byte each (sectors that landed in the filesystem's cache)
+  std::uint32_t fast_us = 0;
+  std::uint32_t done = 0;        // bytes written so far, to fast_bytes
+  static void hook(void* ctx, std::size_t n) {
+    auto* self = static_cast<CardClock*>(ctx);
+    self->bytes += n;
+    std::uint32_t us = static_cast<std::uint32_t>(n) * self->us_per_byte;
+    if (self->done < self->fast_bytes) {
+      const std::uint32_t upto = std::min<std::uint32_t>(self->fast_bytes, self->done + static_cast<std::uint32_t>(n));
+      const std::uint32_t slow = static_cast<std::uint32_t>(n) - (upto - self->done);  // (the bytes of this write past the cached ones)
+      us = slow * self->us_per_byte + upto * self->fast_us / self->fast_bytes - self->done * self->fast_us / self->fast_bytes;
+    }
+    self->done += static_cast<std::uint32_t>(n);
+    self->clock->advance(us);
+  }
+};
+
+struct StepLog {
+  std::vector<std::uint32_t> bytes;  // what each pass wrote
+  std::vector<std::uint32_t> us;     // and how long the card took for it
+};
+
+// The save in `rig` to its end, a pass at a time; what each pass wrote and how long its card took are in the log.
+StepLog run_logged(Rig& rig, CardClock& cc) {
+  StepLog log;
+  unsigned n = 0;
+  do {
+    cc.bytes = 0;
+    const std::uint32_t before = rig.clock.now();
+    rig.pass();
+    const std::uint32_t elapsed = rig.clock.now() - before - core::kTicksPerMs;  // (a pass starts with the millisecond the rig gives it)
+    log.bytes.push_back(static_cast<std::uint32_t>(cc.bytes));
+    log.us.push_back(elapsed);
+  } while (rig.files.busy() && ++n < 20000);
+  return log;
+}
+
+std::uint32_t most(const std::vector<std::uint32_t>& v, std::size_t from = 0) {
+  std::uint32_t m = 0;
+  for (std::size_t i = from; i < v.size(); ++i) {
+    m = std::max(m, v[i]);
+  }
+  return m;
+}
+
+}  // namespace
+
+TEST_CASE("files: a WAV write step follows the card's speed, stays inside the step bound, and the file is the same bytes as on a fast card") {
+  constexpr std::uint32_t kFrames = 40'000;  // 160 KB of stereo
+  std::vector<std::int16_t> pcm(2u * kFrames);
+  for (std::size_t i = 0; i < pcm.size(); ++i) {
+    pcm[i] = static_cast<std::int16_t>(i * 7u + (i >> 5));
+  }
+  constexpr std::uint32_t kBound = Files::kJobBudgetUs + Files::kJobBudgetUs / 4u + 20u;  // core::JobRunner::overran: 2520 us
+
+  // The card as the simulator has it: no time passes inside a pass, nothing is learned: the first write step is the probe (one sector), then the slice's 4000 bytes stand.
+  MemCard fast;
+  seed(fast);
+  Rig fast_rig(fast, fast);
+  CardClock fast_cc;
+  fast_cc.clock = &fast_rig.clock;
+  fast.write_hook = &CardClock::hook;
+  fast.hook_ctx = &fast_cc;
+  REQUIRE(fast_rig.files.save_wav("", pcm.data(), kFrames, 2, 44100, "take"));
+  const StepLog fast_log = run_logged(fast_rig, fast_cc);
+  REQUIRE(fast_rig.done("SAVED"));
+  std::size_t fast_first = 0;
+  while (fast_log.bytes[fast_first] == 0u) {
+    ++fast_first;
+  }
+  CHECK(fast_log.bytes[fast_first] == 512u);
+  CHECK(fast_log.bytes[fast_first + 1u] == 4000u);
+  CHECK(most(fast_log.bytes) == 4000u);
+  const Bytes* want = fast.get("Apps/test/take_001.wav");
+  REQUIRE(want != nullptr);
+  CHECK(want->size() == 44u + 4u * kFrames);
+
+  // A card that takes 1 microsecond a byte (1 MB/s): the first write step is the probe (a sector), every one after it is half a slice of the card.
+  MemCard slow;
+  seed(slow);
+  Rig slow_rig(slow, slow);
+  CardClock slow_cc;
+  slow_cc.clock = &slow_rig.clock;
+  slow_cc.us_per_byte = 1;
+  slow.write_hook = &CardClock::hook;
+  slow.hook_ctx = &slow_cc;
+  REQUIRE(slow_rig.files.save_wav("", pcm.data(), kFrames, 2, 44100, "take"));
+  const StepLog slow_log = run_logged(slow_rig, slow_cc);
+  REQUIRE(slow_rig.done("SAVED"));
+  CHECK(slow_log.bytes.size() > fast_log.bytes.size());
+  // the steps that wrote: the first is the probe, and every one of them is inside the bound
+  std::size_t first = 0;
+  while (first < slow_log.bytes.size() && slow_log.bytes[first] == 0u) {
+    ++first;
+  }
+  REQUIRE(first + 2u < slow_log.bytes.size());
+  CHECK(slow_log.bytes[first] == 512u);
+  CHECK(most(slow_log.us, first) <= kBound);
+  CHECK(most(slow_log.bytes, first + 1u) <= 1000u + 8u);  // half a slice of a 1 MB/s card
+  CHECK(most(slow_log.bytes, first + 1u) >= 900u);
+  CHECK(slow_rig.files.stats().overruns == 0u);
+  const Bytes* got = slow.get("Apps/test/take_001.wav");
+  REQUIRE(got != nullptr);
+  CHECK(*got == *want);  // byte-identical
+  CHECK(slow.violations == 0u);
+  check_scope(slow);
+
+  // The status the app reads is the same: Done, SAVED, a thousand permille, the numbers of the last save.
+  const Files::Status st = slow_rig.files.status();
+  CHECK(st.phase == Files::Status::Done);
+  CHECK(std::strcmp(st.text, "SAVED") == 0);
+  CHECK(st.permille == 1000u);
+  CHECK(slow_rig.files.stats().last_bytes == want->size());
+}
+
+TEST_CASE("files: a probe that looks fast (a sector that landed in the cache) does not jump the next step to the cap: a step is at most twice the one before") {
+  std::vector<std::int16_t> pcm(2u * 20'000u, 5);
+  MemCard card;
+  seed(card);
+  Rig rig(card, card);
+  CardClock cc;
+  cc.clock = &rig.clock;
+  cc.us_per_byte = 3;   // 333 KB/s: a 4,000-byte step would take 12 ms
+  cc.fast_bytes = 512;  // but the first sector (the probe) went in 4 microseconds: 128 bytes a microsecond
+  cc.fast_us = 4;
+  card.write_hook = &CardClock::hook;
+  card.hook_ctx = &cc;
+  REQUIRE(rig.files.save_wav("", pcm.data(), 20'000, 2, 44100, "take"));
+  const StepLog log = run_logged(rig, cc);
+  REQUIRE(rig.done("SAVED"));
+  std::size_t first = 0;
+  while (log.bytes[first] == 0u) {
+    ++first;
+  }
+  REQUIRE(first + 4u < log.bytes.size());
+  CHECK(log.bytes[first] == 512u);  // the probe
+  // the estimate says the card is fast, the cap says one step more is at most 1,024 bytes (3 ms here, not 12), and from the second step on the card's real speed is what is learned
+  CHECK(log.bytes[first + 1u] <= 1024u);
+  CHECK(log.us[first + 1u] <= 3200u);
+  for (std::size_t i = first + 1u; i + 1u < log.bytes.size(); ++i) {  // (the last pass is the file's end)
+    if (log.bytes[i] != 0u && log.bytes[i - 1u] != 0u) {
+      CHECK(log.bytes[i] <= 2u * log.bytes[i - 1u]);
+    }
+  }
+  CHECK(most(log.bytes, first + 1u) <= 1024u);
+  CHECK(most(log.us, first + 1u) <= 3200u);
+  CHECK(card.get("Apps/test/take_001.wav")->size() == 44u + 4u * 20'000u);
+  // and on a card that really is fast the steps grow to the slice in a few steps: 512, 1024, 2048, 4000
+  MemCard quick;
+  seed(quick);
+  Rig quick_rig(quick, quick);
+  CardClock qc;
+  qc.clock = &quick_rig.clock;
+  qc.fast_bytes = 512;
+  qc.fast_us = 4;
+  qc.us_per_byte = 0;  // (the clock moves only for the probe: the others take no time, so the estimate is the probe's alone)
+  quick.write_hook = &CardClock::hook;
+  quick.hook_ctx = &qc;
+  REQUIRE(quick_rig.files.save_wav("", pcm.data(), 20'000, 2, 44100, "take"));
+  const StepLog qlog = run_logged(quick_rig, qc);
+  REQUIRE(quick_rig.done("SAVED"));
+  std::size_t qfirst = 0;
+  while (qlog.bytes[qfirst] == 0u) {
+    ++qfirst;
+  }
+  CHECK(qlog.bytes[qfirst] == 512u);
+  CHECK(qlog.bytes[qfirst + 1u] == 1024u);
+  CHECK(qlog.bytes[qfirst + 2u] == 2048u);
+  CHECK(qlog.bytes[qfirst + 3u] == 4000u);
+}
+
+TEST_CASE("files: a card slower than a sector in half a slice writes a sector a step, never less: every step is over the bound, and says so") {
+  std::vector<std::int16_t> pcm(2u * 8000u, 3);
+  MemCard card;
+  seed(card);
+  Rig rig(card, card);
+  CardClock cc;
+  cc.clock = &rig.clock;
+  cc.us_per_byte = 12;  // 83 KB/s
+  card.write_hook = &CardClock::hook;
+  card.hook_ctx = &cc;
+  REQUIRE(rig.files.save_wav("", pcm.data(), 8000, 2, 44100, "take"));
+  const StepLog log = run_logged(rig, cc);
+  REQUIRE(rig.done("SAVED"));
+  std::size_t first = 0;
+  while (log.bytes[first] == 0u) {
+    ++first;
+  }
+  CHECK(log.bytes[first] == 512u);             // the probe
+  CHECK(most(log.bytes) <= 512u);              // one sector: AtomicSave::kMinStepBytes is the floor
+  CHECK(most(log.us, first) >= 6144u);         // about 6 ms a step: over the runner's bound of 2,520 us, as the documentation says
+  CHECK(rig.files.stats().overruns >= log.bytes.size() / 2u);
+  CHECK(card.get("Apps/test/take_001.wav")->size() == 44u + 4u * 8000u);
+}
+
+// ---- The stale temporary file ---------------------------------------------------------------------------------------------------
+
+TEST_CASE("files: a stale _o3save.tmp in the app's folder is removed once, silently, and nothing else is touched") {
+  MemCard card;
+  seed(card);
+  card.make_dir_now("Apps/test/Song 1");
+  card.make_dir_now("Apps/other");
+  card.make_dir_now("Samples");
+  const Bytes stale = pattern(300, 9);
+  const Bytes keep = pattern(500, 4);
+  card.put("Apps/test/_o3save.tmp", stale);
+  card.put("Apps/test/riff.o3a", keep);
+  card.put("Apps/test/riff.o3a.bak", keep);
+  card.put("Apps/test/Song 1/_o3save.tmp", stale);  // a project folder: the next save into it replaces that one
+  card.put("Apps/other/_o3save.tmp", stale);        // another app's
+  card.put("Samples/_o3save.tmp", stale);
+  Rig rig(card, card);
+  rig.idle_ms(50);
+  CHECK_FALSE(card.has("Apps/test/_o3save.tmp"));
+  CHECK(rig.files.stats().stale_removed == 1u);
+  CHECK(card.removed() == std::vector<std::string>{"Apps/test/_o3save.tmp"});
+  CHECK(card.same("Apps/test/riff.o3a", keep));
+  CHECK(card.same("Apps/test/riff.o3a.bak", keep));
+  CHECK(card.same("Apps/test/Song 1/_o3save.tmp", stale));
+  CHECK(card.same("Apps/other/_o3save.tmp", stale));
+  CHECK(card.same("Samples/_o3save.tmp", stale));
+  CHECK(card.violations == 0u);
+  check_scope(card);
+  // silent: not an app's job (no status, no strip line, not counted), and nothing is running
+  CHECK(rig.files.status().phase == Files::Status::Idle);
+  Files::Strip line;
+  CHECK_FALSE(rig.files.strip(line));
+  CHECK(rig.files.stats().jobs == 0u);
+  CHECK_FALSE(rig.files.busy());
+  // once for the card: another file of that name that appears later is left to the next save
+  card.put("Apps/test/_o3save.tmp", stale);
+  rig.idle_ms(50);
+  CHECK(card.has("Apps/test/_o3save.tmp"));
+  CHECK(rig.files.stats().stale_removed == 1u);
+  // the same card put back, or another one, is looked at again
+  card.id = 2;
+  rig.idle_ms(50);
+  CHECK_FALSE(card.has("Apps/test/_o3save.tmp"));
+  CHECK(rig.files.stats().stale_removed == 2u);
+}
+
+TEST_CASE("files: the sweep never runs during a save, and a save that starts first is not touched by it") {
+  MemCard card;
+  seed(card);
+  Rig rig(card, card);
+  const Bytes big = pattern(60'000, 2);
+  REQUIRE(rig.files.save("", "riff.o3a", big.data(), big.size()));  // before the first pass: the sweep is due, the save is first
+  unsigned n = 0;
+  while (!card.has("Apps/test/_o3save.tmp") && ++n < 100) {
+    rig.pass();
+  }
+  REQUIRE(card.has("Apps/test/_o3save.tmp"));  // the save's own temporary file
+  while (rig.files.busy()) {
+    rig.pass();  // the save's temporary file stays until its own rename
+    REQUIRE(rig.files.stats().stale_removed == 0u);
+    REQUIRE(card.removed().empty());
+  }
+  CHECK(rig.done("SAVED"));
+  CHECK(card.same("Apps/test/riff.o3a", big));
+  rig.idle_ms(20);
+  CHECK(rig.files.stats().stale_removed == 0u);  // the sweep ran after it and found nothing
+  CHECK(card.removed().empty());
+  check_scope(card);
+}
+
+TEST_CASE("files: a sweep under way gives way to the app's request, and the save cleans what is there") {
+  MemCard card;
+  seed(card);
+  card.put("Apps/test/_o3save.tmp", pattern(200, 5));
+  Rig rig(card, card);
+  // pass 1 reads the settings, pass 2 starts the sweep (it looks), pass 3 would remove: the app asks in between
+  rig.pass();
+  rig.pass();
+  CHECK(card.has("Apps/test/_o3save.tmp"));
+  CHECK_FALSE(rig.files.busy());  // a sweep is not the app's job
+  const Bytes data = pattern(900, 6);
+  REQUIRE(rig.files.save("", "riff.o3a", data.data(), data.size()));
+  rig.pump();
+  CHECK(rig.done("SAVED"));
+  CHECK(card.same("Apps/test/riff.o3a", data));
+  CHECK_FALSE(card.has("Apps/test/_o3save.tmp"));
+  rig.idle_ms(30);
+  CHECK(card.open_handles == 0);
+  CHECK(card.violations == 0u);
+  check_scope(card);
+}
+
+TEST_CASE("files: the sweep leaves a folder of that name, a protected card, a write protected card and a card on the computer alone") {
+  const Bytes stale = pattern(100, 1);
+  {  // a FOLDER called _o3save.tmp is the user's
+    MemCard card;
+    seed(card);
+    card.make_dir_now("Apps/test/_o3save.tmp");
+    Rig rig(card, card);
+    rig.idle_ms(50);
+    CHECK(card.dirs.count("apps/test/_o3save.tmp") == 1u);
+    CHECK(card.ops == 0);
+    CHECK(rig.files.stats().stale_removed == 0u);
+  }
+  {  // write protected, and the computer's: not a write
+    for (const hst::WriteStatus g : {hst::WriteStatus::WriteProtected, hst::WriteStatus::Host, hst::WriteStatus::Unsupported}) {
+      MemCard card;
+      seed(card);
+      card.put("Apps/test/_o3save.tmp", stale);
+      card.gate_status = g;
+      Rig rig(card, card);
+      rig.idle_ms(50);
+      CHECK(card.same("Apps/test/_o3save.tmp", stale));
+      CHECK(card.ops == 0);
+    }
+  }
+  {  // the settings file is a newer major: the card is protected for the session
+    Bytes newer(512);
+    formats::chunk::Writer w(newer.data(), newer.size(), "O3SK");
+    w.begin("SETS");
+    w.u16(0x0200);
+    w.u16(1);
+    w.u16(1);
+    w.f32(2.0f);
+    w.end();
+    newer.resize(w.finish());
+    MemCard card;
+    seed(card);
+    card.put("Apps/test/system.o3s", newer);
+    card.put("Apps/test/_o3save.tmp", stale);
+    Rig rig(card, card);
+    KitValues v;
+    (void)rig.files.load_settings(v);
+    rig.idle_ms(50);
+    CHECK(card.same("Apps/test/_o3save.tmp", stale));
+    CHECK(card.ops == 0);
+  }
+  {  // a card that fails the removal is tried a few times and then left alone
+    MemCard card;
+    seed(card);
+    card.put("Apps/test/_o3save.tmp", stale);
+    card.fail_at = 0;
+    card.fail_with = hst::WriteStatus::Io;
+    Rig rig(card, card);
+    rig.idle_ms(200);
+    const std::size_t looked = card.exists_calls;
+    rig.idle_ms(200);
+    CHECK(card.exists_calls == looked);  // it stopped asking
+    CHECK(rig.files.stats().stale_removed <= 1u);
+    CHECK_FALSE(rig.files.busy());
+  }
+}

@@ -10,7 +10,7 @@
 //     hal::record::Take t;  t.buf = g_take;  t.capacity_frames = 44100 * 10;  t.align = hal::record::Align::Bar;      // at the next bar of the transport
 //     ctx.recorder().set_tap(hal::record::Tap::Master);                     // the master (a resample); Input is the codec
 //     ctx.recorder().arm(t);                                                // main loop, returns at once
-//     ...                                                                   // state() is Waiting, then Recording; frames() grows; overrun() stays 0
+//     ...                                                                   // state() is Waiting, then Recording; frames() grows; overrun() stays 0, full() false
 //     ctx.recorder().stop_at(hal::record::Align::Bar);                      // or disarm() now: the take ends on a bar (to the sample) / at the next block
 //     ...                                                                   // state() is Done
 //     ctx.recorder().save(ctx.files(), "", "take");                         // Apps/<app>/take_001.wav, a job of the files service (poll files().status())
@@ -57,8 +57,11 @@ class Recorder {
   State state() const noexcept;
   // Frames written so far; a Level take counts from the buffer's start with its ring (clip() is the audio).
   std::uint32_t frames() const noexcept;
-  // Frames that did not fit in the buffer (0: none lost; the take holds everything before them).
+  // Frames the take was meant to hold and the buffer could not (a stop_at() or auto_steps end that came after the buffer was full); 0 for a take that just filled the buffer before it had an end
+  // (a Free take): that is the end of the take, not an overrun (full()). The take holds everything before the lost frames.
   std::uint32_t overrun() const noexcept;
+  // The take ended because the buffer filled (Done; cleared by arm()): the app's "BUFFER FULL". false for a disarm() or a boundary inside the buffer, and without a recorder.
+  bool full() const noexcept;
   // A Level take once triggered: the ring put in time order; returns the leading frames that are not audio. clip() does this itself.
   std::uint32_t settle() noexcept;
   // Done to Idle: the take has been used (saved, or thrown away). The buffer is the app's again.

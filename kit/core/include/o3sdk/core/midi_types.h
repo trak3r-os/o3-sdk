@@ -79,6 +79,10 @@ constexpr MidiMessage midi_control(std::uint8_t channel, std::uint8_t cc, std::u
 //   pos       ticks at frame 0 of the block (0 while not playing); inc: ticks a sample. Continuous from block to block: the device
 //             slews `inc`, it never moves `pos` except at a Start or a Continue.
 //   tempo_mbpm  the master's tempo in milli-BPM (0: unknown, the engine keeps its own).
+//   pos_lo, inc_lo  32 more fractional bits of pos and inc (Q32.64 in all) of the engine's own transport, rounded so that the position is never
+//             below the exact one (dsp/transport.h, "Exact landing"); a device that follows a master leaves them 0.
+//   prev_gap  how far the previous block's last frame is behind `pos` (0: there is none), as the engine's Transport hands it to the hooks (dsp/transport.h,
+//             "One owner a tick"): what Engine::block_frame() reports of a block, ignored in a frame given to Engine::follow().
 struct ClockFrame {
   bool follow = false;
   bool playing = false;
@@ -87,6 +91,9 @@ struct ClockFrame {
   std::uint64_t pos = 0;
   std::uint64_t inc = 0;
   std::uint32_t tempo_mbpm = 0;
+  std::uint32_t pos_lo = 0;
+  std::uint32_t inc_lo = 0;
+  std::uint32_t prev_gap = 0;
 };
 static_assert(std::is_trivially_copyable<ClockFrame>::value, "a clock frame is a plain value");
 

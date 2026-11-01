@@ -13,6 +13,8 @@
 #include <o3sdk/hal/record.h>
 #include <o3sdk/platform/mk66/audio/record_service.h>
 
+#include "support/exact_grid.h"
+
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -84,12 +86,9 @@ struct Rig {
     }
     return svc.state() == hr::State::Done;
   }
-  // The sample at which the transport's sixteenth `k` begins, as dsp::frame_at() defines it: the first sample whose position has reached the tick.
-  std::uint64_t step_sample(std::uint64_t k) const {
-    const std::uint64_t inc = dsp::ticks_per_sample_q32(engine->tempo());
-    const std::uint64_t tick_q32 = (k * dsp::kTicksPerSixteenth) << 32;
-    return (tick_q32 + inc - 1u) / inc;
-  }
+  // The sample at which the transport's sixteenth `k` begins: the first sample whose position has reached the tick, in exact rational arithmetic (tests/support/exact_grid.h): the
+  // engine's own transport lands on it (dsp/transport.h, "Exact landing").
+  std::uint64_t step_sample(std::uint64_t k) const { return o3sdk::test::exact_frame(engine->tempo(), k * dsp::kTicksPerSixteenth); }
   // The first sixteenth that begins at or after the sample `from`.
   std::uint64_t step_at_or_after(std::uint64_t from) const {
     std::uint64_t k = 0;
@@ -158,10 +157,10 @@ TEST_CASE("record service: arm refuses what it cannot record, and the wrapped ca
   CHECK(r.svc.state() == hr::State::Recording);
 }
 
-TEST_CASE("record service: a take of the input is the block as it was, in order; a full buffer is counted and never written past") {
+TEST_CASE("record service: a take of the input is the block as it was, in order; a full buffer ends the take, is not an overrun, and is never written past") {
   Rig r;
   r.blocks(3);
-  constexpr std::uint32_t kCap = 1000;  // 15 blocks and 40 frames: the 16th block is cut and its 24 frames are the overrun
+  constexpr std::uint32_t kCap = 1000;  // 15 blocks and 40 frames: the 16th block is cut; a full buffer is the end of a free take, not frames lost
   alignas(4) static std::int16_t buf[2u * kCap + 64u];
   for (std::int16_t& s : buf) {
     s = kGuard;
@@ -171,7 +170,8 @@ TEST_CASE("record service: a take of the input is the block as it was, in order;
   const std::uint64_t start = r.pos;
   REQUIRE(r.run_until_done(40));
   CHECK(r.svc.frames() == kCap);
-  CHECK(r.svc.overrun() == 24u);
+  CHECK(r.svc.overrun() == 0u);
+  CHECK(r.svc.full());
   for (std::uint32_t i = 0; i < kCap; ++i) {
     REQUIRE(buf[2u * i] == ramp_l(start + i, 0));
     REQUIRE(buf[2u * i + 1u] == ramp_r(start + i, 1));
@@ -181,7 +181,8 @@ TEST_CASE("record service: a take of the input is the block as it was, in order;
   }
   r.blocks(10);
   CHECK(r.svc.frames() == kCap);
-  CHECK(r.svc.overrun() == 24u);
+  CHECK(r.svc.overrun() == 0u);
+  CHECK(r.svc.full());
   r.svc.release();
   CHECK(r.svc.state() == hr::State::Idle);
 }
@@ -420,6 +421,106 @@ TEST_CASE("record service: stop_at and auto_steps end a take at the sample of a 
   REQUIRE(r.run_until_done(400));
   CHECK(r.svc.frames() == r.step_sample(k2 + 2u) - r.step_sample(k2));
   r.svc.release();
+}
+
+TEST_CASE("record service: full() and overrun() tell a full buffer from frames a take lost: a Free take, auto_steps, an end beyond the buffer, an exact fill, a disarm") {
+  alignas(4) static std::int16_t buf[20000];
+  {  // a Free take that fills the buffer exactly (whole blocks): full, nothing lost, and the take has no end of its own (the service's reading of RecTap's end_offset())
+    Rig r;
+    REQUIRE(r.svc.arm(take_of(buf, 10u * kN)));
+    CHECK(r.svc.rec_tap().end_offset() == 0xFFFFFFFFu);
+    REQUIRE(r.run_until_done(40));
+    CHECK(r.svc.frames() == 10u * kN);
+    CHECK(r.svc.overrun() == 0u);
+    CHECK(r.svc.full());
+  }
+  {  // a Free take cut in the middle of a block: the same
+    Rig r;
+    REQUIRE(r.svc.arm(take_of(buf, 10u * kN + 7u)));
+    REQUIRE(r.run_until_done(40));
+    CHECK(r.svc.frames() == 10u * kN + 7u);
+    CHECK(r.svc.overrun() == 0u);
+    CHECK(r.svc.full());
+  }
+  {  // a take that is still recording is not full, and a disarmed one is not either
+    Rig r;
+    REQUIRE(r.svc.arm(take_of(buf, 10u * kN)));
+    r.blocks(3);
+    CHECK_FALSE(r.svc.full());
+    r.svc.disarm();
+    REQUIRE(r.run_until_done(5));
+    CHECK(r.svc.frames() == 3u * kN);
+    CHECK(r.svc.overrun() == 0u);
+    CHECK_FALSE(r.svc.full());
+  }
+  // The rest is on the grid of a running transport: a sixteenth is about 5,512 frames at 120 BPM.
+  const auto run_step_take = [&](std::uint32_t cap_delta, bool stop_on_step, bool auto2, std::uint32_t cap_override) {
+    struct Result {
+      std::uint32_t frames, overrun, span;
+      bool full;
+    };
+    Rig r;
+    REQUIRE(r.engine->set_tempo(120'000));
+    REQUIRE(r.engine->play());
+    r.blocks(3);
+    r.svc.set_tap(hr::Tap::Master);
+    // a sixteenth whose end falls at least 10 samples into its block, so a buffer 10 samples short runs out in the block that holds the end
+    std::uint64_t k = r.step_at_or_after(r.pos + 4u * kN);
+    while (r.step_sample(k + 1u) % kN < 10u) {
+      ++k;
+    }
+    const auto span = static_cast<std::uint32_t>(r.step_sample(k + 1u) - r.step_sample(k));
+    const std::uint32_t cap = cap_override != 0u ? cap_override : span - cap_delta;
+    hr::Take t = take_of(buf, cap, hr::Channels::Mix, hr::Align::Step);
+    if (auto2) {
+      t.auto_steps = 1;
+    }
+    REQUIRE(r.svc.arm(t));
+    while (r.svc.state() != hr::State::Recording) {
+      REQUIRE(r.pos < 40000u);
+      r.block();
+    }
+    if (stop_on_step) {
+      r.svc.stop_at(hr::Align::Step);
+    }
+    for (unsigned i = 0; i < 400 && r.svc.state() != hr::State::Done; ++i) {  // (while it records, nothing is lost or full yet: both read the tap's end and overrun only once it is Done)
+      CHECK(r.svc.overrun() == 0u);
+      CHECK_FALSE(r.svc.full());
+      r.block();
+    }
+    REQUIRE(r.svc.state() == hr::State::Done);
+    return Result{r.svc.frames(), r.svc.overrun(), span, r.svc.full()};
+  };
+  {  // stop_at(Step) with a buffer 10 samples short of the step: its end is known and 10 frames lie beyond the memory: overrun 10, and the buffer is full
+    const auto res = run_step_take(10, true, false, 0);
+    CHECK(res.frames == res.span - 10u);
+    CHECK(res.overrun == 10u);
+    CHECK(res.full);
+  }
+  {  // the same buffer exactly the step long: the take ends on its own boundary, neither full nor lost
+    const auto res = run_step_take(0, true, false, 0);
+    CHECK(res.frames == res.span);
+    CHECK(res.overrun == 0u);
+    CHECK_FALSE(res.full);
+  }
+  {  // auto_steps whose step count the memory cannot reach (a buffer of 1,000 frames for a sixteenth): the buffer ended it, as a Free take's: full, nothing lost
+    const auto res = run_step_take(0, false, true, 1000);
+    CHECK(res.frames == 1000u);
+    CHECK(res.overrun == 0u);
+    CHECK(res.full);
+  }
+  {  // auto_steps whose buffer is 10 short of the step: the end is known when the memory runs out: overrun 10, full
+    const auto res = run_step_take(10, false, true, 0);
+    CHECK(res.frames == res.span - 10u);
+    CHECK(res.overrun == 10u);
+    CHECK(res.full);
+  }
+  {  // auto_steps whose buffer is exactly the step: ends on the step, not full
+    const auto res = run_step_take(0, false, true, 0);
+    CHECK(res.frames == res.span);
+    CHECK(res.overrun == 0u);
+    CHECK_FALSE(res.full);
+  }
 }
 
 TEST_CASE("record service: a transport that stops ends a take that was told to stop on a boundary, where it stops") {

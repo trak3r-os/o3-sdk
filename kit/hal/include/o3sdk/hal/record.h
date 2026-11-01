@@ -19,7 +19,7 @@
 //   `preroll_frames` of what came before it kept; it needs no transport. A Master take starts on exactly the sample of the step; an Input take is what the codec delivers from
 //   that sample on, which lags the timeline by the loop's round trip (nothing here compensates it).
 //
-//   End. disarm() ends the take at the next block, a full buffer ends it (the frames that did not fit are counted, overrun(), and never overwrite anything), stop_at(Step | Bar |
+//   End. disarm() ends the take at the next block, a full buffer ends it (full(); nothing is overwritten, and a take with no end of its own loses nothing by it), stop_at(Step | Bar |
 //   Pattern) ends it at the sample of the next such step (the take is exactly the frames between the two samples), `auto_steps` ends it by itself that many sixteenths after it
 //   began, and a transport that stops ends a take that has a stop_at() pending where it stops.
 //
@@ -74,8 +74,12 @@ class Recorder {
   virtual State state() const noexcept = 0;
   // Frames written so far (a Level take: counted from the buffer's start, the ring included, once triggered; 0 before).
   virtual std::uint32_t frames() const noexcept = 0;
-  // Frames that did not fit in the buffer (0: none lost).
+  // Frames the take was meant to hold and the buffer could not: those between the buffer's end and the sample of the take's own end (a stop_at() boundary or an auto_steps count) when that end came
+  // after the buffer was full. 0 for a take that simply filled the buffer before it had an end (a Free one): a full buffer is the end of that take, not an overrun; see full().
   virtual std::uint32_t overrun() const noexcept = 0;
+  // The take ended because the buffer filled (true also when overrun() says frames were lost; false for a disarm() or a boundary that fell inside the buffer). Valid once the take is Done;
+  // cleared by arm(). false for an implementation that does not tell.
+  virtual bool full() const noexcept { return false; }
   // A Level take, once triggered: puts the ring in time order and returns the leading frames that are not audio. Idempotent; 0 for every other take.
   virtual std::uint32_t settle() noexcept = 0;
   // Done to Idle.
