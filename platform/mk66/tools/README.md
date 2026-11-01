@@ -8,7 +8,8 @@ Python 3 standard library only, run as `python3 -I <tool>` (nothing from the cur
 
 `o3console.py`, `o3shot.py`, `o3audio.py`, `o3hil.py`, `o3disk.py` and `o3tone.py` are track3r-os's, copied from its `platform/mk66/tools` and
 identical but for the rename `o3os` -> `o3sdk` (mock replies and example names in the self-tests, an option name in a help text) and
-two edits in `o3hil.py`'s self-test, which looked for the tracker's tree (see "Differences", below). The unit keeps the USB identity of
+two edits in `o3hil.py`'s self-test, which looked for the tracker's tree (see "Differences", below). The rename stops short of the
+`o3os_1.0.1-...ptf` file names in `o3console.py`'s 30-character name checks, which stay as track3r-os has them. The unit keeps the USB identity of
 track3r-os (`16D0:0E9F`, product "Track3r"), so the tools find it the same way: `/dev/serial/by-id/*Track3r*` for the console and an
 ALSA card that names "track3r" for the audio. What an image calls itself is in `version`: track3r-os says `Track3r o3os, build <id>`,
 an o3sdk image `Track3r o3sdk, build <id>`; no tool parses that line (`--expect-version TEXT` is a substring test), so either works.
@@ -33,10 +34,15 @@ python3 -I platform/mk66/tools/o3console.py --update o3sdk-hello.ptf --crc <crc>
 ```
 
 `--put` first runs `check_image.py` on the file (`--expect-sp 0x20030000 --ramfunc-l 0x1FFF0000:0xC000`, a window that accepts
-track3r-os's images and o3sdk's) and prints the unit's `ok <name> <bytes> <crc> image <length>`; the CRC is the one `--update` wants.
+track3r-os's images and o3sdk's, but for the sector end below) and prints the unit's `ok <name> <bytes> <crc> image <length>`; the CRC is the one `--update` wants.
 `--update` arms and starts the hand-over, waits for the unit to leave and come back, and prints `version`. Exit status of both: 0 done,
 1 usage, 2 no prompt, 3 wrong card (`--expect-volume`), 4 the unit refused or failed, 5 it did not come back, 6 `--expect-version` not in
 the reply, 7 the bootloader did not take over.
+
+The name on the card has at most 30 characters, `.ptf` included (`--put` and `--update` refuse a longer one before anything is written: with 33 the SD
+bootloader flashed the first `.ptf` of `Firmware/` instead, OS-BUG-FWNAMELEN). The image must end on a 4 KiB boundary (`check_image.py`'s `sector_end`, the
+build pads it): `--put` refuses one that does not, and so does the unit (`image not padded: may not boot`). track3r-os v1.0.0 is such an image: it goes in
+by the card and the reset button.
 
 **A name that is already on the card is refused**: `--put` ends with `ERR already exists` and exit 4 (proven on a unit with track3r-os
 v1.0.0, 2026-10-25); the unit never overwrites a firmware file. The way out is not to put it again but to `--update` the file that is
@@ -92,7 +98,9 @@ may use the step kinds `cmd keys pad enc wait state leds shot audio`; `mix voice
 
 ## Differences from track3r-os's tools
 
-Besides the rename `o3os` -> `o3sdk` (`o3console.py`: the example name in the header and the self-test's file names and mock replies;
+Besides the rename `o3os` -> `o3sdk` (`o3console.py`: the example name in the header and the self-test's file names and mock replies,
+except the four `o3os_1.0.1-...ptf` names of the 30-character name checks, which `o3sdk_` would make 31 characters, as in
+`platform/mk66/tests/mk66_update_path_test.cpp`;
 `o3audio.py`: the unit-name hint list; `o3hil.py`: the same strings, a help text, `-DO3SDK_BENCH`), `o3hil.py`'s self-test changes in
 two places, both because o3sdk has no tracker tree around it: the button names are compared with `kit/app/src/panel.cpp` (`kNames`),
 not with `app/include/o3os/app/buttons.h`; and the check of the tracker's `save_test_card` scenario runs only when that file is in

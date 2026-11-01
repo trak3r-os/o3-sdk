@@ -265,7 +265,8 @@ doubles, and a count of warnings that must be 0; `tools/ci.sh host` is the host'
 
 You get `build-mk66/app/<id>.elf`, `.hex`, `.bin`, `.map`, `.ptf` (the checked HEX under the name the bootloader takes) and the link's
 region table (flash, SRAM_L, SRAM_U, SDRAM). The four ctests are static checks of the image: `<id>_image` (record checksums, every address at or below
-`0x000FFFFF`, one contiguous run, the initial stack pointer, a Thumb reset vector, every vector in flash or SRAM_L), `<id>_flashconfig` (bytes
+`0x000FFFFF`, one contiguous run ending on a 4 KiB flash sector boundary (the linker pads the image with zeros: the SD bootloader leaves a short last
+sector as it was, so an unpadded image can boot with stale bytes in its tail), the initial stack pointer, a Thumb reset vector, every vector in flash or SRAM_L), `<id>_flashconfig` (bytes
 `0x400..0x40F` exactly `ffffffffffffffffffffffffdef9ffff`: a wrong value can lock the chip for good), `<id>_ramfunc` (the SRAM_L hot code calls
 nothing in flash), `<id>_usb` (the USB vector and the console in the image: an image without them cannot be installed or read over USB).
 
@@ -330,7 +331,7 @@ flashes (track3r-os's `o3os_1.0.0.ptf`, or the official image): that is the way 
 python3 -I ../o3-sdk/tools/o3install.py build-mk66/app/<id>.ptf --yes [--port /dev/serial/by-id/...Track3r...] [--name <id>-0.1.ptf] [--expect-version TEXT]
 ```
 
-It runs `check_image.py` first and never sends an image that fails it; reads `version` and `fw`; puts the file as `<id>-<crc32>.ptf` (the same build
+It runs `check_image.py` first and never sends an image that fails it (an image that does not end on a 4 KiB boundary is one: the unit refuses it too); reads `version` and `fw`; puts the file as `<id>-<crc32>.ptf` (the stem is cut so that the whole name has at most 30 characters; the same build
 keeps its name, so a second run only updates the file already on the card; a name that is there with another size is refused); prints the way back
 (the other images on the card, and the card's first `.ptf`, which the hidden reset button flashes); runs the update and waits for `version` to
 contain the build label it read out of the image (`--expect-version` replaces it). It stops at the first failure with the console's exit status (below).
@@ -348,7 +349,7 @@ python3 -I $O3/o3console.py --update <id>-0.1.ptf --crc <crc> --yes-update --exp
 ```
 
 - `--put` of a name that is already on the card is refused (`ERR already exists`, exit 4): use a new `--name` per build (a version or the CRC in
-  it; names are `[0-9A-Za-z][0-9A-Za-z._-]{0,47}.ptf`, and not starting with `Polyend`), or `--update` the file that is there with its CRC. The CRC of a
+  it; names are `[0-9A-Za-z][0-9A-Za-z._-]{0,25}.ptf`, 30 characters at most with `.ptf` (with a longer name the SD bootloader flashed another file, no error: the unit and the tools refuse it), and not starting with `Polyend`), or `--update` the file that is there with its CRC. The CRC of a
   file: `python3 -I -c 'import sys, zlib; print("%08X" % (zlib.crc32(open(sys.argv[1], "rb").read()) & 0xFFFFFFFF))' <file>`.
 - After the `--put`, run `fw` again: `first-ptf` is the file the hidden reset button flashes (the card's directory order decides, and a put can move
   it to your file). A stranded unit is recovered by a person pressing that button, so for an image not yet proven to boot, a `first-ptf` that is your

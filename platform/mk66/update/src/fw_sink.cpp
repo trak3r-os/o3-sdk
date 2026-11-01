@@ -20,6 +20,7 @@ fwp::Refusal refusal_of(Fault f) noexcept {
     case Fault::NoDir: return fwp::Refusal::NoFolder;
     case Fault::NotFound: return fwp::Refusal::NotFound;
     case Fault::BadName: return fwp::Refusal::BadName;
+    case Fault::NameLong: return fwp::Refusal::NameTooLong;
     case Fault::NotArmed:
     case Fault::Readback: return fwp::Refusal::NotChecked;  // (a Readback is the file that changed since the check: install() asked for a check that no longer holds)
     case Fault::Expired: return fwp::Refusal::Expired;
@@ -63,6 +64,7 @@ fwp::CheckStatus FwServiceSink::poll_check() noexcept {
   s.image = u.image;
   s.crc = u.crc;
   s.offset = u.offset;
+  s.offset_known = u.fault != Fault::NotPadded;  // the end of the HEX stream is a byte count, not an image address
   s.fault = s.state == fwp::CheckStatus::State::Failed ? fault_name(u.fault) : nullptr;
   return s;
 }

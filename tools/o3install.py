@@ -47,7 +47,8 @@ CHECK_IMAGE = os.path.join(TOOLS, "check_image.py")
 # What the build's check holds an image to (o3console.py's own constants; the gate's values for this unit).
 EXPECT_SP = "0x20030000"
 RAMFUNC_L = "0x1FFF0000:0xC000"
-NAME_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,47}\.ptf$", re.IGNORECASE | re.ASCII)
+NAME_MAX = 30  # characters in all, ".ptf" included: with a longer name the SD bootloader flashed another file (OS-BUG-FWNAMELEN; o3console.py UPDATE_NAME_MAX)
+NAME_RE = re.compile(r"^[0-9A-Za-z][0-9A-Za-z._-]{0,%d}\.ptf$" % (NAME_MAX - len(".ptf") - 1), re.IGNORECASE | re.ASCII)
 LABEL_RE = re.compile(rb"Track3r diag - (.{1,120}?) - 'help'")
 MAX_IMAGE = 4 * 1024 * 1024  # the console refuses more
 
@@ -69,9 +70,9 @@ def crc32_of(data):
 
 
 def default_name(path, crc):
-    """<stem>-<crc32 in lower case hex>.ptf, the stem cut so the whole name stays inside the 48 characters the unit takes."""
+    """<stem>-<crc32 in lower case hex>.ptf, the stem cut so the whole name stays inside the NAME_MAX (30) characters the update takes."""
     stem = re.sub(r"[^0-9A-Za-z._-]", "_", os.path.splitext(os.path.basename(path))[0]).lstrip("._-") or "image"
-    return "%s-%08x.ptf" % (stem[:48 - len(".ptf") - 9], crc)
+    return "%s-%08x.ptf" % (stem[:NAME_MAX - len(".ptf") - 9], crc)
 
 
 def valid_name(name):
@@ -228,7 +229,7 @@ def install(args, out=None):
     crc = crc32_of(data)
     name = args.name or default_name(path, crc)
     if not valid_name(name):
-        raise Stop(1, "%r is not a name the unit accepts (<1..48 of 0-9A-Za-z._-, first alphanumeric>.ptf, no '..'): give --name" % name)
+        raise Stop(1, "%r is not a name the unit accepts (<1..26 of 0-9A-Za-z._-, first alphanumeric>.ptf, no '..', at most 30 characters in all): give --name" % name)
     say("image %s: %d bytes, CRC-32 %08X, to be Firmware/%s" % (path, len(data), crc, name))
 
     # 1. check: nothing reaches the unit before the image has passed.
@@ -464,7 +465,7 @@ def self_test():
 
     # Pure parts.
     expect(default_name("build/app/o3_303.ptf", 0x1A2B3C4D) == "o3_303-1a2b3c4d.ptf", "default name")
-    expect(valid_name(default_name("x" * 100 + ".ptf", 1)) and len(default_name("x" * 100 + ".ptf", 1)) <= 48, "a long stem is cut inside 48")
+    expect(valid_name(default_name("x" * 100 + ".ptf", 1)) and len(default_name("x" * 100 + ".ptf", 1)) <= NAME_MAX, "a long stem is cut inside 30")
     expect(default_name("a b$c.ptf", 255) == "a_b_c-000000ff.ptf", "odd characters become '_'")
     expect(valid_name("a.ptf") and not valid_name("../a.ptf") and not valid_name("a.bin") and not valid_name(".a.ptf") and not valid_name("a..b.ptf"), "name rule")
     fw = parse_fw("fw: write path ENABLED\ncard: volume ABCD-1234, FAT32, Firmware/ yes, write-protect no\nFirmware/ in directory order (* = the .ptf the reset button flashes):\n"

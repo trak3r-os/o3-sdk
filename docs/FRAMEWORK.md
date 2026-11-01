@@ -302,7 +302,9 @@ the app's. "Por defecto config lleva el flasheo de otro firmware": any engine bu
   TO name?", F1 again starts the sliced check, F1 once more at "IMAGE OK, length, CRC" installs; any other control takes a question back, F8
   cancels a check, and nothing is written before INSTALL. Past INSTALL no key acts. The list stops at 12 files (track3r-os's OS-BUG-FWLIST,
   ported as it is). The path is `hal::firmware::FirmwareSink`: on the unit `update::device::sink()`, the same service `fw` uses, with its
-  guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`).
+  guards unchanged; in the simulator a fake over a folder (`--firmware-dir`, `sim/README.md`). A file whose name has more than 30 characters (`.ptf`
+  included) is listed, but F1 on it says "NAME TOO LONG: 30 MAX" and asks nothing (OS-BUG-FWNAMELEN: the SD bootloader flashed another file); an image
+  that does not end on a 4 KiB boundary fails the check with "IMAGE NOT PADDED: MAY NOT BOOT" (OS-GATE-BOOTCRASH; the build pads every image).
 - An app can refuse for a moment with `App::update_blocker(ctx)` (a text, or null: asked when the list opens and at INSTALL), for
   example while it records.
 - **The app's own pages** (`app/config_page.h`, M2c slice CP): `App::config_pages()` is how many (at most 4, default 0: the screen is the kit's alone) and `App::config_page(i, out)` page `i`'s constexpr

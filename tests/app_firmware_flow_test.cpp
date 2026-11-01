@@ -265,6 +265,71 @@ TEST_CASE("firmware flow: a failed check returns to the list with the fault and 
   CHECK(r.sink.count("cancel") >= 1u);  // the failed job is let go
 }
 
+TEST_CASE("firmware flow: an image not padded to a 4 KiB sector is refused by the check with its own line, inside the dialog's width, and nothing is installed (OS-GATE-BOOTCRASH)") {
+  Rig r;
+  FakeFirmwareSink::Script bad;
+  bad.verdict = State::Failed;
+  bad.fault = "image not padded: may not boot";  // platform/mk66/update/fault.h fault_name(Fault::NotPadded)
+  bad.offset = 927932;                            // 0xE28BC, the v1.0.0 image end (the stream's byte count, not an address): the screen must not print it
+  bad.offset_known = false;                       // what the real sink says for Fault::NotPadded
+  r.sink.script("TRACKER_1.PTF", bad);
+  REQUIRE(r.open());
+  REQUIRE(r.go());
+  REQUIRE(r.go());
+  r.passes(FakeFirmwareSink::kDefaultSlices);
+  CHECK(r.v.phase == Phase::List);
+  CHECK(r.v.bad);
+  CHECK(r.v.msg == "NOT A VALID IMAGE: IMAGE NOT PADDED: MAY NOT BOOT");
+  CHECK(r.v.msg.size() <= FirmwareView::kMsgChars);
+  CHECK(r.sink.installs == 0u);
+  CHECK(r.sink.count("install") == 0u);
+}
+
+// OS-BUG-FWNAMELEN (new Community OS behaviour; the 30 is OBSERVED): the SD bootloader flashed the first .ptf of Firmware/ for a 33-character name. A name over 30 characters (".ptf" included) is
+// listed like any other, but UPDATE on it is refused on the dialog's line, before question 1 and before the port is asked anything; 30 characters pass.
+TEST_CASE("firmware flow: a file name over 30 characters is listed but UPDATE refuses it: NAME TOO LONG, no question, nothing asked of the port") {
+  const std::string at30 = "o3sdk_1.0.1-stereo2.1-bnch.ptf";
+  const std::string at31 = "o3sdk_1.0.1-stereo2.1-bench.ptf";
+  const std::string at33 = "o3sdk_1.0.1-stereobase.1-bnch.ptf";
+  REQUIRE(at30.size() == hal::firmware::kUpdateNameMax);
+  REQUIRE(at31.size() == hal::firmware::kUpdateNameMax + 1u);
+  REQUIRE(at33.size() == 33u);
+  Rig r;
+  r.sink.clear_files();
+  r.sink.add(at33, 800000);
+  r.sink.add(at31, 800000);
+  r.sink.add(at30, 800000);
+  REQUIRE(r.open());
+  REQUIRE(r.v.n == 3);
+  CHECK(std::string(r.v.files[0].name) == at33);  // shown
+  for (std::uint8_t i = 0; i < 2; ++i) {
+    r.v.cursor = i;
+    r.sink.calls.clear();
+    CHECK(r.go());
+    CHECK(r.v.phase == Phase::List);  // no question 1
+    CHECK(r.v.msg == "NAME TOO LONG: 30 MAX");
+    CHECK(r.v.bad);
+    CHECK(r.sink.calls.empty());  // the port was not asked
+    CHECK(r.sink.installs == 0u);
+  }
+  r.v.cursor = 2;
+  CHECK(std::string(r.v.chosen()) == at30);
+  CHECK(r.go());  // 30 characters: the question is asked as always
+  CHECK(r.v.phase == Phase::AskUpdate);
+  CHECK(r.v.msg.empty());
+  CHECK(r.go());
+  CHECK(r.sink.count("begin_check " + at30) == 1u);
+  // The port refuses a name too (the service's NameLong): the same line.
+  Rig port;
+  port.sink.check_refusal = Refusal::NameTooLong;
+  REQUIRE(port.open());
+  REQUIRE(port.go());
+  CHECK(port.go());
+  CHECK(port.v.phase == Phase::List);
+  CHECK(port.v.msg == "NAME TOO LONG: 30 MAX");
+  CHECK(port.v.bad);
+}
+
 TEST_CASE("firmware flow: question 2 is answered by F1 alone; INSTALL reaches the port exactly once and nothing leaves the hand-over") {
   Rig r;
   r.to_question_two();

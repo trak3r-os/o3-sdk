@@ -156,6 +156,42 @@ TEST_CASE("fw client: a check reads the file in slices, reports progress, the im
   CHECK(b.svc.ui_slice().state == State::Checked);
 }
 
+TEST_CASE("fw client: an image not padded to a 4 KiB sector fails the check (NotPadded), the boundary exactly passes, and nothing is armed or handed over (OS-GATE-BOOTCRASH)") {
+  const std::size_t sector = 4096;
+  Bare b;
+  const std::string short_by_one = to_hex(good_image(sector - 0x410 - 1, false));
+  const std::string exact = to_hex(good_image(sector - 0x410, false));
+  b.store.put_file("short1.ptf", std::vector<std::uint8_t>(short_by_one.begin(), short_by_one.end()));
+  b.store.put_file("exact.ptf", std::vector<std::uint8_t>(exact.begin(), exact.end()));
+  NEED(b.svc.ui_check_begin("short1.ptf") == Fault::Ok);
+  const up::UiStatus s = b.drive();
+  CHECK(s.state == State::Failed);
+  CHECK(s.fault == Fault::NotPadded);
+  CHECK(s.offset == short_by_one.size());
+  CHECK(!s.installing);
+  CHECK(b.svc.ui_install() == Fault::NotArmed);  // no good check: the install refuses before the bootloader is asked
+  CHECK(b.host.calls.empty());
+  CHECK(!b.host.pin_low);
+  CHECK(!b.store.has(up::kFwInfoName));
+  NEED(b.svc.ui_check_begin("exact.ptf") == Fault::Ok);
+  const up::UiStatus ok = b.drive();
+  CHECK(ok.state == State::Checked);
+  CHECK(ok.image == sector);
+  {  // through the port: the screen is told the offset is not a place in the file (the stream's byte count is no image address)
+    Bare p;
+    p.store.put_file("short1.ptf", std::vector<std::uint8_t>(short_by_one.begin(), short_by_one.end()));
+    up::FwServiceSink sink(p.svc);
+    NEED(sink.begin_check("short1.ptf") == fwp::Refusal::None);
+    fwp::CheckStatus ps;
+    unsigned n = 0;
+    do {
+      ps = sink.poll_check();
+    } while (ps.state == fwp::CheckStatus::State::Running && ++n < 100u);
+    CHECK(ps.state == fwp::CheckStatus::State::Failed);
+    CHECK(!ps.offset_known);
+  }
+}
+
 TEST_CASE("fw client: a check that fails says why and at which byte, and a dropped check leaves the card as it was") {
   {  // the flash configuration field is wrong: the very rule that protects the MCU
     Bare b;
@@ -214,6 +250,36 @@ TEST_CASE("fw client: a check that fails says why and at which byte, and a dropp
     CHECK(b.svc.ui_slice().state == State::Idle);
     CHECK(b.svc.ui_install() == Fault::NotArmed);
   }
+}
+
+// OS-BUG-FWNAMELEN: a stored image whose name is over 30 characters is listed but never checked, armed or handed over (the SD bootloader flashes another file for it).
+TEST_CASE("fw client: a file name over 30 characters is listed, refused by the check, and nothing is armed") {
+  const std::string at30 = std::string(up::kUpdateNameMax - 4, 'b') + ".ptf";
+  const std::string at31 = std::string(up::kUpdateNameMax - 3, 'b') + ".ptf";
+  Bare b;
+  b.store.put_file(at30, b.img.bytes());
+  b.store.put_file(at31, b.img.bytes());
+  unsigned seen = 0;
+  NEED(b.svc.ui_list_begin() == Fault::Ok);
+  bool first = false;
+  up::FwEntry e;
+  while (b.svc.ui_list_next(e, first)) {
+    seen += (e.name == at30 || e.name == at31) ? 1u : 0u;
+  }
+  b.svc.ui_list_end();
+  CHECK(seen == 2u);  // both are shown
+  b.store.calls.clear();
+  CHECK(b.svc.ui_check_begin(at31.c_str()) == Fault::NameLong);
+  CHECK(b.svc.phase() == up::FwPhase::Idle);
+  CHECK(b.store.calls.empty());  // refused before the card was asked anything
+  CHECK(b.svc.ui_install() == Fault::NotArmed);
+  CHECK(!b.store.has(up::kFwInfoName));
+  CHECK(up::refusal_of(Fault::NameLong) == fwp::Refusal::NameTooLong);
+  // 30 characters pass the check, and a stale armed check is not replaced by a refused one
+  CHECK(b.svc.ui_check_begin(at30.c_str()) == Fault::Ok);
+  CHECK(b.drive().state == State::Checked);
+  CHECK(b.svc.ui_check_begin(at31.c_str()) == Fault::NameLong);
+  CHECK(b.svc.ui_install() == Fault::Ok);  // the earlier good check still stands
 }
 
 TEST_CASE("fw client: every refusal of a check names its reason and touches nothing") {
@@ -721,6 +787,8 @@ TEST_CASE("fw client: every fault maps to its port refusal (the whole table), an
       {Fault::OnHost, fwp::Refusal::OnComputer},
       {Fault::NotArmed, fwp::Refusal::NotChecked},
       {Fault::Expired, fwp::Refusal::Expired},
+      {Fault::NameLong, fwp::Refusal::NameTooLong},
+      {Fault::NotPadded, fwp::Refusal::Io},  // found by the check (state Failed, the fault text on the screen), like the other image faults
   };
   static_assert(sizeof kTable / sizeof kTable[0] == static_cast<unsigned>(Fault::Count), "one row per Fault");
   for (unsigned i = 0; i < static_cast<unsigned>(Fault::Count); ++i) {

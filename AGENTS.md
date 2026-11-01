@@ -144,7 +144,8 @@ The documented update paths, and nothing else:
 3. **By the USB console** of an image already on the unit: `o3console.py --put <ptf>`, then `--update` (`docs/NEW-APP.md` section 11). The tools
    are not run against a unit from a development session: the hardware session does it, with the maintainer's go for that image, after the gate,
    and only for an image whose `<app>_usb` check passed (an image with no console strands the unit until a person uses the card and the reset button).
-   Keep a known-good image as the card's first `.ptf` (the target of the reset button) before the first install.
+   Keep a known-good image as the card's first `.ptf` (the target of the reset button) before the first install. The file name has at most 30
+   characters with `.ptf`, and the image ends on a 4 KiB boundary (the build pads it): the unit refuses an image that does not, and a name that is longer.
 
 Hook-enforced where the tool supports hooks (`.claude/hooks/guard_flash.py`, PreToolUse on shell commands and file edits; check:
 `python3 -I .claude/hooks/guard_flash.py --selftest`): it refuses a hardware uploader or debug probe in command position (`openocd`, `pyocd`, J-Link,

@@ -37,9 +37,9 @@ defines `o3sdk_app()`).
 | `<name>.bin` | raw binary from address 0 |
 | `<name>.image-check.json` | the checks' results and the image facts |
 
-ctests (label `mk66`): `<name>_image` (record checksums, every address at or below `0x000FFFFF`, one contiguous run from 0, initial
-SP `0x20030000`, a Thumb reset vector inside the image, every vector in flash or in the SRAM_L code region), `<name>_flashconfig`
-(bytes `0x400..0x40F` exactly `ffffffffffffffffffffffffdef9ffff`, the test's own literal: a wrong value can lock the MCU for good),
+ctests (label `mk66`): `<name>_image` (record checksums, every address at or below `0x000FFFFF`, one contiguous run from 0 that ends on a
+4 KiB flash sector boundary (`sector_end`), initial SP `0x20030000`, a Thumb reset vector inside the image, every vector in flash or in the
+SRAM_L code region), `<name>_flashconfig` (bytes `0x400..0x40F` exactly `ffffffffffffffffffffffffdef9ffff`, the test's own literal: a wrong value can lock the MCU for good),
 `<name>_ramfunc` (the SRAM_L code calls nothing outside itself, no veneer), `mk66_ld` (the generated linker script against
 `mem_map.h`), `mk66_noinit_guard` (an initialised noinit, DMA-ring or `O3SDK_BIG` object does not compile), `mk66_dma_owner` (only
 `boot::dma_init()` writes DMA_CR and the DCHPRIs), `mk66_build_info` (`gen_build_info.cmake`: the kit's and the app's identity, "unknown",
@@ -50,10 +50,19 @@ SP `0x20030000`, a Thumb reset vector inside the image, every vector in flash or
 
 | Region | Use |
 |---|---|
-| FLASH 1 MiB at 0 | vector table, flash configuration field at `0x400`, code and constants, then the load images of `.ramfunc_l` and `.data`, one run with no hole |
+| FLASH 1 MiB at 0 | vector table, flash configuration field at `0x400`, code and constants, then the load images of `.ramfunc_l` and `.data`, then the zero pad (`.flashpad`) up to the next 4 KiB boundary: one run with no hole |
 | SRAM_L 64 KiB at `0x1FFF0000` | `.ramfunc_l` (the audio ISRs and pipeline; `O3SDK_RAMFUNC_L`) within `kRamfuncLBudget` = 32 KiB, linker-asserted; the rest free |
 | SRAM_U 192 KiB at `0x20000000` | `.noinit` (the 128-byte crash block first, at `0x20000000`), the 512-byte fault stack, `.dma_rings`, `.data`, `.bss`, at least 32 KiB free (asserted), the 24 KiB main stack at the top (`0x20030000`) |
 | SDRAM 16 MiB at `0x70000000` | `.sdram_bss` first: every `O3SDK_BIG` object (kit/core placement.h), NOLOAD, cleared word by word after the SDRAM test and before the constructors; then the app's arena, `__sdram_arena_start` to `__sdram_arena_end` (`sdram_arena()` in `platform.h`), neither placed nor cleared |
+
+**The image ends on a flash sector boundary** (OS-BUG-COSMBOOT, ported from track3r-os). The SD bootloader leaves a last 4 KiB sector that
+the image fills only in part neither erased nor programmed, so it keeps the previous image's bytes (track3r-os's unit crashed at boot on a stale
+`.data` load image; its `docs/hw/tracker-hardware-notes.md`, section 3). The linker pads the image with zeros up to the next 4 KiB boundary
+(`.flashpad` behind `.data`'s load image, at least one byte, `__image_end`, asserted; `kFlashSectorSize` in `mem_map.h`; the reasons are in
+`mk66.ld.in`), at a cost of up to 4 KiB of flash. `check_image.py check` refuses an image that does not end on a boundary (`sector_end`), so
+every `<app>_image` ctest and the post-link check do. The device's HEX validator refuses it too (`Fault::NotPadded`, "image not padded: may not
+boot"; OS-GATE-BOOTCRASH), at `o3console.py --put`, the unit's `fw` command and its update dialog. An older unpadded image (track3r-os v1.0.0)
+goes in by the card and the reset button.
 
 `O3SDK_BIG` puts its objects in the input section `.bss.sdram_bss` (NOBITS), which the `.sdram_bss` output section collects (listed
 before `.bss`, whose `.bss.*` pattern would take it into SRAM_U; `gen_ld.py check` verifies the order). An object starts at zero
@@ -140,7 +149,9 @@ card session with the maintainer (`docs/hw/2026-10-25.md`).
 Only through a documented update path, after `fw-gate-check` and with the maintainer's go (`CLAUDE.md`, "Hard rules"); never by a debug probe or an
 uploader.
 
-- **By the USB console** (the default image has one: `O3SDK_MK66_CONSOLE=ON`): `o3console.py --put <app>.ptf --name <name>.ptf`, then `--update <name>.ptf
+- **By the USB console** (the default image has one: `O3SDK_MK66_CONSOLE=ON`): `o3console.py --put <app>.ptf --name <name>.ptf` (the name has at most 30 characters
+  with `.ptf`: with 33 the SD bootloader flashed the first `.ptf` of `Firmware/` instead, no error, OS-BUG-FWNAMELEN; `--put`, `--update` and the unit's update
+  dialog refuse a longer one), then `--update <name>.ptf
   --crc <crc> --yes-update`; about 15 s, and the way back is the same command on the image already on the card (`tools/README.md`, "Putting and
   starting a firmware image"; the step by step is `docs/NEW-APP.md` section 11). It needs a unit that already runs an image with the console
   (track3r-os v1.0.0 or an o3sdk image). An image built without the console (`O3SDK_MK66_CONSOLE=OFF`, the skeleton) cannot be installed or read

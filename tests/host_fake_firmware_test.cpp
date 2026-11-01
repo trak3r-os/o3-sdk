@@ -103,6 +103,7 @@ TEST_CASE("fake firmware sink: a scripted check runs in slices with progress and
   s = run_until_done(sink);
   CHECK(s.state == State::Failed);
   CHECK(s.offset == 0x40Du);
+  CHECK(s.offset_known);  // the default: a fault that is a place in the file
   NEED(s.fault != nullptr);
   CHECK(std::strcmp(s.fault, "flash configuration field is not the required one") == 0);
   CHECK(sink.install() == Refusal::NotChecked);
