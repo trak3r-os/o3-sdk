@@ -696,6 +696,7 @@ void SystemConfig::step_theme(Context& ctx, int dir) noexcept {
 void SystemConfig::update(Context& ctx) noexcept {
   if (strip_on_ && core::tick_reached(ctx.now(), strip_until_)) {
     strip_on_ = false;
+    ctx.redraw();  // what the strip covered is the screen's again (a screen that skipped it, Context::strip_area(), draws it now)
   }
   if (ask_ != Ask::None && core::tick_reached(ctx.now(), ask_until_)) {
     ask_ = Ask::None;  // nobody confirmed

@@ -224,6 +224,10 @@ o3sdk::app::App& o3sdk_app() noexcept { static MyApp app; return app; }
   `theme()` (null, the default: the context's; or the theme the whole frame is drawn with). Both are asked every frame, and the system Config
   screen ignores them (full chrome, the context's theme). A screen with `None` can show the render's load itself: `Context::cpu_meter()` (the
   unit has a cycle counter) and `cpu_percent()` (the last block, published at each frame).
+  **The system strip** (a LEARN, save, card or USB notice, about 3 s, `Runtime::system_strip()`) is drawn last, over the screen's own pixels, in a 28 px band at the bottom: `{0, 452, 800, 28}` with
+  `None`, `{0, 430, 800, 28}` just above the soft-key row with `Full`. `Context::strip_area()` is that rect while a strip is up in the frame being drawn, and `{0, 0, 0, 0}` (w and h 0) otherwise; the runtime
+  sets it before every `draw()` from the same constants it draws the strip with, and redraws when the strip expires. The strip is opaque: a screen may skip any shape wholly inside `strip_area()` (a
+  screen near its display-list budget saves the words the strip would cover), and must not count on anything it draws there being seen. No screen has to ask.
 - `Context` (`context.h`): the engine, the panel's held state, time, `show()` to switch screens, the theme, `redraw()`.
 - `Input` (`input.h`): presses, releases and turns, raw, with Shift's state. A press arrives at the press, so pads play at once.
 

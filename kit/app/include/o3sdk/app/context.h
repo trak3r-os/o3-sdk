@@ -14,6 +14,7 @@
 #include <o3sdk/app/usb_audio.h>
 #include <o3sdk/core/tick.h>
 #include <o3sdk/dsp/engine.h>
+#include <o3sdk/ui/renderer.h>
 #include <o3sdk/ui/theme.h>
 
 #include <cstdint>
@@ -83,6 +84,12 @@ class Context {
   bool cpu_meter() const noexcept { return cpu_meter_; }
   std::uint32_t cpu_percent() const noexcept { return cpu_percent_; }
 
+  // Where the system strip (a LEARN, a save, the card or USB notice, about 3 s) is drawn in the frame this screen is drawing, over the bottom of the screen and over the screen's own pixels: the
+  // rect the runtime really draws it in ({0, 452, 800, 28} with Chrome::None, the same 28 px above the soft-key row with Chrome::Full), or {0, 0, 0, 0} (w and h are 0) when no strip is up. Set
+  // by the runtime before each draw() and the same through the whole frame. The strip is opaque: a screen may skip a shape wholly inside it, and must not count on anything it draws there
+  // being seen. A screen that is cheap enough does not need to ask (docs/FRAMEWORK.md, "Runtime").
+  ui::Rect strip_area() const noexcept { return strip_area_; }
+
  private:
   friend class Runtime;
   dsp::Engine* engine_ = nullptr;
@@ -106,6 +113,7 @@ class Context {
   bool app_assets_ok_ = false;
   bool cpu_meter_ = false;
   std::uint32_t cpu_percent_ = 0;
+  ui::Rect strip_area_{0, 0, 0, 0};  // the runtime's, written in draw() before the screen's draw() (the main loop: one context, no other writer)
 };
 
 }  // namespace o3sdk::app

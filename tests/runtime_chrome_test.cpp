@@ -41,9 +41,10 @@ class Probe final : public app::Screen {
   const char* title() const noexcept override { return "PROBE"; }
   Chrome chrome(const app::Context&) const noexcept override { return chrome_; }
   const ui::Theme* theme(const app::Context&) const noexcept override { return theme_; }
-  void draw(app::Context&, ui::Renderer& r, const ui::Rect& area) noexcept override {
+  void draw(app::Context& ctx, ui::Renderer& r, const ui::Rect& area) noexcept override {
     ++draws;
     seen = area;
+    strip_seen = ctx.strip_area();
     seen_theme = &r.theme();
   }
   void soft_keys(app::Context&, app::SoftKeys&) noexcept override { ++key_calls; }
@@ -53,6 +54,7 @@ class Probe final : public app::Screen {
   unsigned draws = 0;
   unsigned key_calls = 0;
   ui::Rect seen{-1, -1, -1, -1};
+  ui::Rect strip_seen{-1, -1, -1, -1};  // Context::strip_area() as the last draw() saw it
   const ui::Theme* seen_theme = nullptr;
 };
 
@@ -189,6 +191,61 @@ TEST_CASE("chrome and theme: the system Config screen has the full chrome and th
   CHECK_FALSE(r.h.runtime().system_open());
   CHECK(r.screen().seen_theme == &own_theme());
   CHECK(r.screen().seen.h == 480);
+}
+
+namespace {
+
+bool is_empty(const ui::Rect& r) { return r.w == 0 && r.h == 0; }
+bool is_rect(const ui::Rect& r, int x, int y, int w, int h) { return r.x == x && r.y == y && r.w == w && r.h == h; }
+
+}  // namespace
+
+TEST_CASE("strip_area: empty with no strip, the exact rect of the strip while one is up under either chrome, empty again after it expires") {
+  Rig r;
+  REQUIRE(r.screen().draws > 0u);
+  CHECK_FALSE(r.h.runtime().system().strip_active());
+  CHECK(is_empty(r.screen().strip_seen));
+
+  // Full chrome: the strip sits just above the 22 px soft-key row. A learn's notice is this call with kNoticeMs (runtime.cpp, learn_done).
+  r.h.runtime().system_strip("LEARNED CC 74 CHANNEL 3", -1, app::SystemConfig::kNoticeMs);
+  r.h.run_ms(80);
+  REQUIRE(r.h.runtime().system().strip_active());
+  CHECK(is_rect(r.screen().strip_seen, 0, 480 - app::kKeysH - 28, 800, 28));
+  CHECK(r.screen().strip_seen.y == 430);
+
+  // None: the strip is the bottom 28 px of the whole display.
+  r.screen().chrome_ = Chrome::None;
+  r.h.run_ms(80);
+  CHECK(is_rect(r.screen().strip_seen, 0, 452, 800, 28));
+
+  // The rect is the one the strip is drawn in: its first pixel row is the strip's top edge, and the row above is not the strip's.
+  const Frame f(r.h);
+  const std::uint32_t pane = pack(ui::theme(r.h.runtime().context().theme()).rgb(ui::Color::Pane));
+  CHECK(f.at(795, 452 + 14) != pane);  // opaque strip over the (empty) screen
+  CHECK(f.at(795, 451) == pane);
+
+  r.h.run_ms(3000);  // kNoticeMs
+  CHECK_FALSE(r.h.runtime().system().strip_active());
+  CHECK(is_empty(r.screen().strip_seen));
+  CHECK(Frame(r.h).at(795, 452 + 14) == pane);
+}
+
+TEST_CASE("strip_area: the screen is redrawn when the strip expires, at once, not on the frame clock") {
+  Rig r;
+  // The frame clock is 33 ms and a requested redraw is allowed 17 ms after the last frame: whatever the phase of the clock when the strip goes, a frame follows within 17 ms.
+  for (std::uint32_t phase = 0; phase < 33; phase += 4) {
+    r.h.run_ms(phase);
+    r.h.runtime().system_strip("NOTICE", -1, 100);
+    r.h.run_ms(60);
+    REQUIRE(r.h.runtime().system().strip_active());
+    CHECK_FALSE(is_empty(r.screen().strip_seen));
+    while (r.h.runtime().system().strip_active()) {
+      r.h.run_ms(1);
+    }
+    r.h.run_ms(18);
+    CHECK(is_empty(r.screen().strip_seen));  // the last frame drawn is one without the strip
+    r.h.run_ms(80);
+  }
 }
 
 namespace {

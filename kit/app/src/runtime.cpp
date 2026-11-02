@@ -38,6 +38,8 @@ constexpr core::Tick kMinFrameUs = 16'667;
 
 // The strip over the bottom of the screen (system_config.h): a Data-face line in the theme's row pitch.
 constexpr int kStripH = 28;
+// Where it is drawn: the bottom of the screen, above the soft-key row unless the screen has no chrome. draw() tells the screen this rect (Context::strip_area()) and draws the strip in it.
+constexpr Rect strip_rect(bool bare) noexcept { return Rect{0, ui::kScreenH - (bare ? 0 : kKeysH) - kStripH, ui::kScreenW, kStripH}; }
 
 // MIDI. The render takes at most this many notes from the device in a block (the rest wait there); the main loop hands App::midi() at most
 // this many messages in a pass.
@@ -417,6 +419,8 @@ bool Runtime::draw() noexcept {
     return false;
   }
   ctx_.redraw_ = false;
+  const Rect strip = strip_rect(bare);
+  ctx_.strip_area_ = sys_.strip_active() ? strip : Rect{0, 0, 0, 0};  // (the strip goes up and down in update(), not while a frame is drawn)
   if (!bare) {
     draw_header(r);
   }
@@ -427,10 +431,8 @@ bool Runtime::draw() noexcept {
   } else if (ctx_.screen_ != nullptr) {
     ctx_.screen_->draw(ctx_, r, bare ? kScreenArea : kContentArea);
   }
-  if (bare) {  // the strip goes last, over whatever the screen drew at the bottom
-    sys_.draw_strip(r, Rect{0, ui::kScreenH - kStripH, ui::kScreenW, kStripH});
-  } else {
-    sys_.draw_strip(r, Rect{0, ui::kScreenH - kKeysH - kStripH, ui::kScreenW, kStripH});
+  sys_.draw_strip(r, strip);  // the strip goes last, over whatever the screen drew at the bottom
+  if (!bare) {
     draw_keys(r);
   }
   last_words_ = static_cast<std::uint32_t>(r.words());
