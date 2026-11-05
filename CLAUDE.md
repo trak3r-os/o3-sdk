@@ -18,7 +18,8 @@ image on the unit), `docs/FRAMEWORK.md` (the reference; section 10 is the capabi
   commands), as in track3r-os (maintainer, 2026-10-25). Agents may write to an SD card mounted under `/media` or `/run/media`
   (never `/mnt`, never a raw device). No debug-probe flashing, no improvised uploaders. Formatting a card, or deleting files you
   did not put there, needs the maintainer's ask.
-- No secrets, personal data or binaries in git. Commit or push only when the maintainer asks.
+- No secrets, personal data or binaries in git. Commit after each verified slice (ctest green, the remaining unit check named in the
+  message), adding files by name, never `git add -A` or `git add .`. Push and tag only when the maintainer asks (decided 2026-11-05).
 - Never edit `../track3r-os`. Code ported from it (`kit/core`, `hal`, `eve`, `ui`, `usb`, `platform/host`, the MK66 drivers, the USB tools) stays identical
   to it apart from the rename and the documented cuts: report a defect in it to the maintainer, do not fix or work around it here.
 
