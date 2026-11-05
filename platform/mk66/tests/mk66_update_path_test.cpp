@@ -213,9 +213,9 @@ TEST_CASE("path guard: an update is armed for names of at most 30 characters, 31
     CHECK(!up::update_name_ok(name_of(n).c_str()));   // ... never armed
   }
   // The names of the unit's observation.
-  CHECK(up::update_name_ok("o3os_1.0.1-stbase.1-bench.ptf"));          // 29: installed
-  CHECK(up::update_name_ok("o3os_1.0.1-stereo2.1-bench.ptf"));         // 30: installed
-  CHECK(!up::update_name_ok("o3os_1.0.1-stereobase.1-bench.ptf"));     // 33: flashed the first .ptf instead
+  CHECK(up::update_name_ok("o3sdk_1.0.1-stbase.1-bench.ptf"));          // 29: installed
+  CHECK(up::update_name_ok("o3sdk_1.0.1-stereo2.1-bench.ptf"));         // 30: installed
+  CHECK(!up::update_name_ok("o3sdk_1.0.1-stereobase.1-bench.ptf"));     // 33: flashed the first .ptf instead
   // A name the guard refuses stays refused whatever its length.
   CHECK(!up::update_name_ok("a b.ptf"));
   CHECK(!up::update_name_ok("a..b.ptf"));
