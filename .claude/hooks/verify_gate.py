@@ -10,12 +10,15 @@ gets `transcript_path`, a SubagentStop hook `agent_transcript_path`. Without a t
 The evidence is the file time of ctest's own log: the newest build*/Testing/Temporary/LastTest.log of any build directory
 (build-host, build-m2-<slice>-host, build-mk66, ...). A run of any ctest after the edit satisfies it; the hook cannot tell which
 tests ran, so the final report must still quote the command and its result.
+A Bash command counts only if it ran in this tree (`elsewhere`): a session opened here that works in a sibling repository names files
+that are not these.
 `stop_hook_active` guarantees a single nudge, never a loop. Fails open on anything unexpected.
 `verify_gate.py --selftest` checks the logic on a scratch tree.
 """
 import glob
 import json
 import os
+import re
 import sys
 import tempfile
 
@@ -29,6 +32,8 @@ CODE_FILES = ("CMakeLists.txt",)
 CODE_EXT = (".c", ".cc", ".cpp", ".h", ".hh", ".hpp", ".py", ".txt", ".cmake", ".ld", ".in", ".s", ".S", ".sh")
 LOG = os.path.join("Testing", "Temporary", "LastTest.log")
 MAX_LINES_SCANNED = 400000
+CHDIR = re.compile(r"(?:^|[;&|(\n])\s*cd\s+(\S+)|\bgit\s+-C\s+(\S+)")
+ASSIGN = re.compile(r"(?:^|[;&|(\s])([A-Za-z_]\w*)=(/[^\s;&|]*)")
 
 
 def newest(paths):
@@ -42,7 +47,8 @@ def newest(paths):
 
 
 def transcript_edits(transcript):
-    """(paths of the Edit/Write calls, Bash commands that look like a write) of a JSON-lines transcript; empty when unreadable."""
+    """(paths of the Edit/Write calls, (command, cwd) of the Bash calls that look like a write) of a JSON-lines transcript; empty when
+    unreadable."""
     paths, commands = [], []
     try:
         with open(transcript, encoding="utf-8", errors="replace") as fh:
@@ -69,10 +75,33 @@ def transcript_edits(transcript):
                     elif item.get("name") == "Bash":
                         command = args.get("command")
                         if isinstance(command, str) and shell_edit_check.is_write_command(command):
-                            commands.append(command)
+                            commands.append((command, entry.get("cwd")))
     except OSError:
         return [], []
     return paths, commands
+
+
+def inside(path, root):
+    path = os.path.realpath(path)
+    return path == root or path.startswith(root + os.sep)
+
+
+def elsewhere(command, cwd, root):
+    """True when a Bash command ran in another tree: its `cd` or `git -C` targets are absolute paths outside root or, with no such target,
+    the transcript row's working directory is. Anything unknown (no cwd, a relative target, a variable the command does not set) counts
+    as here, so a real edit is not missed."""
+    assigned = dict(ASSIGN.findall(command))
+    targets = []
+    for cd, git_c in CHDIR.findall(command):
+        target = (cd or git_c).strip("'\"")
+        var = re.fullmatch(r"\$\{?(\w+)\}?(/\S*)?", target)
+        if var and var.group(1) in assigned:
+            target = assigned[var.group(1)] + (var.group(2) or "")
+        if target.startswith("/"):
+            targets.append(target)
+    if targets:
+        return not any(inside(t, root) for t in targets)
+    return bool(cwd) and not inside(cwd, root)
 
 
 def is_code(rel):
@@ -83,6 +112,7 @@ def verdict(root, transcript):
     """None, or the reason text that blocks the stop."""
     root = os.path.realpath(root)
     paths, commands = transcript_edits(transcript)
+    commands = [command for command, cwd in commands if not elsewhere(command, cwd, root)]
     mine = {}
     for raw in paths:
         full = os.path.realpath(raw if os.path.isabs(raw) else os.path.join(root, raw))
@@ -197,6 +227,24 @@ def selftest():
              {"transcript_path": transcript(tool_line("Bash", command="cd kit/core/src && sed -i 's/a/b/' a.cpp"))})
         case("a shell command that only reads it: no nudge", False,
              {"transcript_path": transcript(tool_line("Bash", command="grep -n foo kit/core/src/a.cpp"))})
+        def ran_in(cwd, line):  # a transcript row with its working directory
+            row = json.loads(line)
+            row["cwd"] = cwd
+            return json.dumps(row)
+
+        edit = tool_line("Bash", command="sed -i 's/a/b/' kit/core/src/a.cpp")
+        case("a shell edit run in this tree: nudge", True, {"transcript_path": transcript(ran_in(root, edit))})
+        case("the same command run in a sibling tree: no nudge", False, {"transcript_path": transcript(ran_in("/elsewhere", edit))})
+        case("a cd out of the tree: no nudge", False, {"transcript_path": transcript(ran_in(root, tool_line(
+            "Bash", command="cd /elsewhere && sed -i 's/a/b/' kit/core/src/a.cpp")))})
+        case("a cd into the tree from a sibling: nudge", True, {"transcript_path": transcript(ran_in("/elsewhere", tool_line(
+            "Bash", command="cd " + root + "/kit/core/src && sed -i 's/a/b/' a.cpp")))})
+        case("git -C through a variable set in the command, outside: no nudge", False, {"transcript_path": transcript(ran_in(root, tool_line(
+            "Bash", command="R=/elsewhere; git -C $R log > /tmp/x kit/core/src/a.cpp")))})
+        case("a variable the command does not set counts as here: nudge", True, {"transcript_path": transcript(ran_in(root, tool_line(
+            "Bash", command="cd $SOMEWHERE && sed -i 's/a/b/' kit/core/src/a.cpp")))})
+        case("an Edit call is judged by its path, not its cwd: nudge", True, {"transcript_path": transcript(ran_in(
+            "/elsewhere", tool_line("Edit", file_path=a)))})
         at("kit/core/src/a.cpp", -10)
         case("tests ran after the edit: no nudge", False, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
         at("docs/note.md", +10)
