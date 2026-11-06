@@ -91,6 +91,13 @@ class Midi {
   // What the runtime does with a control change before the app sees it.
   enum class Learned : std::uint8_t { No, Bound, Full, Moved };  // No: not for learn; Bound: the armed parameter now has it; Full: armed and the store is full (nothing bound); Moved: a binding took it
   Learned take_cc(const core::MidiMessage& m) noexcept;
+  // The parameters the last take_cc() that answered Moved applied (the runtime tells the app: App::midi_learned_moved). No allocation: one slot per binding.
+  struct MovedParam {
+    dsp::UnitId unit;
+    std::uint16_t field;
+  };
+  unsigned moved_count() const noexcept { return moved_n_; }
+  const MovedParam& moved(unsigned i) const noexcept { return moved_[i]; }
   void fill(KitValues& v) const noexcept;
   void restore(const KitValues& v) noexcept;
 
@@ -121,6 +128,9 @@ class Midi {
   core::LearnMode armed_mode_ = core::LearnMode::Pickup;
   std::uint8_t learned_cc_ = 0;
   std::uint8_t learned_channel_ = 0;
+  // Main loop only: written by take_cc(), read through moved() by the runtime (friend).
+  MovedParam moved_[kMaxBindings] = {};
+  unsigned moved_n_ = 0;
 };
 
 }  // namespace o3sdk::app

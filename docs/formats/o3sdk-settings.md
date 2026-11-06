@@ -8,7 +8,7 @@ What the system Config screen lets the user change, and the app did not ask for,
 "FORM" u32 length "O3SK"  SETS  [unknown chunks]  "CRC "
 ```
 
-At most 2,048 bytes (`settings::kMaxBytes`); the file of this version with only `SETS` is 230 bytes (32 keys: 4 + 32 x 6 bytes in `SETS`); `APPV` and `LRNB` add to it only when there is something in them (at most 32 values and 16 bindings: about 600 bytes in all).
+At most 2,048 bytes (`settings::kMaxBytes`); the file of this version with only `SETS` is 202 bytes (33 keys: 4 + 33 x 6 bytes in `SETS`); `APPV` and `LRNB` add to it only when there is something in them (at most 32 values and 16 bindings: about 600 bytes in all).
 
 ## 1. `SETS`
 
@@ -37,6 +37,7 @@ At most 2,048 bytes (`settings::kMaxBytes`); the file of this version with only 
 | 19 | the edited stem slots below apply (else the profile's factory slots) | 0, 1 |
 | 31 | DISPLAY brightness (slice CP, `app/brightness.h`) | 0 low (backlight duty 20), 1 medium (50), 2 high (128, the hardware's own and the default) |
 | 32 | PAD LIGHTS | 0 low (a third of every pad level), 1 medium (two thirds), 2 high (as drawn); a lit pad never drops below level 16 |
+| 33 | ENCODER (`Context::enc_mode`, appended: a file of 32 keys loads NORMAL) | 0 off, 1 normal (the default), 2 fast |
 | 20 .. 30 | stem slot 1 .. 11 of the profile, a mask of the 16 stem sources (bit 0 T1 .. bit 11 T12, 12 Master L, 13 Master R, 14 Send A, 15 Send B; the second value that is not a byte) | 0 .. 65535 |
 
 **A key is never reused and a new one is appended**, like a unit's parameter id; the next setting takes key 33. The writer writes every key it knows, in key order; the chunk is `4 + 6 count` bytes. The audio keys are applied at boot only where they differ from the defaults (source line mix, gain 0, monitor off, Europe, 87.50 MHz): a card of an app that never used audio in costs the codec and the input gate nothing.

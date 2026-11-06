@@ -121,6 +121,7 @@ TEST_CASE("kit commands: the names are the ones in scope, in table order, and ea
     CAPTURE(c.name);
     CHECK(std::string(c.name) == kKitNames[i]);
     CHECK(std::strlen(c.name) >= console::kNameMin);
+    static_assert(console::kNameMax == app::kDiagNameMax && console::kHelpMax == app::kDiagHelpMax && console::kNameMin == app::kDiagNameMin && console::kMaxAppCommands == app::kDiagMaxCommands, "one set of limits");
     CHECK(std::strlen(c.name) <= console::kNameMax);
     for (const char* p = c.name; *p != '\0'; ++p) {
       CHECK((*p >= 'a' && *p <= 'z'));

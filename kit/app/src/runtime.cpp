@@ -170,6 +170,7 @@ KitValues Runtime::kit_values() const noexcept {
   ctx_.usb_audio_.fill(v);
   v.brightness = ctx_.brightness_;
   v.pad_lights = ctx_.pad_lights_;
+  v.enc_mode = ctx_.enc_mode_;
   ctx_.midi_.fill(v);
   // The values of the app's pages, clamped into their descriptors: what config_get() gives now.
   const ConfigView& cv = ctx_.config_;
@@ -191,6 +192,7 @@ KitValues Runtime::kit_values() const noexcept {
 void Runtime::apply_kit_app(const KitValues& v) noexcept {
   ctx_.brightness_ = v.brightness > 2u ? 2u : v.brightness;
   ctx_.pad_lights_ = v.pad_lights > 2u ? 2u : v.pad_lights;
+  ctx_.set_enc_mode(v.enc_mode);
   ctx_.midi_.restore(v);
   for (unsigned i = 0; i < v.app_count && i < kAppValueSlots; ++i) {
     const ConfigItem* it = ctx_.config_.find_value(v.app_key[i]);
@@ -279,7 +281,57 @@ void Runtime::switch_screen() noexcept {
   }
   ctx_.screen_ = next;
   ctx_.screen_->enter(ctx_);
+  repeater_.reset(false);  // (a repeat in flight belongs to the screen that is leaving)
+  repeater_.set_repeat_buttons(ctx_.screen_->repeat_buttons(ctx_));
   ctx_.redraw_ = true;
+}
+
+// Auto-repeat (Screen::repeat_buttons). Only a button the screen asked for reaches the recogniser, so a screen that asks for none costs nothing
+// and behaves as before. The press itself was routed raw; the recogniser's own Tap for it is dropped, the repeats become presses flagged
+// `repeat`. Nothing repeats while the system screen, HELP or the lock own the input.
+void Runtime::feed_repeat(const core::InputEvent& e) noexcept {
+  if (e.kind != core::InputKind::Button || e.id >= 64u || ctx_.screen_ == nullptr) {
+    return;
+  }
+  const std::uint64_t mask = ctx_.screen_->repeat_buttons(ctx_);
+  const bool wanted = (mask & (std::uint64_t{1} << e.id)) != 0u;
+  // A release always reaches the recogniser while it holds anything (the mask may have changed since the press: the button must still let go).
+  if (!wanted && !(e.value == 0 && repeater_.held() != 0u)) {
+    return;
+  }
+  if (e.value != 0 && (locked_ || sys_.open() || help_.open())) {
+    return;  // (that press was the system's: no repeats of it)
+  }
+  repeater_.set_repeat_buttons(mask);
+  core::GestureList out;
+  repeater_.feed(e, core::kNoHints, out);  // (its Tap, repeat == false, is the press the screen already has)
+}
+
+void Runtime::advance_repeat() noexcept {
+  if (repeater_.held() == 0u) {
+    return;
+  }
+  if (locked_ || sys_.open() || help_.open()) {
+    repeater_.reset(false);
+    return;
+  }
+  core::GestureList out;
+  repeater_.advance(ctx_.now_, out);
+  for (const core::Gesture& g : out) {
+    if (!g.repeat || g.input.kind != core::InputKind::Button) {
+      continue;
+    }
+    Input in{};
+    in.type = Input::Type::Press;
+    in.kind = core::InputKind::Button;
+    in.id = g.input.id;
+    in.value = 127;
+    in.shift = ctx_.panel_.shift();
+    in.time = g.timestamp;
+    in.repeat = true;
+    route(in);
+    switch_screen();
+  }
 }
 
 // One input: the system layer's or the app's. The Config button is the runtime's and never reaches the app (press or release): it opens the system screen, or HELP with Shift held, and closes
@@ -351,8 +403,10 @@ void Runtime::poll() noexcept {
   for (unsigned n = 0; n < 32u && platform_.input.poll(e); ++n) {
     ctx_.panel_.apply(e);
     route(make_input(e, ctx_.panel_.shift()));
+    feed_repeat(e);
     switch_screen();
   }
+  advance_repeat();
 
   poll_midi();
   ctx_.audio_in_.poll(ctx_.ms_);
@@ -596,6 +650,11 @@ void Runtime::poll_midi() noexcept {
         (void)app_.midi(ctx_, m);
       } else if (took != Midi::Learned::Moved) {
         learn_notice(took);
+      } else {
+        for (unsigned i = 0; i < ctx_.midi_.moved_count(); ++i) {
+          const Midi::MovedParam& p = ctx_.midi_.moved(i);
+          app_.midi_learned_moved(ctx_, p.unit, p.field, engine_.param(p.unit, p.field));
+        }
       }
     }
   }

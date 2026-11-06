@@ -28,6 +28,7 @@
 #include <o3sdk/app/pad_leds.h>
 #include <o3sdk/app/screen.h>
 #include <o3sdk/app/system_config.h>
+#include <o3sdk/core/gesture.h>
 #include <o3sdk/dsp/engine.h>
 #include <o3sdk/eve/display_list_builder.h>
 #include <o3sdk/hal/audio.h>
@@ -197,6 +198,11 @@ class Runtime {
   std::uint8_t backlight_applied_ = 2;  // the brightness index the backlight was last told (2: high, the hardware's own)
   // What the system layer took: a press it swallowed is released to nobody (bit n = button n, pad n).
   std::uint64_t taken_buttons_ = 0;
+  // Auto-repeat of the buttons the top screen asked for (Screen::repeat_buttons): main loop only. The recogniser is fed only those buttons;
+  // switch_screen() sets its mask and resets it, so leaving a screen stops its repeats.
+  core::GestureRecognizer repeater_;
+  void feed_repeat(const core::InputEvent& e) noexcept;
+  void advance_repeat() noexcept;
   std::uint64_t taken_pads_ = 0;
   PadLeds leds_;
   core::Tick next_frame_ = 0;

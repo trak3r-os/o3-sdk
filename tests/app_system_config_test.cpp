@@ -201,13 +201,22 @@ TEST_CASE("system config: with no update path the sections are DISPLAY and INFO,
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
   r.tap(Button::F1);
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
-  r.tap(Button::Down);
-  CHECK(r.h->runtime().context().theme() == ui::ThemeId::Amiga);
-  r.tap(Button::Up);
-  CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
   r.h->turn(-1);
   r.h->run_ms(2);
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
+  // DOWN is the row below: the theme alone is no longer the whole of DISPLAY (ENCODER is always there), so UP and DOWN choose and no longer turn the theme.
+  r.tap(Button::Down);
+  CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
+  CHECK(r.h->runtime().context().enc_mode() == 1u);  // NORMAL
+  r.h->turn(1);
+  r.h->run_ms(2);
+  CHECK(r.h->runtime().context().enc_mode() == 2u);  // FAST
+  r.tap(Button::F1);  // goes round: OFF
+  CHECK(r.h->runtime().context().enc_mode() == 0u);
+  r.tap(Button::Up);
+  r.h->turn(1);
+  r.h->run_ms(2);
+  CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
 
   r.tap(Button::Right);
   CHECK(r.has("section=info"));
@@ -217,7 +226,7 @@ TEST_CASE("system config: with no update path the sections are DISPLAY and INFO,
   CHECK(r.has("section=info"));
   r.h->turn(1);  // INFO has no setting: the encoder does nothing
   r.h->run_ms(2);
-  CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
+  CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
   r.tap(Button::F8);  // BACK on the last level closes the screen
   CHECK_FALSE(r.h->runtime().system_open());
   r.open();

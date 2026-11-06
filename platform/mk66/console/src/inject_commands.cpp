@@ -87,8 +87,43 @@ void InjectCommands::pad(shell::Shell& sh, const shell::Args& a) noexcept {
   run(sh, p, r, "pad", "pad is 0..47", "pad <0..47> [tap|down|up] [vel 1..127]");
 }
 
-// (`enc accel` of track3r-os's cmd_enc is cut: o3-sdk has no encoder acceleration yet.)
+// `enc accel [off | <t1> <t2> [gap_ms]]` (OS-AUDIT-28, track3r-os cmd_enc_accel): the encoder acceleration (app/enc_accel.h). Shows the numbers; with arguments sets them first (not saved: ENCODER of the
+// system Config is what is kept).
+void InjectCommands::enc_accel(shell::Shell& sh, const shell::Args& a) noexcept {
+  EncAccelRequest q;
+  const InjectParse p = parse_enc_accel(a.argc, a.argv, q);
+  if (p == InjectParse::Usage) {
+    sh.out().text("usage: enc accel [off | <t1> <t2> [gap_ms]]   x4 from t1 detents of a run, x8 from t2 (1..255), gap 5..250 ms (default 6 16 60)\n");
+    return;
+  }
+  if (p == InjectParse::Unknown) {
+    sh.out().text("ERR need 1 <= t1 <= t2 <= 255 and gap_ms 5..250\n");
+    return;
+  }
+  EncAccelNumbers n{};
+  if (q.set) {
+    n = EncAccelNumbers{q.on, q.t1, q.t2, q.gap_ms};
+    if (!port_.enc_accel_set(n)) {
+      sh.out().text("ERR no app: it has not started\n");
+      return;
+    }
+  }
+  if (!port_.enc_accel_get(n)) {
+    sh.out().text("ERR no app: it has not started\n");
+    return;
+  }
+  if (!n.on) {
+    sh.out().text("enc accel off (a row a detent)\n");
+    return;
+  }
+  sh.out().text("enc accel x4 from ").dec(n.t1).text(", x8 from ").dec(n.t2).text(" detents of a run, gap ").dec(n.gap_ms).text(" ms\n");
+}
+
 void InjectCommands::enc(shell::Shell& sh, const shell::Args& a) noexcept {
+  if (a.argc >= 2 && a.argv[1] != nullptr && a.argv[1][0] == 'a' && a.argv[1][1] == 'c' && a.argv[1][2] == 'c' && a.argv[1][3] == 'e' && a.argv[1][4] == 'l' && a.argv[1][5] == '\0') {
+    enc_accel(sh, a);
+    return;
+  }
   InjectRequest r;
   const InjectParse p = parse_enc(a.argc, a.argv, r);
   run(sh, p, r, "encoder", "n is -64..64, not 0", "enc <n>   n detents, -64..64, not 0 (minus = counter-clockwise)");

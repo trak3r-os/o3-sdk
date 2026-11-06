@@ -32,6 +32,7 @@ KitValues non_default() {
   v.midi.follow_port = hal::midi::Port::Usb;
   v.midi.transport_in = false;
   v.midi.transport_out = false;
+  v.enc_mode = 2;  // B6: FAST
   v.in_source = 4;  // M2c slice AI: the audio in and the radio (mic high, 40 %, monitor 70, Japan, 82.10 MHz)
   v.in_gain = 40;
   v.in_monitor = 70;
@@ -108,23 +109,24 @@ TEST_CASE("settings: the keys are the documented ones, in order, and never move"
   CHECK(st::kUsbStem11 == 30);
   CHECK(st::kBrightness == 31);  // slice CP
   CHECK(st::kPadLights == 32);
-  CHECK(st::kKeyCount == 32);
+  CHECK(st::kEncAccel == 33);
+  CHECK(st::kKeyCount == 33);
   CHECK(st::kSetsVersion == 0x0100);
 }
 
 TEST_CASE("settings: the file of the defaults is the documented bytes") {
   const std::vector<std::uint8_t> f = file_of(KitValues{});
-  // FORM, length, O3SK, SETS 4 + 32 * 6 = 196 bytes (even: no pad), CRC. No APPV or LRNB: nothing to say.
-  REQUIRE(f.size() == 12 + 8 + 196 + 14);
+  // FORM, length, O3SK, SETS 4 + 33 * 6 = 202 bytes (even: no pad), CRC. No APPV or LRNB: nothing to say.
+  REQUIRE(f.size() == 12 + 8 + 202 + 14);
   CHECK(std::memcmp(f.data(), "FORM", 4) == 0);
   CHECK(std::memcmp(f.data() + 8, "O3SK", 4) == 0);
   CHECK(std::memcmp(f.data() + 12, "SETS", 4) == 0);
   CHECK(f[16] == 0);
-  CHECK(f[19] == 196);
+  CHECK(f[19] == 202);
   CHECK(f[20] == 0x01);  // version 1.0
   CHECK(f[21] == 0x00);
-  CHECK(f[22] == 0x00);  // thirty-two entries
-  CHECK(f[23] == 0x20);
+  CHECK(f[22] == 0x00);  // thirty-three entries
+  CHECK(f[23] == 0x21);
   // Entry 1: key 1 (theme), the value 0.0f; entry 2: key 2 (channel, omni 0); entry 3: key 3, out channel 1.0f = 0x3F800000.
   CHECK(f[24] == 0);
   CHECK(f[25] == 1);
@@ -144,7 +146,7 @@ TEST_CASE("settings: every setting round trips, the defaults and a file of chang
     st::Report rep;
     REQUIRE(st::read(f.data(), f.size(), back, rep) == st::Result::Ok);
     CHECK(back == v);
-    CHECK(rep.applied == 32);
+    CHECK(rep.applied == 33);
     CHECK(rep.skipped_keys == 0);
     CHECK(rep.skipped_values == 0);
     CHECK(rep.unknown_chunks == 0);
@@ -167,19 +169,19 @@ TEST_CASE("settings: a key the file lacks keeps the value the app set, one it ha
 
 TEST_CASE("settings: a key this version does not know is skipped and counted, the rest is read") {
   KitValues v;
-  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {33, 0.0f}, {0, 1.0f}});
+  const std::vector<std::uint8_t> f = sets_file(0x0100, {{st::kMidiChannel, 5.0f}, {99, 1.0f}, {st::kTheme, 2.0f}, {34, 0.0f}, {0, 1.0f}});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(v.midi.channel == 5);
   CHECK(v.theme == ui::ThemeId::White);
   CHECK(rep.applied == 2);
-  CHECK(rep.skipped_keys == 3);  // 99, 33 (the next key of a newer firmware) and 0
+  CHECK(rep.skipped_keys == 3);  // 99, 34 (the next key of a newer firmware) and 0
 }
 
 TEST_CASE("settings: a newer minor version is read as far as this version knows it") {
   KitValues v;
-  // Version 1.3 with entries a later firmware appended (key 33, 34) and two extra bytes at the end of the chunk.
-  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {33, 4.0f}, {34, 1.0f}}, 2, [](chunk::Writer&) {});
+  // Version 1.3 with entries a later firmware appended (key 34, 35) and two extra bytes at the end of the chunk.
+  const std::vector<std::uint8_t> f = sets_file(0x0103, {{st::kTheme, 1.0f}, {st::kMidiOutChannel, 9.0f}, {34, 4.0f}, {35, 1.0f}}, 2, [](chunk::Writer&) {});
   st::Report rep;
   REQUIRE(st::read(f.data(), f.size(), v, rep) == st::Result::Ok);
   CHECK(rep.newer_minor);
@@ -305,7 +307,7 @@ TEST_CASE("settings: a damaged file is refused at every byte and every cut, and 
 TEST_CASE("settings: a buffer that is too small writes nothing") {
   std::uint8_t tiny[40];
   CHECK(st::write(non_default(), tiny, sizeof tiny) == 0);
-  std::uint8_t exact[12 + 8 + 196 + 14];
+  std::uint8_t exact[12 + 8 + 202 + 14];
   CHECK(st::write(non_default(), exact, sizeof exact) == sizeof exact);
   CHECK(st::write(non_default(), nullptr, 0) == 0);
 }
@@ -460,4 +462,32 @@ TEST_CASE("settings: a binding that is not valid for a unit's parameter, or list
   REQUIRE(st::read(nan.data(), nan.size(), n, rep) == st::Result::Ok);
   CHECK(n.app_count == 1);
   CHECK(n.app_key[0] == 6);
+}
+
+TEST_CASE("settings: the encoder's acceleration is key 33, a file written before it (32 keys) loads with NORMAL, a value out of range is skipped") {
+  // The file a firmware without the key wrote: the 32 keys it had, in its order, and nothing for key 33.
+  std::vector<std::pair<std::uint16_t, float>> old;
+  for (std::uint16_t k = 1; k < st::kEncAccel; ++k) {
+    old.emplace_back(k, k == st::kTheme ? 1.0f : 0.0f);
+  }
+  REQUIRE(old.size() == 32u);
+  const std::vector<std::uint8_t> f = sets_file(0x0100, old);
+  KitValues fresh;
+  st::Report rep;
+  REQUIRE(st::read(f.data(), f.size(), fresh, rep) == st::Result::Ok);
+  CHECK(fresh.enc_mode == 1);  // NORMAL, the default
+  CHECK(rep.skipped_keys == 0);
+  // The new file says it and round trips.
+  KitValues fast;
+  fast.enc_mode = 2;
+  const std::vector<std::uint8_t> g = file_of(fast);
+  KitValues back;
+  REQUIRE(st::read(g.data(), g.size(), back, rep) == st::Result::Ok);
+  CHECK(back.enc_mode == 2);
+  // A mode this build does not have is refused and counted, the default stays.
+  const std::vector<std::uint8_t> bad = sets_file(0x0100, {{st::kEncAccel, 3.0f}});
+  KitValues keep;
+  REQUIRE(st::read(bad.data(), bad.size(), keep, rep) == st::Result::Ok);
+  CHECK(keep.enc_mode == 1);
+  CHECK(rep.skipped_values == 1);
 }

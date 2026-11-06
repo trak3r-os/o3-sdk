@@ -709,6 +709,8 @@ void cmd_rec(shell::Shell& sh, const shell::Args& a) {
 
 // No injection while the firmware update path is mid-flight: a token is armed, a screen's check waits for its INSTALL question (OS-FWCONFIG: only a pressed key answers it), or a
 // put / arm / hand-over is running (the arm token is bound to what the unit shows, and a stray key must not be what cancels or confirms anything).
+app::Context* g_context = nullptr;  // set by attach(); the main loop's
+
 class BoardInjectPort final : public InjectPort {
  public:
   bool input_up() noexcept override { return g_tee != nullptr; }
@@ -716,6 +718,34 @@ class BoardInjectPort final : public InjectPort {
   bool push(core::InputKind kind, std::uint8_t id, std::int16_t value) noexcept override { return input::device::scanner().inject(kind, id, value); }
   std::uint32_t now_ms() noexcept override { return uptime_ms32(); }
   void log(const char* text) noexcept override { console::log(text); }
+  bool enc_accel_get(EncAccelNumbers& out) noexcept override {
+    if (g_context == nullptr) {
+      return false;
+    }
+    const app::EncAccel::Config& c = g_context->enc_accel().cfg;
+    out = EncAccelNumbers{c.on, c.t1, c.t2, c.gap_ms};
+    return true;
+  }
+  bool enc_accel_set(const EncAccelNumbers& in) noexcept override {
+    if (g_context == nullptr) {
+      return false;
+    }
+    app::EncAccel::Config c;
+    c.on = in.on;
+    c.t1 = in.t1;
+    c.t2 = in.t2;
+    c.gap_ms = in.gap_ms;
+    if (in.on && !app::EncAccel::valid(c)) {
+      return false;
+    }
+    if (!in.on) {  // `off` keeps the numbers it had
+      c = g_context->enc_accel().cfg;
+      c.on = false;
+    }
+    g_context->enc_accel().cfg = c;
+    g_context->enc_accel().reset();
+    return true;
+  }
 };
 BoardInjectPort g_inject_port;
 InjectCommands g_inject(g_inject_port);
@@ -1057,6 +1087,7 @@ void attach(app::Runtime& runtime) noexcept {
   g_files = &runtime.context().files();
   g_audio_in = &runtime.context().audio_in();
   g_recorder = &runtime.context().recorder();
+  g_context = &runtime.context();
   g_commands.assemble(runtime.context().app(), &log);
   shell::CommandFn kit[kKitCommandCount] = {};
   kit[static_cast<unsigned>(Cmd::Help)] = &help_command;

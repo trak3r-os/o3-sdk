@@ -14,6 +14,7 @@
 #include <o3sdk/app/diag.h>
 #include <o3sdk/app/input.h>
 #include <o3sdk/core/midi_types.h>
+#include <o3sdk/dsp/engine.h>
 
 #include <cstddef>
 
@@ -49,6 +50,11 @@ class App {
   // (and notes at all, without routes). `m.ports` is the port it came in on, `m.frame` is not meaningful. true: the app used it (the kit has no
   // other consumer today). The notes the routes took reach their units in the render and never come here. Default: false.
   virtual bool midi(Context&, const core::MidiMessage&) noexcept { return false; }
+  // A controller that is bound (MIDI learn, midi.h) has just moved a parameter: `unit` and `param` (its index in the unit's table) are the
+  // bound parameter, `value` what it holds now, in its own units (ParamDesc), after the binding applied it (the kit does that, as before: this
+  // is only the news). Once for each binding the message moved, in the main loop, in order, before update(); never for the message that makes a
+  // learn (that one binds), nor for a controller nothing is bound to (that one goes to midi()). Default: nothing.
+  virtual void midi_learned_moved(Context&, dsp::UnitId /*unit*/, std::uint16_t /*param*/, float /*value*/) noexcept {}
 
   // ---- The system Config screen (system_config.h, docs/M2B2-PLAN.md section 4). The runtime owns it; an app cannot hide it. ------------
   // What stops a firmware update right now (a recording, an export, unsaved work), as the strip says it in upper case, or nullptr (the

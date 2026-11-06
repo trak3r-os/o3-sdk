@@ -6,6 +6,7 @@
 
 #include <o3sdk/app/audio_in.h>
 #include <o3sdk/app/config_page.h>
+#include <o3sdk/app/enc_accel.h>
 #include <o3sdk/app/files.h>
 #include <o3sdk/app/midi.h>
 #include <o3sdk/app/panel.h>
@@ -69,6 +70,24 @@ class Context {
   unsigned pad_lights() const noexcept { return pad_lights_; }
   void set_pad_lights(unsigned index) noexcept { pad_lights_ = static_cast<std::uint8_t>(index > 2u ? 2u : index); }
 
+  // ENCODER of the system Config (enc_accel.h): 0 OFF, 1 NORMAL (EncAccel's defaults), 2 FAST (t1 3, t2 8). Kept in the settings; a value past 2 is FAST. Screens still receive raw detents: one that wants a
+  // list to run faster on a fast spin passes its detents to enc_scale() (main loop only, a screen's input()) and moves that many rows. The console's `enc accel` tunes the numbers without changing the mode.
+  static constexpr unsigned kEncModes = 3;
+  unsigned enc_mode() const noexcept { return enc_mode_; }
+  void set_enc_mode(unsigned mode) noexcept {
+    enc_mode_ = static_cast<std::uint8_t>(mode >= kEncModes ? kEncModes - 1u : mode);
+    EncAccel::Config c;  // the defaults: NORMAL
+    c.on = enc_mode_ != 0u;
+    if (enc_mode_ == 2u) {
+      c.t1 = 3;
+      c.t2 = 8;
+    }
+    enc_accel_.cfg = c;
+    enc_accel_.reset();
+  }
+  int enc_scale(int detents) noexcept { return enc_accel_.scale(now_, detents); }
+  EncAccel& enc_accel() noexcept { return enc_accel_; }
+
   // The pages the app added to the Config screen as the kit read them (config_page.h), for the screen and a test.
   const ConfigView& config_view() const noexcept { return config_; }
 
@@ -108,6 +127,8 @@ class Context {
   ui::ThemeId theme_ = ui::ThemeId::Amiga;
   std::uint8_t brightness_ = 2;
   std::uint8_t pad_lights_ = 2;
+  std::uint8_t enc_mode_ = 1;  // NORMAL; enc_accel_.cfg is the defaults, which is what NORMAL is
+  EncAccel enc_accel_;
   ConfigView config_;
   bool redraw_ = false;
   bool app_assets_ok_ = false;

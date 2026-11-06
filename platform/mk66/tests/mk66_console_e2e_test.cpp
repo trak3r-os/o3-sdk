@@ -109,6 +109,15 @@ class FakePort final : public console::InjectPort {
   }
   std::uint32_t now_ms() noexcept override { return static_cast<std::uint32_t>(clock_.uptime_ms()); }
   void log(const char* text) noexcept override { g_log.emplace_back(text); }
+  bool enc_accel_get(console::EncAccelNumbers& out) noexcept override {
+    out = accel;
+    return true;
+  }
+  bool enc_accel_set(const console::EncAccelNumbers& n) noexcept override {
+    accel = n;
+    return true;
+  }
+  console::EncAccelNumbers accel{true, 6, 16, 60};
   bool up = true;
   bool open = true;
   unsigned pushed = 0;
@@ -362,6 +371,10 @@ TEST_CASE("console e2e: pad and enc, hold and down, and the refusals") {
   CHECK(has(c.say("pad 12 up"), "ok pad 12\r\n"));
   CHECK_FALSE(c.runtime.context().panel().pad_held(12));
   CHECK(has(c.say("enc -3"), "ok encoder -3\r\n"));
+  CHECK(has(c.say("enc accel"), "enc accel x4 from 6, x8 from 16 detents of a run, gap 60 ms\r\n"));
+  CHECK(has(c.say("enc accel 3 8"), "enc accel x4 from 3, x8 from 8 detents of a run, gap 60 ms\r\n"));
+  CHECK(has(c.say("enc accel off"), "enc accel off (a row a detent)\r\n"));
+  CHECK(has(c.say("enc accel 9 3"), "ERR need 1 <= t1 <= t2 <= 255 and gap_ms 5..250\r\n"));
   CHECK(has(c.say("key f2 hold 100"), "ok key 1\r\n"));
   CHECK(c.runtime.context().panel().held(app::Button::F2));
   c.run(150);

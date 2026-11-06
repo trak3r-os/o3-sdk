@@ -32,10 +32,10 @@ class Runtime;
 
 namespace o3sdk::platform::mk66::console {
 
-inline constexpr std::size_t kMaxAppCommands = 16;
-inline constexpr std::size_t kNameMin = 2;
-inline constexpr std::size_t kNameMax = 7;
-inline constexpr std::size_t kHelpMax = 70;
+inline constexpr std::size_t kMaxAppCommands = app::kDiagMaxCommands;  // the limits are app/diag.h's, so an app can static_assert on them
+inline constexpr std::size_t kNameMin = app::kDiagNameMin;
+inline constexpr std::size_t kNameMax = app::kDiagNameMax;
+inline constexpr std::size_t kHelpMax = app::kDiagHelpMax;
 // The longest `state` line the command prints; Runtime::state_line cuts at a pair when it would be longer.
 inline constexpr std::size_t kStateBuffer = 384;
 

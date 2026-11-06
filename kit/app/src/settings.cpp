@@ -21,7 +21,7 @@ const char* result_name(Result r) noexcept {
 
 namespace {
 
-static_assert(kPadLights == kKeyCount && kBrightness == kUsbStem11 + 1u && kUsbStem1 + hal::usb_audio::kMaxChannels - 1u == kUsbStem11, "the keys are 1 .. kKeyCount, in order");
+static_assert(kEncAccel == kKeyCount && kPadLights + 1u == kEncAccel && kBrightness == kUsbStem11 + 1u && kUsbStem1 + hal::usb_audio::kMaxChannels - 1u == kUsbStem11, "the keys are 1 .. kKeyCount, in order");
 
 constexpr std::uint16_t kChunkVersion = 0x0100;  // APPV and LRNB, major 1
 
@@ -114,11 +114,12 @@ void gather(const KitValues& v, Entry (&out)[kKeyCount]) noexcept {
   }
   out[30] = {kBrightness, static_cast<float>(v.brightness)};
   out[31] = {kPadLights, static_cast<float>(v.pad_lights)};
+  out[32] = {kEncAccel, static_cast<float>(v.enc_mode)};
 }
 
 // Applies one entry to `v`: 1 applied, 0 the key is not known, -1 the value is not one this key takes.
 int apply(KitValues& v, std::uint16_t key, float value) noexcept {
-  if (key < kTheme || key > kPadLights) {
+  if (key < kTheme || key > kEncAccel) {
     return 0;
   }
   // Every setting is a small whole number (a NaN fails the first test); the station and the stem masks are the ones that do not fit a byte.
@@ -219,6 +220,12 @@ int apply(KitValues& v, std::uint16_t key, float value) noexcept {
         return -1;
       }
       (key == kBrightness ? v.brightness : v.pad_lights) = static_cast<std::uint8_t>(n);
+      return 1;
+    case kEncAccel:
+      if (n > 2u) {
+        return -1;
+      }
+      v.enc_mode = static_cast<std::uint8_t>(n);
       return 1;
     default:
       if (key >= kUsbStem1 && key <= kUsbStem11) {

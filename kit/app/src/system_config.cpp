@@ -71,6 +71,7 @@ const char* card_state_text(Files::Card c) noexcept {
 
 // The three levels of DISPLAY and PAD LIGHTS.
 constexpr const char* kLevelNames[kBrightnessLevels] = {"LOW", "MEDIUM", "HIGH"};
+constexpr const char* kEncNames[Context::kEncModes] = {"OFF", "NORMAL", "FAST"};
 
 // One row of an app's page: the caption, and the value (or what an action does) at `value_x`.
 void draw_app_rows(ui::Renderer& r, const PageGrid& grid, const Context& ctx, const ConfigView::Page& page, unsigned row, bool asking, std::uint16_t ask_key) noexcept {
@@ -604,15 +605,19 @@ void SystemConfig::step_display(Context& ctx, unsigned row, int steps, bool wrap
     step_theme(ctx, steps > 0 ? 1 : -1);
     return;
   }
-  const bool brightness = backlight_ && row == 1u;
-  const int now = static_cast<int>(brightness ? ctx.brightness() : ctx.pad_lights());
+  const bool encoder = row == display_rows() - 1u;
+  const bool brightness = !encoder && backlight_ && row == 1u;
+  const int levels = static_cast<int>(encoder ? Context::kEncModes : kBrightnessLevels);
+  const int now = static_cast<int>(encoder ? ctx.enc_mode() : (brightness ? ctx.brightness() : ctx.pad_lights()));
   int next = now + steps;
   if (wrap) {
-    next = (next + static_cast<int>(kBrightnessLevels)) % static_cast<int>(kBrightnessLevels);
+    next = (next + levels) % levels;
   } else {
-    next = next < 0 ? 0 : (next >= static_cast<int>(kBrightnessLevels) ? static_cast<int>(kBrightnessLevels) - 1 : next);
+    next = next < 0 ? 0 : (next >= levels ? levels - 1 : next);
   }
-  if (brightness) {
+  if (encoder) {
+    ctx.set_enc_mode(static_cast<unsigned>(next));
+  } else if (brightness) {
     ctx.set_brightness(static_cast<unsigned>(next));
   } else {
     ctx.set_pad_lights(static_cast<unsigned>(next));
@@ -864,6 +869,11 @@ void SystemConfig::draw(const Context& ctx, ui::Renderer& r, const Rect& area) c
           chip(row, cx, kLevelNames[i], i == level);
         }
         ++row;
+      }
+      caption(row, "ENCODER");
+      cx = grid.x;
+      for (unsigned i = 0; i < Context::kEncModes; ++i) {
+        chip(row, cx, kEncNames[i], i == ctx.enc_mode());
       }
       r.text(grid.x, ui::caps_y(t, Face::Label, grid.y0 + static_cast<int>(rows) * block + 4, grid.pitch),
              rows > 1u ? "UP / DOWN choose a row. The encoder and F1 change it. It shows at once." : "The encoder, UP / DOWN and F1 change the theme. It shows at once.", Color::TextDim,

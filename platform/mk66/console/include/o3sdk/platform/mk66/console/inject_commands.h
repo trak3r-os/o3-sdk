@@ -14,6 +14,14 @@
 
 namespace o3sdk::platform::mk66::console {
 
+// The numbers of `enc accel` (app/enc_accel.h EncAccel::Config, which this layer does not include).
+struct EncAccelNumbers {
+  bool on;
+  std::uint8_t t1;
+  std::uint8_t t2;
+  std::uint8_t gap_ms;
+};
+
 class InjectPort {
  public:
   // The app has started and its input is tapped (track3r-os: the tee exists).
@@ -24,6 +32,10 @@ class InjectPort {
   virtual bool push(core::InputKind kind, std::uint8_t id, std::int16_t value) noexcept = 0;
   virtual std::uint32_t now_ms() noexcept = 0;
   virtual void log(const char* text) noexcept = 0;
+  // `enc accel`: the encoder acceleration's numbers (Context::enc_accel). get is false before the app has started; set is false then, or for numbers EncAccel::valid refuses (`on` false keeps the
+  // numbers it had). Main loop only. A port without an app says false.
+  virtual bool enc_accel_get(EncAccelNumbers&) noexcept { return false; }
+  virtual bool enc_accel_set(const EncAccelNumbers&) noexcept { return false; }
 
  protected:
   InjectPort() = default;
@@ -44,6 +56,7 @@ class InjectCommands {
   void enc(usb::diag::Shell& shell, const usb::diag::Args& args) noexcept;
 
  private:
+  void enc_accel(usb::diag::Shell& shell, const usb::diag::Args& args) noexcept;
   void run(usb::diag::Shell& shell, InjectParse parsed, const InjectRequest& request, const char* what, const char* unknown, const char* usage) noexcept;
   static bool push_thunk(void* self, core::InputKind kind, std::uint8_t id, std::int16_t value);
 

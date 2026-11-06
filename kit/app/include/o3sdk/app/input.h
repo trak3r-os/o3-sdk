@@ -22,6 +22,7 @@ struct Input {
   std::int16_t value;    // pad: velocity (127: the pads have none); encoder: signed detents
   bool shift;            // Shift was held (for Shift itself: false)
   core::Tick time;
+  bool repeat = false;   // a press that is an auto-repeat of a held button the screen asked for (Screen::repeat_buttons), not the press itself
 
   bool press(Button b) const noexcept { return type == Type::Press && is(b); }
   bool release(Button b) const noexcept { return type == Type::Release && is(b); }

@@ -407,14 +407,20 @@ TEST_CASE("config pages: brightness and pad lights are kept across a reboot, and
   CHECK(r.h->backlight_duty() == 20u);
 }
 
-TEST_CASE("config pages: without a backlight DISPLAY is the theme alone and UP / DOWN / F1 change it, as they always did") {
+TEST_CASE("config pages: without a backlight DISPLAY is the theme and the ENCODER row, UP / DOWN choose and F1 steps the row") {
   Rig r(false);
   r.tap(Button::Config);
-  r.tap(Button::Down);
+  r.tap(Button::F1);
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
   r.tap(Button::F1);
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
+  r.tap(Button::Down);  // the ENCODER row
+  CHECK(r.h->runtime().context().theme() == ui::ThemeId::White);
+  r.tap(Button::F1);
+  CHECK(r.h->runtime().context().enc_mode() == 2u);
   r.tap(Button::Up);
+  r.tap(Button::F1);
+  r.tap(Button::F1);
   CHECK(r.h->runtime().context().theme() == ui::ThemeId::Black);
   CHECK(r.h->backlight_duty() == 0u);
 }

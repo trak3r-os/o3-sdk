@@ -50,6 +50,8 @@ struct KitValues {
   // DISPLAY and PAD LIGHTS (brightness.h): 0 low, 1 medium, 2 high; high is what the hardware does without them.
   std::uint8_t brightness = 2;
   std::uint8_t pad_lights = 2;
+  // ENCODER (enc_accel.h): 0 OFF, 1 NORMAL, 2 FAST; NORMAL is what a file written before key 33 gives.
+  std::uint8_t enc_mode = 1;
   // The values of the app's Config pages, as (item key, value), in page order (the runtime builds them from App::config_get, clamped into their descriptor), and the MIDI learn
   // bindings, slot by slot (an empty slot has param None).
   std::uint8_t app_count = 0;
@@ -61,7 +63,7 @@ struct KitValues {
     return a.in_source == b.in_source && a.in_gain == b.in_gain && a.in_monitor == b.in_monitor && a.radio_region == b.radio_region && a.radio_freq == b.radio_freq && a.usb_audio == b.usb_audio && a.usb_profile == b.usb_profile &&
            a.usb_duplex == b.usb_duplex && a.usb_level == b.usb_level && a.usb_map_set == b.usb_map_set && same_stems(a, b) && a.theme == b.theme && a.midi.channel == b.midi.channel && a.midi.out_channel == b.midi.out_channel && a.midi.out_ports == b.midi.out_ports &&
            a.midi.clock_out == b.midi.clock_out && a.midi.follow == b.midi.follow && a.midi.follow_port == b.midi.follow_port &&
-           a.midi.transport_in == b.midi.transport_in && a.midi.transport_out == b.midi.transport_out && a.brightness == b.brightness && a.pad_lights == b.pad_lights &&
+           a.midi.transport_in == b.midi.transport_in && a.midi.transport_out == b.midi.transport_out && a.brightness == b.brightness && a.pad_lights == b.pad_lights && a.enc_mode == b.enc_mode &&
            same_app(a, b) && same_learn(a, b);
   }
   friend bool operator!=(const KitValues& a, const KitValues& b) noexcept { return !(a == b); }
@@ -133,8 +135,9 @@ enum Key : std::uint16_t {
   kUsbStem11 = 30,
   kBrightness = 31,    // DISPLAY: 0 low, 1 medium, 2 high (M2c slice CP)
   kPadLights = 32,     // PAD LIGHTS: 0 low, 1 medium, 2 high
+  kEncAccel = 33,      // ENCODER: 0 off, 1 normal, 2 fast (enc_accel.h); absent in a file of 32 keys: normal
 };
-inline constexpr unsigned kKeyCount = 32;  // the keys of this version
+inline constexpr unsigned kKeyCount = 33;  // the keys of this version
 
 enum class Result : std::uint8_t {
   Ok,

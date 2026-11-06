@@ -106,7 +106,7 @@ class SystemConfig {
   bool audio_input(Context& ctx, const Input& in) noexcept;
   bool card_input(Context& ctx, const Input& in) noexcept;
   bool app_input(Context& ctx, const Input& in) noexcept;
-  unsigned display_rows() const noexcept { return 1u + (backlight_ ? 1u : 0u) + (pads_ ? 1u : 0u); }
+  unsigned display_rows() const noexcept { return 2u + (backlight_ ? 1u : 0u) + (pads_ ? 1u : 0u); }  // THEME, BRIGHTNESS, PAD LIGHTS, ENCODER (the last, always)
   void step_display(Context& ctx, unsigned row, int steps, bool wrap) noexcept;
   bool usb_row(Context& ctx, unsigned kind, int steps, bool f1) noexcept;
   void disarm() noexcept { ask_ = Ask::None; }

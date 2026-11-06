@@ -51,6 +51,13 @@ class ProbeApp final : public app::App {
     heard.push_back(m);
     return true;
   }
+  void midi_learned_moved(app::Context&, dsp::UnitId unit, std::uint16_t param, float value) noexcept override { moved.push_back(Moved{unit, param, value}); }
+  struct Moved {
+    dsp::UnitId unit;
+    std::uint16_t param;
+    float value;
+  };
+  std::vector<Moved> moved;
   Synth synth;
   Blank screen;
   dsp::UnitId synth_id = dsp::kNoUnit;
@@ -345,4 +352,21 @@ TEST_CASE("learn: a binding the build no longer has (a missing unit or parameter
   NEED(h.reboot());
   h.run_ms(20);
   CHECK(h.runtime().context().midi().bindings() == 0u);
+}
+
+TEST_CASE("learn: the app is told which parameter a bound controller moved and to what value, never for the message that binds, nor for a controller nothing is bound to") {
+  Rig r;
+  NEED(r.api().learn(r.app.synth_id, Synth::Cutoff, core::LearnMode::Jump));
+  r.cc(1, 74, 10);  // binds
+  CHECK(r.app.moved.empty());
+  r.cc(1, 74, 100);
+  NEED(r.app.moved.size() == 1u);
+  CHECK(r.app.moved[0].unit == r.app.synth_id);
+  CHECK(r.app.moved[0].param == Synth::Cutoff);
+  CHECK(r.app.moved[0].value == doctest::Approx(r.value(Synth::Cutoff)));
+  CHECK(r.norm(Synth::Cutoff) == doctest::Approx(100.0f / 127.0f).epsilon(0.001));  // the binding still applied it
+  r.cc(1, 20, 5);  // a controller nothing is bound to: the app's midi(), not the hook
+  r.cc(4, 74, 5);  // the bound number on another channel
+  CHECK(r.app.moved.size() == 1u);
+  CHECK(r.app.heard.size() == 2u);
 }

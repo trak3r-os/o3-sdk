@@ -102,9 +102,15 @@ struct DiagArgs {
 
 using DiagHandler = void (*)(const DiagArgs& args, DiagOut& out) noexcept;
 
+// The limits the console enforces on an app's rows (platform/mk66/console/core.h check_app_row uses these same constants): an app may static_assert on them. A row over them is skipped and logged.
+inline constexpr std::size_t kDiagNameMin = 2;       // letters of a command's name
+inline constexpr std::size_t kDiagNameMax = 7;
+inline constexpr std::size_t kDiagHelpMax = 70;      // characters of a help line
+inline constexpr std::size_t kDiagMaxCommands = 16;  // rows that count; later ones are skipped
+
 struct DiagCommand {
-  const char* name;  // 2-7 lowercase letters, not a kit command
-  const char* help;  // one line, "usage: what it does", at most 70 characters
+  const char* name;  // kDiagNameMin..kDiagNameMax lowercase letters, not a kit command
+  const char* help;  // one line, "usage: what it does", at most kDiagHelpMax characters
   DiagHandler run;
 };
 

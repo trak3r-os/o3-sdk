@@ -44,6 +44,11 @@ class Screen {
   virtual const ui::Theme* theme(const Context&) const noexcept { return nullptr; }
   virtual void enter(Context&) noexcept {}
   virtual void leave(Context&) noexcept {}
+  // The buttons that repeat while held (bit n = Button code n, < 64; see Button in panel.h): the runtime sends the screen one more press
+  // of each, flagged Input::repeat, on the schedule of core/gesture.h (400, 300, 200, 150, 100, then 80 ms apart) until the release. Asked
+  // when the screen is entered, and again at each press of a button (so it may change while the screen is up); a screen that is left stops
+  // its repeats. The press itself arrives at once, unflagged, as for every button. Default: none, and a held button then does nothing more.
+  virtual std::uint64_t repeat_buttons(const Context&) const noexcept { return 0; }
   virtual void input(Context&, const Input&) noexcept {}
   // Every pass of the main loop (timers, following the playhead).
   virtual void update(Context&) noexcept {}

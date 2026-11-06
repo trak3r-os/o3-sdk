@@ -160,6 +160,7 @@ Midi::Learned Midi::take_cc(const core::MidiMessage& m) noexcept {
     return Learned::No;
   }
   const unsigned channel = core::midi_channel(m.status);
+  moved_n_ = 0;
   if (armed_) {
     armed_ = false;
     core::LearnBinding b;
@@ -194,6 +195,9 @@ Midi::Learned Midi::take_cc(const core::MidiMessage& m) noexcept {
       continue;  // a binding of a unit or parameter this build does not have, or one that is never learnable: the controller goes to the app
     }
     moved = true;
+    if (moved_n_ < kMaxBindings) {
+      moved_[moved_n_++] = MovedParam{unit, field};
+    }
     const float now = engine_->param(unit, field);
     if (static_cast<core::LearnMode>(b.mode) == core::LearnMode::Relative) {
       const int delta = core::learn_relative_delta(m.data2);
