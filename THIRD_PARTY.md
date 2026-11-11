@@ -34,3 +34,6 @@ Referenced, not vendored: no file of these is in this repository, and each is ci
 - PJRC Audio Library for Teensy 3.X, MIT, Copyright (c) 2014 Paul Stoffregen: a cross-check of register numbers and of the
   standard I2S setup (`audio/.../audio_config.h`, `sgtl5000.h`) and the software interrupt line of the render (`irq_map.h`). No
   code is copied; the version is not pinned.
+- Chimera (Jameson Hodge, MIT) and Pink Trombone (Neil Thapen, MIT): inspiration and reference for the vocal-tract idea of
+  `extras/tract/` (a waveguide tube driven by a buzz); no code, table or constant of either is included, the tract is written from the
+  textbook Kelly-Lochbaum lattice and Peterson and Barney's published formant averages (`extras/tract/LICENSES.md`).
