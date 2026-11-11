@@ -62,6 +62,21 @@ if(NOT CMAKE_BUILD_TYPE AND NOT _o3sdk_multi_config)
   endif()
 endif()
 
+# ccache: every compile goes through it when it is installed, so a fresh build directory rebuilds from the cache (tools/ci.sh passes the
+# same launchers; CCACHE_BASEDIR, which it exports, lets the checkouts and worktrees side by side share hits). A launcher the caller already
+# set (-DCMAKE_CXX_COMPILER_LAUNCHER=...) is left alone; -DO3SDK_CCACHE=OFF compiles directly.
+option(O3SDK_CCACHE "Compile through ccache when it is installed" ON)
+if(O3SDK_CCACHE)
+  find_program(O3SDK_CCACHE_PROGRAM ccache)
+  if(O3SDK_CCACHE_PROGRAM)
+    foreach(_lang C CXX)
+      if(NOT CMAKE_${_lang}_COMPILER_LAUNCHER)
+        set(CMAKE_${_lang}_COMPILER_LAUNCHER "${O3SDK_CCACHE_PROGRAM}")
+      endif()
+    endforeach()
+  endif()
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)

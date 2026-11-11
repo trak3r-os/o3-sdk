@@ -156,14 +156,21 @@ function(o3sdk_app name)
   endif()
 endfunction()
 
-# o3sdk_test_suite(<exe> SOURCES <*_test.cpp>... [DEPENDS <lib>...]) -- host only
+# o3sdk_test_suite(<exe> SOURCES <*_test.cpp>... [DEPENDS <lib>...] [AREA <label>] [SLOW <test>...]) -- host only
 #
 # The doctest tests of a project that uses o3sdk: one executable (doctest's main from o3sdk/tests/main.cpp, the vendored header as
 # <doctest/doctest.h>, o3sdk's tests/support helpers), one ctest per source file (`ctest -R <file name without .cpp>`), strict
 # warnings, no exceptions (REQUIRE ends the run with std::terminate, which ctest reports). A test that names the app's entry point
 # o3sdk_app() links the app library whole: DEPENDS "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_<name>>".
+# Labels (`ctest -L <label>`, `-LE slow`): every ctest has its area, AREA or else the suite's name (`ctest -L o3_303_tests`; tools/ci.sh
+# O3SDK_CI_SCOPE=changed maps changed files to them), and `slow` when its source name has "scenario" in it or SLOW names it (a test name,
+# the source file's name without .cpp); `ctest -LE slow` skips those. A test the suite does not register itself gets its labels with
+# o3sdk_test_labels().
 function(o3sdk_test_suite exe)
-  cmake_parse_arguments(ARG "" "" "SOURCES;DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "AREA" "SOURCES;DEPENDS;SLOW" ${ARGN})
+  if(NOT ARG_AREA)
+    set(ARG_AREA ${exe})
+  endif()
   add_executable(${exe} ${O3SDK_ROOT}/tests/main.cpp ${ARG_SOURCES})
   target_include_directories(${exe} SYSTEM PRIVATE ${O3SDK_ROOT}/third_party)
   target_include_directories(${exe} PRIVATE ${O3SDK_ROOT}/tests)  # "support/need.h", "support/rng.h"
@@ -173,10 +180,28 @@ function(o3sdk_test_suite exe)
   foreach(src IN LISTS ARG_SOURCES)
     get_filename_component(test ${src} NAME_WE)
     add_test(NAME ${test} COMMAND ${exe} --source-file=*${test}.cpp)
+    set(labels ${ARG_AREA})
+    if(test MATCHES "scenario" OR test IN_LIST ARG_SLOW)
+      list(APPEND labels slow)
+    endif()
+    set_tests_properties(${test} PROPERTIES LABELS "${labels}")
   endforeach()
 endfunction()
 
-# o3sdk_app_test_suite(<app-id> SOURCES <*_test.cpp>... [DEPENDS <lib>...] [EXE <name>] [SCENARIO_DIR <dir>] [SCENARIO_DEFINE <NAME>])
+# o3sdk_test_labels(<test>... AREA <label> [SLOW]): the labels of ctests registered with add_test (a sharded test, a tool's self-test).
+function(o3sdk_test_labels)
+  cmake_parse_arguments(ARG "SLOW" "AREA" "" ${ARGN})
+  if(NOT ARG_AREA)
+    message(FATAL_ERROR "o3sdk_test_labels: AREA <label> is required")
+  endif()
+  set(labels ${ARG_AREA})
+  if(ARG_SLOW)
+    list(APPEND labels slow)
+  endif()
+  set_tests_properties(${ARG_UNPARSED_ARGUMENTS} PROPERTIES LABELS "${labels}")
+endfunction()
+
+# o3sdk_app_test_suite(<app-id> SOURCES <*_test.cpp>... [DEPENDS <lib>...] [EXE <name>] [SCENARIO_DIR <dir>] [SCENARIO_DEFINE <NAME>] [AREA <label>] [SLOW <test>...])
 #   -- host only; the app must already be defined with o3sdk_app(<app-id> ...) (add_subdirectory(app) before add_subdirectory(tests))
 #
 # The tests of an app repository: o3sdk_test_suite() with the wiring an app's tests need, spelled once.
@@ -187,10 +212,10 @@ endfunction()
 # One ctest per source file, as o3sdk_test_suite(). The explicit form (o3sdk_test_suite with the whole-archive item in DEPENDS) is still
 # fine, and what o3-303 uses.
 function(o3sdk_app_test_suite app_id)
-  cmake_parse_arguments(ARG "" "EXE;SCENARIO_DIR;SCENARIO_DEFINE" "SOURCES;DEPENDS" ${ARGN})
+  cmake_parse_arguments(ARG "" "EXE;SCENARIO_DIR;SCENARIO_DEFINE;AREA" "SOURCES;DEPENDS;SLOW" ${ARGN})
   if(ARG_UNPARSED_ARGUMENTS)
     message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): unknown argument(s) '${ARG_UNPARSED_ARGUMENTS}' "
-                        "(SOURCES, DEPENDS, EXE, SCENARIO_DIR, SCENARIO_DEFINE)")
+                        "(SOURCES, DEPENDS, EXE, SCENARIO_DIR, SCENARIO_DEFINE, AREA, SLOW)")
   endif()
   if(NOT TARGET app_${app_id})
     message(FATAL_ERROR "o3sdk_app_test_suite(${app_id}): there is no app library app_${app_id}: call o3sdk_app(${app_id} ...) first, "
@@ -215,6 +240,8 @@ function(o3sdk_app_test_suite app_id)
   endif()
   o3sdk_test_suite(${ARG_EXE}
     SOURCES ${ARG_SOURCES}
+    AREA ${ARG_AREA}
+    SLOW ${ARG_SLOW}
     DEPENDS app sim platform_host ${ARG_DEPENDS} "$<LINK_LIBRARY:WHOLE_ARCHIVE,app_${app_id}>")
   if(IS_DIRECTORY "${scenario_dir}")
     set(scenario_macro "${ARG_SCENARIO_DEFINE}=\"${scenario_dir}\"")

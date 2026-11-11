@@ -31,6 +31,12 @@ target_compile_definitions(o3sdk_tests PRIVATE DOCTEST_CONFIG_NO_EXCEPTIONS_BUT_
 foreach(src IN LISTS test_sources)
   get_filename_component(name ${src} NAME_WE)
   add_test(NAME ${name} COMMAND o3sdk_tests --source-file=*${name}.cpp)
+  # The area label (`ctest -L o3sdk_tests`) and `slow` for the scenario-driven ones (`ctest -LE slow`), as o3sdk_test_suite() does.
+  if(name MATCHES "scenario")
+    set_tests_properties(${name} PROPERTIES LABELS "o3sdk_tests;slow")
+  else()
+    set_tests_properties(${name} PROPERTIES LABELS o3sdk_tests)
+  endif()
 endforeach()
 add_subdirectory(sim_refusal)  # bad_setup_sim: the runner on an app whose setup was refused (exit 1 and a message)
 # Pinned frames (tools/digest_check.py, tests/digests/<app>.txt): the simulator writes the FNV-1a of the display-list words of every picture a
