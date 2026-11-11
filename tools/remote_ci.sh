@@ -15,7 +15,14 @@
 # ../o3-sdk) is sent the same way to sdk.git, and the run builds the app against exactly that tree.
 # --slot   the remote worktree (default: this checkout's folder name). A slot keeps its build directories, so its runs are
 #          incremental; the slots `dev` and `gate` start fresh.
-# O3SDK_CI_TESTS=<regex> (ctest -R; letters, digits and _ . | ^ $ * + ? ( ) - only) and O3SDK_CI_KEEP=0|1 are passed on (tools/ci.sh).
+# O3SDK_CI_TESTS=<regex> (ctest -R; letters, digits and _ . | ^ $ * + ? ( ) - only), O3SDK_CI_KEEP=0|1 and O3SDK_CI_SLOW=0|1 are passed on
+# (tools/ci.sh); O3SDK_REMOTE_JOBS=<n> becomes O3SDK_CI_JOBS on the machine (a name of its own, so a local O3SDK_CI_JOBS never reaches it).
+# O3SDK_CI_SCOPE is not passed: the machine's worktree has no origin/main to take a merge-base with; iterate with O3SDK_CI_TESTS.
+# One run per slot at a time: a run holds flock on <git common dir>/remote-ci-slot-<slot>.lock from before the snapshot to its exit, so two
+#          runs of one slot (same checkout, or worktrees given the same --slot) go one after the other, never checking the slot's worktree out
+#          under a running build; a waiting run prints one line. Runs of different slots go at once, and each slot builds cold the first time:
+#          never invent a slot name. Two runs of one commit that push the same refs/ci/<sha> together are fine: a push that fails because the
+#          ref already holds that sha counts as done.
 # The full log is copied to build-remote/<log name> (untracked). Exit: the run's (tools/ci.sh); 2 bad usage; 3 no remote configured
 # (run tools/ci.sh locally); 255 ssh failed (the machine is off or unreachable: run tools/ci.sh locally).
 set -u
@@ -60,12 +67,32 @@ case "${O3SDK_CI_KEEP:-}" in
   0|1) envs="${envs}O3SDK_CI_KEEP=$O3SDK_CI_KEEP " ;;
   *) echo "remote_ci: O3SDK_CI_KEEP must be 0 or 1" >&2; exit 2 ;;
 esac
+case "${O3SDK_CI_SLOW:-}" in
+  "") ;;
+  0|1) envs="${envs}O3SDK_CI_SLOW=$O3SDK_CI_SLOW " ;;
+  *) echo "remote_ci: O3SDK_CI_SLOW must be 0 or 1" >&2; exit 2 ;;
+esac
+case "${O3SDK_REMOTE_JOBS:-}" in
+  "") ;;
+  *[!0-9]*) echo "remote_ci: O3SDK_REMOTE_JOBS must be a number" >&2; exit 2 ;;
+  *) envs="${envs}O3SDK_CI_JOBS=$O3SDK_REMOTE_JOBS " ;;
+esac
 
 top=$(git rev-parse --show-toplevel) || exit 2
 cd "$top" || exit 2
 [ -n "$slot" ] || slot=$(basename "$top")
 slot=$(printf '%s' "$slot" | tr -c 'A-Za-z0-9._-' '-')
 case "$slot" in .*) slot="-${slot#.}" ;; esac
+
+# One run per slot at a time. The lock sits in the git common dir, shared by all worktrees; fd 9 holds it until the script exits; every
+# ssh and git push below closes it (9>&-), so a lingering ssh master (ControlPersist) never keeps the lock after this script is gone.
+command -v flock > /dev/null 2>&1 || { echo "remote_ci: flock not found" >&2; exit 2; }
+lockfile=$(git rev-parse --path-format=absolute --git-common-dir)/remote-ci-slot-$slot.lock || exit 2
+exec 9> "$lockfile" || exit 2
+if ! flock -n 9; then
+  echo "remote_ci: waiting for slot $slot"
+  flock 9 || exit 2
+fi
 
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
 tmp=$(mktemp -d) || exit 2
@@ -91,9 +118,14 @@ snapshot() (
   fi
 )
 
-# push <dir> <sha> <bare repository name>: the commit to refs/ci/<sha> of <root>/<name>; a new ref per commit, never forced.
+# push <dir> <sha> <bare repository name>: the commit to refs/ci/<sha> of <root>/<name>; a new ref per commit, never forced. A second run
+# of the same commit may have pushed the ref between our snapshot and our push: then the ref holds <sha> and the push counts as done.
 push() {
-  git -C "$1" -c core.sshCommand="ssh ${ssh_opts[*]}" push -q "ssh://$host$root/$3" "$2:refs/ci/$2"
+  local have
+  if ! git -C "$1" -c core.sshCommand="ssh ${ssh_opts[*]}" push -q "ssh://$host$root/$3" "$2:refs/ci/$2" 9>&-; then
+    have=$(git -C "$1" -c core.sshCommand="ssh ${ssh_opts[*]}" ls-remote "ssh://$host$root/$3" "refs/ci/$2" 9>&- 2> /dev/null | cut -f1)
+    [ "$have" = "$2" ]
+  fi
 }
 
 if [ -f "$top/cmake/O3sdkPlatform.cmake" ]; then
@@ -112,14 +144,14 @@ else
 fi
 
 echo "remote_ci: slot $slot, modes $*; waiting for a CI turn if the machine's four are taken"
-out=$(ssh "${ssh_opts[@]}" "$host" "$envs$cmd")
+out=$(ssh "${ssh_opts[@]}" "$host" "$envs$cmd" 9>&-)
 rc=$?
 printf '%s\n' "$out"
 log=$(printf '%s\n' "$out" | head -1)
 case "$log" in
   "$root"/logs/*.log)
     mkdir -p build-remote
-    ssh "${ssh_opts[@]}" "$host" "cat $log" > "build-remote/$(basename "$log")" &&
+    ssh "${ssh_opts[@]}" "$host" "cat $log" 9>&- > "build-remote/$(basename "$log")" &&
       echo "remote_ci: full log in build-remote/$(basename "$log")" ;;
 esac
 exit $rc
