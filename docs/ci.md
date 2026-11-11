@@ -16,12 +16,38 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
   undefined in an archive (`nm -u`) or linked into an image.
 - In an app, the framework is `$O3SDK_DIR` (default `../o3-sdk`), passed to the configure as `-DO3SDK_DIR`. The script tells the two
   apart by `cmake/O3sdkPlatform.cmake`.
-- Every run starts from a fresh build directory. `O3SDK_CI_KEEP=1` keeps it (incremental, but a warning in a file that is up to date
-  is not printed again).
+- A run keeps its build directory (`O3SDK_CI_KEEP=1`, the default: incremental, but a warning in a file that is up to date is not
+  printed again). `O3SDK_CI_KEEP=0` starts fresh; the release workflow, the gate and the last run of a batch say it explicitly.
 - `O3SDK_CI_TESTS=<regex>` runs only the ctests whose name matches (`ctest -R`); letters, digits and `_ . | ^ $ * + ? ( ) -` only.
   A regex that matches nothing fails.
 - `ARM_GNU_ROOT` is the Arm GNU Toolchain 15.3.Rel1 directory (default `../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi`).
-  `O3SDK_CI_JOBS` (default 4), `O3SDK_CI_NICE=0` (default: nice 10), `O3SDK_CI_CCACHE=0` (default: ccache when it is installed).
+  `O3SDK_CI_JOBS` (default: threads minus the 1-minute load, at least 2, at most 8), `O3SDK_CI_NICE=0` (default: nice 10),
+  `O3SDK_CI_CCACHE=0` (default: ccache when it is installed).
+
+## Faster iteration: labels, scope, jobs
+
+- Every ctest of `o3sdk_test_suite()` has an **area label**: `AREA <label>` or else the suite's name (`o3_303_tests`), and **`slow`** when
+  its source name has "scenario" in it or `SLOW <test>...` names it. `o3sdk_test_labels(<test>... AREA <label> [SLOW])` labels a test
+  registered by hand. `ctest -L <area>`, `ctest -N -L <area>` (the list) and `ctest -LE slow` work in any build directory.
+- **`timing`** marks a test that measures real time (o3-303's `midi_check_selftest`: the MIDI clock's lock and tempo against a fake console, 298 s, and
+  13 to 26 ms of lateness fails it when the machine is loaded). It is also `slow`, so `O3SDK_CI_SLOW=0` skips it, and `ctest -LE timing` leaves out
+  any such test. **Timing tests run only on a quiet machine or on the remote**; a failure of one at a load of 16 or more is the load, until a rerun on a quiet
+  machine says otherwise. A test that measures time gets `LABELS "<area>;slow;timing"` (`o3sdk_test_labels(<test> AREA <area> SLOW)` does not add `timing`).
+- `O3SDK_CI_TESTS=<regex>` (`ctest -R`) is the narrowest run: the one test you touched. `O3SDK_CI_SLOW=0` leaves the `slow` label out.
+- `O3SDK_CI_SCOPE=changed` maps the files changed since `git merge-base HEAD origin/main`, plus the uncommitted and untracked ones, to tests
+  (the table is at the top of `tools/ci.sh`): `tests/<x>_test.cpp` runs that ctest, app, unit and scenario files every label but
+  tools, docs, template and mk66, markdown and `docs/` the `docs` label. A CMake file, a shared header (`include/`), `kit/`, `sim/`,
+  `platform/`, anything unmapped, an uncommitted change in the o3sdk an app builds against, or no `origin/main`, is a full run.
+- Habits. **One run per checkout at a time** (two at once take 2 to 3 times as long each). **Filtered runs while iterating**
+  (`O3SDK_CI_TESTS`, `O3SDK_CI_SCOPE=changed`, `ctest -L`); **one full run per batch**, not per item, the last one with
+  `O3SDK_CI_KEEP=0` when the batch ends in a release or a push. **Jobs are the machine's threads divided by the runs that go at once**
+  (the default does it from the load; set `O3SDK_CI_JOBS` when two lanes are known to run). **Never invent a remote slot name**: a
+  new slot builds cold; use the checkout's own (the default) or `dev` and `gate`.
+- **`COST`**: a test of several minutes gets `set_tests_properties(<test> PROPERTIES COST <seconds>)` (an uncontended guess), so ctest starts the
+  longest first even in a fresh build directory, where it has no timing history. A file with many test cases is cut into shares with
+  `O3SDK_TEST_SHARD=i/n` (`tests/main.cpp`), and o3-303's `o3_303_shard_coverage` proves that the shares together hold each case once.
+- ccache is on by default for every build (`O3SDK_CCACHE=OFF` to compile directly; `cmake/O3sdkPlatform.cmake`). `tools/ci.sh` exports
+  `CCACHE_BASEDIR`, the common parent of the checkout and the o3sdk it builds against, so worktrees and the apps beside o3-sdk share hits.
 
 ## Remote CI: `tools/remote_ci.sh [--slot <name>] <host|mk66> [mode...]`
 
@@ -37,8 +63,16 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
   `.claude/settings.local.json` (git-ignored; the key is in `.claude/settings.local.json.example`, empty). The host, the user and
   the path never go into git.
 - `--slot` names the remote worktree (default: the checkout's folder name). A slot keeps its build directories, so its runs are
-  incremental; `dev` and `gate` start fresh. One run per slot at a time: a second waits. `O3SDK_CI_TESTS` and `O3SDK_CI_KEEP=0|1`
-  are passed on.
+  incremental; `dev` and `gate` start fresh. One run per slot at a time: a second waits (a `flock` on
+  `<git common dir>/remote-ci-slot-<slot>.lock`, shared by the worktrees, held for the whole run and not inherited by ssh). If the push of
+  `refs/ci/<sha>` fails, `ls-remote` is checked and the run goes on when the ref already holds the sha. `O3SDK_CI_TESTS`, `O3SDK_CI_KEEP=0|1`
+  and `O3SDK_CI_SLOW=0|1` are passed on, `O3SDK_REMOTE_JOBS` as `O3SDK_CI_JOBS`; `O3SDK_CI_SCOPE` is not (the machine has no `origin/main`).
+- **Green cache.** After `rc=0` of a full run (no `O3SDK_CI_TESTS`), `<git common dir>/ci-green.log` gets the line `<key> <mode> <date> <slot>`; the key
+  is the sha1 of the snapshot tree (an app: its tree and the o3sdk tree it builds against), the mode and the environment sent to the machine (not the job
+  count). A later run of the same trees skips a mode whose key is there ("already green for this tree") and exits 0 without ssh when all are skipped.
+  A filtered run is never cached. `O3SDK_CI_FORCE=1` runs anyway: use it after changing the machine (toolchain, wrapper), which the key does not cover.
+- **Jobs by load.** With `O3SDK_REMOTE_JOBS` unset the run asks the machine how many of its four turn locks are busy and sends
+  `O3SDK_CI_JOBS=nproc/(busy+1)`, at least 4.
 
 ## The machine
 

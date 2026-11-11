@@ -132,8 +132,10 @@ def verdict(root, transcript):
         return None
     build_system = [f for f in stale if f.endswith(("CMakeLists.txt", ".cmake")) or f.startswith("cmake/")]
     cross = [f for f in stale if f.startswith(("platform/mk66", "cmake/")) or f.endswith(".ld")]
-    steps = ["nice -n 10 cmake --build build-host -j4 && nice -n 10 ctest --test-dir build-host --output-on-failure"
-             "   (an M2 slice: its own build-m2-<slice>-host directory, ctest -L mk66 -R <pattern>)"]
+    steps = ["nice -n 10 cmake --build build-host -j4 && nice -n 10 ctest --test-dir build-host --output-on-failure -L <area> | -R <test>"
+             "   (while iterating: only the area or the test you touched, or O3SDK_CI_SCOPE=changed tools/ci.sh host; the full ctest, "
+             "no filter, is the batch run before a release or a push; an M2 slice: its own build-m2-<slice>-host directory, "
+             "ctest -L mk66 -R <pattern>)"]
     if build_system:
         steps[0] += "; a build-system change needs a fresh configure first (cmake -S . -B <dir>)"
     if cross:

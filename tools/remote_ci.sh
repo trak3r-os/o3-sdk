@@ -23,6 +23,10 @@
 #          under a running build; a waiting run prints one line. Runs of different slots go at once, and each slot builds cold the first time:
 #          never invent a slot name. Two runs of one commit that push the same refs/ci/<sha> together are fine: a push that fails because the
 #          ref already holds that sha counts as done.
+# Green cache: after rc=0 of a full run (no O3SDK_CI_TESTS) the line `<key> <mode> <date> <slot>` goes to <git common dir>/ci-green.log, key
+#          = sha1 of the snapshot tree(s), the mode and the env sent to the machine. A later run of the same tree skips a mode whose key is
+#          there and exits 0 without ssh when all are skipped. O3SDK_CI_FORCE=1 runs anyway (after a remote toolchain change, say).
+# Jobs: without O3SDK_REMOTE_JOBS the run asks the machine how many of its four turns are busy and takes nproc/(busy+1), at least 4.
 # The full log is copied to build-remote/<log name> (untracked). Exit: the run's (tools/ci.sh); 2 bad usage; 3 no remote configured
 # (run tools/ci.sh locally); 255 ssh failed (the machine is off or unreachable: run tools/ci.sh locally).
 set -u
@@ -130,14 +134,60 @@ push() {
 
 if [ -f "$top/cmake/O3sdkPlatform.cmake" ]; then
   sha=$(snapshot "$top" o3-sdk) || exit 2
-  push "$top" "$sha" sdk.git || exit 255
-  cmd="$root/o3sdkci.sh sdk $slot $sha $*"
+  tree=$(git -C "$top" rev-parse "$sha^{tree}") || exit 2
 else
   sdk=${O3SDK_DIR:-$top/../o3-sdk}
   [ -f "$sdk/cmake/O3sdkPlatform.cmake" ] || { echo "remote_ci: '$sdk' is not an o3sdk checkout (set O3SDK_DIR)" >&2; exit 2; }
   sdk=$(git -C "$sdk" rev-parse --show-toplevel) || exit 2
   sha=$(snapshot "$top" "$(basename "$top")") || exit 2
   sdk_sha=$(snapshot "$sdk" o3-sdk) || exit 2
+  tree="$(git -C "$top" rev-parse "$sha^{tree}") $(git -C "$sdk" rev-parse "$sdk_sha^{tree}")" || exit 2
+fi
+
+# Green cache: a mode this exact tree (the app's and, in an app, the o3sdk tree it builds against) already passed in full is skipped; when
+# every mode is skipped nothing is sent and the exit is 0. A filtered run (O3SDK_CI_TESTS) is never cached or looked up. The key is the
+# sha1 of the tree(s), the mode and the environment sent to the machine (not the job count); it does not cover the machine's own state
+# (toolchain, wrapper): run with O3SDK_CI_FORCE=1 after changing that.
+green_log=$(git rev-parse --path-format=absolute --git-common-dir)/ci-green.log
+keyenv=$(printf '%s' "$envs" | sed 's/O3SDK_CI_JOBS=[0-9]* //g')
+cacheable=0
+[ -z "${O3SDK_CI_TESTS:-}" ] && cacheable=1
+modekey() { printf '%s' "$tree $1 $keyenv" | sha1sum | cut -d' ' -f1; }
+if [ $cacheable = 1 ] && [ "${O3SDK_CI_FORCE:-}" != 1 ]; then
+  todo=()
+  for m in "$@"; do
+    hit=$(grep -s "^$(modekey "$m") " "$green_log" | tail -1)
+    if [ -n "$hit" ]; then
+      read -r _ hmode hdate hslot <<< "$hit"
+      echo "remote_ci: $hmode already green for this tree ($hdate, slot $hslot); skipped (O3SDK_CI_FORCE=1 runs it anyway)"
+    else
+      todo+=("$m")
+    fi
+  done
+  [ ${#todo[@]} -gt 0 ] || exit 0
+  set -- "${todo[@]}"
+fi
+
+# Jobs by load: without O3SDK_REMOTE_JOBS, count the machine's busy turns (the wrapper holds $root/.turn.<n>, four of them) and share its
+# threads: nproc/(busy+1), at least 4. A floor against stacking a full -j on a loaded machine. Read-only.
+case "$envs" in
+  *O3SDK_CI_JOBS=*) ;;
+  *)
+    auto=$(ssh "${ssh_opts[@]}" "$host" "busy=0; for n in 0 1 2 3; do flock -n $root/.turn.\$n true 2>/dev/null || busy=\$((busy+1)); done; echo \$(nproc) \$busy" 9>&- 2> /dev/null)
+    read -r nproc busy <<< "$auto"
+    case "${nproc:-x}${busy:-x}" in
+      *[!0-9]*) ;;
+      *)
+        jobs=$(( nproc / (busy + 1) )); [ $jobs -ge 4 ] || jobs=4
+        envs="${envs}O3SDK_CI_JOBS=$jobs "
+        echo "remote_ci: jobs=$jobs (auto: $busy of 4 turns busy, $nproc threads)" ;;
+    esac ;;
+esac
+
+if [ -f "$top/cmake/O3sdkPlatform.cmake" ]; then
+  push "$top" "$sha" sdk.git || exit 255
+  cmd="$root/o3sdkci.sh sdk $slot $sha $*"
+else
   push "$sdk" "$sdk_sha" sdk.git || exit 255
   push "$top" "$sha" app.git || exit 255
   cmd="$root/o3sdkci.sh app $slot $sha $sdk_sha $*"
@@ -147,6 +197,10 @@ echo "remote_ci: slot $slot, modes $*; waiting for a CI turn if the machine's fo
 out=$(ssh "${ssh_opts[@]}" "$host" "$envs$cmd" 9>&-)
 rc=$?
 printf '%s\n' "$out"
+printed_rc=$(printf '%s\n' "$out" | sed -n 's/.*rc=\([0-9]*\) secs=.*/\1/p' | tail -1)
+if [ $rc -eq 0 ] && [ "$printed_rc" = 0 ] && [ $cacheable = 1 ]; then
+  for m in "$@"; do echo "$(modekey "$m") $m $(date +%F) $slot" >> "$green_log"; done
+fi
 log=$(printf '%s\n' "$out" | head -1)
 case "$log" in
   "$root"/logs/*.log)
