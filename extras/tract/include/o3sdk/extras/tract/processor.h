@@ -30,17 +30,19 @@
 // A NaN parameter takes its default. All setters are real-time safe (a few float operations; set_glide_ms, set_res and prepare call
 // expf or sqrtf once).
 //
-// Cost [measured]: see the numbers at the end of this comment; they are counted from the disassembly of processor.cpp.o of the cross build
-// (docs/ of o3-voc03er: build-tract-mk66), as the growl does, and a unit measurement is still owed.
-//   Quality::Full (N = 22): about 354 cycles per frame in the steady state (a tract-sample frame 606, the other 101; every frame carries about
-//   100 of its own: the wet gain, the clamp, the mix) plus about 34 of the control step (the sanitize loop is half of it): about 390, 9.5 % of
-//   the CPU at 44.1 kHz with a 64-frame block (40.8 cycles per frame are 1 %).
-//   Quality::Lite (N = 11): about 284 per frame (the tract-sample frame 742, the others 102, 102 and 188; three half-band pushes up and three
-//   down per group of 4 are 540 of the 1,134) plus about 27 of the control step: about 310, 7.6 %.
-//   The count walks the disassembly with 2 cycles per load or store, 1 per ALU or FPU operation, 14 per division, 3 per taken branch and 4 per
-//   call: it leaves out the load pipelining, so the unit should read lower. While the shape moves, update_shape adds N bump evaluations and N
-//   divisions every 16 frames (not counted). The plan's estimate was 175 (Full) and 84 (Lite) per frame; the difference is the per-frame
-//   wet path and the half-band stages, which the plan priced as a bare tube.
+// Cost [measured by instruction trace]: X3 counted the cross build (-O2, the unit_tract_dsp archive) running on qemu (mps2-an386, Cortex-M4)
+// frame by frame over 2,048 frames of a fixed test input with the control step included, and costed each executed instruction with the model below.
+// A unit measurement is still owed.
+//   Quality::Full (N = 22): about 256 cycles per frame including the control step, 6.3 % of the CPU at 44.1 kHz with a 64-frame block (40.8
+//   cycles per frame are 1 %). X3 took it from about 401 in the same harness (X2's disassembly count said about 390).
+//   Quality::Lite (N = 11): about 220 per frame including the control step, 5.4 % (from about 320; X2 said 310).
+//   The model: 2 cycles per load or store, 1 per ALU or FPU operation, 14 per division or square root, 3 per taken branch, 4 per call, 1 + n
+//   per ldm/stm/push/pop; it leaves out the load pipelining, so the unit should read lower (with a pipelined model the figures are about 226
+//   Full and 186 Lite). While the shape moves, update_shape adds N bump evaluations and N divisions every 16 frames (not counted).
+//   What X3 changed, output bit for bit the same: the three passes are one template per quality with the dip state machine on its own path;
+//   the tube runs two or four samples of a group as lanes of a wavefront (Tube::tick2, Tube::tick4: lane j trails lane 0 by j sections, so
+//   the left-going wave stays in registers and one load of b, one of k and one store serve every lane); the half-band stages are inline; the
+//   wet gain and the control step use integer tests (sanitize) and a three-way max instead of fmax calls.
 //
 // No heap, no double, all state is members (under 1.5 KB); the processor is not copyable on purpose (a unit holds one).
 #pragma once
@@ -84,6 +86,8 @@ class Processor {
 
  private:
   void control() noexcept;
+  template <bool Lite>
+  void run(const float* in, float* out, std::uint32_t n) noexcept;   // process() of one quality
   void update_shape() noexcept;
   void wake() noexcept;                          // clears the DSP state (not the smoothers' targets) and snaps the shape
   unsigned size_to_sections(int steps) const noexcept;

@@ -9,6 +9,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 
 using namespace o3sdk::extras::tract;
 
@@ -120,4 +121,51 @@ TEST_CASE("tract tube: sanitize clears a state that is not finite and keeps a he
   t.inject(3, 1e7f);
   CHECK(t.sanitize());
   CHECK(t.tick(0.0f) == 0.0f);
+}
+
+namespace {
+std::uint32_t bits_of(float v) {
+  std::uint32_t u;
+  std::memcpy(&u, &v, sizeof u);
+  return u;
+}
+}  // namespace
+
+TEST_CASE("tract tube: tick2 and tick4 are bit for bit what tick is, for every size and any reflections") {
+  std::uint32_t rng = 12345u;
+  auto next = [&rng]() {   // uniform in [-1, 1)
+    rng = rng * 1664525u + 1013904223u;
+    return static_cast<float>(static_cast<std::int32_t>(rng)) * (1.0f / 2147483648.0f);
+  };
+  for (unsigned n = 2; n <= Tube::kMaxSections; ++n) {
+    Tube ref, two, four, mixed;
+    Tube* all[4] = {&ref, &two, &four, &mixed};
+    for (Tube* t : all) t->set_size(n);
+    for (unsigned i = 0; i + 1 < n; ++i) {
+      const float k = 0.9f * next();
+      for (Tube* t : all) t->set_reflection(i, k);
+    }
+    for (Tube* t : all) t->set_ends(0.8f, 0.7f);
+    for (unsigned round = 0; round < 24; ++round) {
+      float x[8], want[8], g2[8], g4[8], gm[8];
+      for (float& v : x) v = next();
+      for (unsigned i = 0; i < 8; ++i) want[i] = ref.tick(x[i]);
+      for (unsigned i = 0; i < 8; i += 2) two.tick2(x[i], x[i + 1], g2[i], g2[i + 1]);
+      four.tick4(x, g4);
+      four.tick4(x + 4, g4 + 4);
+      gm[0] = mixed.tick(x[0]);   // mixed: one tick, a tick2, a tick4 and one tick make eight
+      mixed.tick2(x[1], x[2], gm[1], gm[2]);
+      mixed.tick4(x + 3, gm + 3);
+      gm[7] = mixed.tick(x[7]);
+      for (unsigned i = 0; i < 8; ++i) {
+        INFO("n " << n << " round " << round << " i " << i);
+        CHECK(bits_of(g2[i]) == bits_of(want[i]));
+        CHECK(bits_of(g4[i]) == bits_of(want[i]));
+        CHECK(bits_of(gm[i]) == bits_of(want[i]));
+      }
+      CHECK(bits_of(two.forward()) == bits_of(ref.forward()));
+      CHECK(bits_of(four.forward()) == bits_of(ref.forward()));
+      CHECK(bits_of(mixed.forward()) == bits_of(ref.forward()));
+    }
+  }
 }

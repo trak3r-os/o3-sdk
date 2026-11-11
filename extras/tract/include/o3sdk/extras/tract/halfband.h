@@ -24,11 +24,46 @@ inline constexpr unsigned kHalfbandSide = 6;   // odd taps per side of the centr
 inline constexpr float kHalfbandCoef[kHalfbandSide] = {0.31499507f,   -0.0964709786f, 0.0485973006f,
                                                        -0.0262910236f, 0.0136096414f,  -0.00720961731f};
 
+namespace detail {
+
+inline constexpr unsigned kHalfbandRing = 16;   // the doubled ring of the even branch holds this many floats twice
+
+// The even branch over the 12 newest samples w[0] (oldest) .. w[11] (newest): the response is symmetric, so pairs are added first.
+inline float halfband_even_branch(const float* w) noexcept {
+  const float* c = kHalfbandCoef;
+  float s = c[5] * (w[11] + w[0]);
+  s += c[4] * (w[10] + w[1]);
+  s += c[3] * (w[9] + w[2]);
+  s += c[2] * (w[8] + w[3]);
+  s += c[1] * (w[7] + w[4]);
+  s += c[0] * (w[6] + w[5]);
+  return s;
+}
+
+// Appends v to the doubled ring: returns the pointer to the 12 newest in time order.
+inline const float* halfband_ring_push(float* ring, unsigned& pos, float v) noexcept {
+  ring[pos] = v;
+  ring[pos + kHalfbandRing] = v;
+  pos = (pos + 1u) & (kHalfbandRing - 1u);
+  // the newest is at index pos - 1 + kHalfbandRing (the copy), the window starts 11 earlier
+  return ring + pos + kHalfbandRing - 12u;
+}
+
+}  // namespace detail
+
+// The pushes are defined here, inline: the processor's loops run them without a call and keep the coefficients in registers.
 class HalfbandDown {
  public:
   void reset() noexcept;
-  void push_odd(float x) noexcept;            // the sample at the odd position of the pair (the one after the output's)
-  float push_even(float x) noexcept;          // the sample at the even position: returns the decimated output
+  void push_odd(float x) noexcept {           // the sample at the odd position of the pair (the one after the output's)
+    odd_[opos_ & 7u] = x;
+    ++opos_;
+  }
+  float push_even(float x) noexcept {         // the sample at the even position: returns the decimated output
+    const float* w = detail::halfband_ring_push(even_, epos_, x);
+    // xo[m - 6]: opos_ counts the odd samples seen so far, the newest is xo[m - 1] at opos_ - 1
+    return detail::halfband_even_branch(w) + 0.5f * odd_[(opos_ - 6u) & 7u];
+  }
 
  private:
   static constexpr unsigned kTaps = 12;       // the even branch
@@ -41,7 +76,13 @@ class HalfbandDown {
 class HalfbandUp {
  public:
   void reset() noexcept;
-  void push(float u, float* out2) noexcept;   // one input, two outputs (out2[0], out2[1])
+  void push(float u, float* out2) noexcept {   // one input, two outputs (out2[0], out2[1])
+    const float* w = detail::halfband_ring_push(even_, epos_, u);
+    odd_[opos_ & 7u] = u;
+    out2[0] = 2.0f * detail::halfband_even_branch(w);
+    out2[1] = odd_[(opos_ - 5u) & 7u];
+    ++opos_;
+  }
 
  private:
   static constexpr unsigned kTaps = 12;

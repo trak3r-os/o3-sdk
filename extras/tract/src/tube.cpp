@@ -1,13 +1,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <o3sdk/extras/tract/tube.h>
 
-#include <cmath>
+#include <cstdint>
+#include <cstring>
 
 namespace o3sdk::extras::tract {
 
 namespace {
 constexpr float kTinyState = 1.0e-15f;  // below this a state is zero: no denormals in the loop
 constexpr float kHugeState = 1.0e6f;    // a state above this has blown up (or is not finite): the tube is cleared
+
+constexpr std::uint32_t float_bits(float v) noexcept { return __builtin_bit_cast(std::uint32_t, v); }
+constexpr std::uint32_t kTinyBits = float_bits(kTinyState);
+constexpr std::uint32_t kHugeAdd = 0x80000000u - float_bits(kHugeState);   // a + kHugeAdd has bit 31 set exactly when a >= float_bits(kHugeState)
 }  // namespace
 
 Tube::Tube() noexcept { set_ends(0.8f, 0.8f); }
@@ -51,16 +56,22 @@ void Tube::set_reflection(unsigned i, float k) noexcept {
 }
 
 bool Tube::sanitize() noexcept {
+  // On the bits: for a float's magnitude a (the sign cleared) the integer order is the float order and a NaN is above every number, so
+  // `a >= huge` is also the not-finite test and `a < tiny` includes zero and the denormals. kHugeAdd turns the first into the sign bit of a
+  // sum, so one OR over the states carries the verdict.
+  std::uint32_t bad = 0;
   for (unsigned i = 0; i < n_; ++i) {
-    const float a = std::fabs(b_[i]);
-    if (!(a < kHugeState)) {  // also true for NaN
-      reset();
-      return true;
-    }
-    if (a < kTinyState) b_[i] = 0.0f;
+    std::uint32_t a;
+    std::memcpy(&a, &b_[i], sizeof a);
+    a &= 0x7fffffffu;
+    bad |= a + kHugeAdd;
+    if (a < kTinyBits) b_[i] = 0.0f;
   }
-  const float a = std::fabs(f_);
-  if (!(a < kHugeState)) {
+  std::uint32_t a;
+  std::memcpy(&a, &f_, sizeof a);
+  a &= 0x7fffffffu;
+  bad |= a + kHugeAdd;
+  if (bad >> 31) {
     reset();
     return true;
   }

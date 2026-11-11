@@ -39,8 +39,10 @@ The state is under 1.5 KB; there is no heap, no `double`.
 
 ## Cost
 
-Counted from the disassembly of the MK66 build (method and numbers in the header of `processor.h`): about 390 cycles per frame Full (9.5 % of
-the CPU at 44.1 kHz), about 310 Lite (7.6 %), above the plan's 175 and 84. A unit measurement is owed (skill `rt-optimize`).
+Counted from an instruction trace of the MK66 build run on qemu, control step included (method and numbers in the header of `processor.h`):
+about 256 cycles per frame Full (6.3 % of the CPU at 44.1 kHz), about 220 Lite (5.4 %); before the X3 pass about 390 and 310. The tube's
+`tick2` and `tick4` run two and four samples as lanes of one wavefront and are bit for bit `tick` (`tests/tube_test.cpp`). A unit measurement is
+owed (skill `rt-optimize`).
 
 ## Tests
 
