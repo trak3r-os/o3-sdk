@@ -29,6 +29,8 @@
 #                      those that differ between the base and the working tree (tracked changes, deletions, untracked files git does not
 #                      ignore); the line `scope base:` says which base was used. In an app the green base holds only while the o3sdk tree
 #                      it builds against is the one recorded with it (refs/ci/green/<mode>-sdk), else the run is full.
+#   O3SDK_CI_BUILD_ONLY <modes>: these modes (host, mk66, space-separated) build, warnings and mk66's image checks included, and run no
+#                      ctest; remote_ci.sh sends it for a mode whose O3SDK_CI_SCOPE=changed scope is `none` while another mode's is a regex
 #   O3SDK_CI_GREEN=0   do not record a green ref (the remote machine's runs say it: remote_ci.sh records it locally)
 #   O3SDK_CI_SLOW=0    skip the tests labelled `slow` (ctest -LE slow); default 1
 #   O3SDK_CI_JOBS      build and ctest parallelism; default min(8, max(2, threads - the 1-minute load)), so a busy machine gets fewer
@@ -63,6 +65,7 @@ fi
 case "${O3SDK_CI_TESTS:-}" in
   *[!][A-Za-z0-9_.\|^\$*+?\(\)-]*) echo "ci.sh: O3SDK_CI_TESTS may hold only letters, digits and _ . | ^ \$ * + ? ( ) [ ] -" >&2; exit 2 ;;
 esac
+case "${O3SDK_CI_BUILD_ONLY:-}" in *[!a-z0-9\ ]*) echo "ci.sh: O3SDK_CI_BUILD_ONLY holds mode names (host, mk66) and spaces only" >&2; exit 2 ;; esac
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
 # o3sdk itself, or an app that builds against it (add_subdirectory of $O3SDK_DIR).
@@ -275,6 +278,9 @@ run_mode() {
 
   if [ "$mode" = mk66 ]; then images "$dir"; fi
 
+  case " ${O3SDK_CI_BUILD_ONLY:-} " in
+    *" $mode "*) echo "== ci.sh $mode: O3SDK_CI_BUILD_ONLY: build only, no ctest"; echo "== ci.sh $mode: OK"; return ;;
+  esac
   local args=(--test-dir "$dir" --output-on-failure --no-tests=error -j "$JOBS") sel="" slow=()
   if [ "${O3SDK_CI_SLOW:-1}" = 0 ]; then slow=(-LE slow); fi
   if [ -n "${O3SDK_CI_TESTS:-}" ]; then

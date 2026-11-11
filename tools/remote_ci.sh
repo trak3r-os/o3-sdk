@@ -20,7 +20,8 @@
 # O3SDK_CI_SCOPE=changed is worked out here, by `tools/ci.sh --scope` (the same code as a local run: the base is O3SDK_CI_BASE, else the green
 #          ref refs/ci/green/<mode>, else the merge-base with origin/main; the test names come from a configured local build directory,
 #          build-ci-host or build-host): `none` sends nothing and exits 0; `all` is a normal full run, cacheable; otherwise the regex goes as
-#          O3SDK_CI_TESTS (a filtered run, never cached). Several modes: any `all` makes it all, else the union of the regexes.
+#          O3SDK_CI_TESTS (a filtered run, never cached). Several modes: any `all` makes it all, else the union of the regexes, and a
+#          mode whose own scope is `none` builds only (O3SDK_CI_BUILD_ONLY), so the regex of another mode never meets its ctest.
 # One run per slot at a time: a run holds flock on <git common dir>/remote-ci-slot-<slot>.lock from before the snapshot to its exit, so two
 #          runs of one slot (same checkout, or worktrees given the same --slot) go one after the other, never checking the slot's worktree out
 #          under a running build; a waiting run prints one line. Runs of different slots go at once, and each slot builds cold the first time:
@@ -147,11 +148,12 @@ if [ "${O3SDK_CI_SCOPE:-}" = changed ] && [ $filtered = 0 ]; then
   done
   scoped=
   anym=0
+  nonem=
   for m in "$@"; do
     r=$("$top/tools/ci.sh" --scope "$scopedir" "$m" 9>&-) || { echo "remote_ci: tools/ci.sh --scope failed" >&2; exit 2; }
     case "$r" in
       all) anym=1 ;;
-      none) ;;
+      none) nonem="$nonem $m" ;;
       *) r=${r#^(}; r=${r%)\$}; scoped="$scoped|$r" ;;
     esac
   done
@@ -165,6 +167,11 @@ if [ "${O3SDK_CI_SCOPE:-}" = changed ] && [ $filtered = 0 ]; then
     echo "remote_ci: scope changed: the regex is too long to send: a full run"
   else
     envs="${envs}O3SDK_CI_TESTS='^($scoped)\$' "
+    nonem=${nonem# }
+    if [ -n "$nonem" ]; then
+      envs="${envs}O3SDK_CI_BUILD_ONLY='$nonem' "
+      echo "remote_ci: scope changed: $nonem: no test covers what changed; build only"
+    fi
     filtered=1
     echo "remote_ci: scope changed: O3SDK_CI_TESTS sent, ${#scoped} characters (a filtered run is not cached)"
   fi

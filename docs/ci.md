@@ -86,7 +86,9 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
 - **`O3SDK_CI_SCOPE=changed`** is worked out locally, with the same code as `ci.sh` (the base above, the test names of the configured
   `build-ci-host` or `build-host`, else a full run), once per mode, and the result is what is sent: `none` for every mode sends nothing and exits 0 with
   the reason; `all` (any mode) is a normal full run, cacheable and green-recorded; otherwise the union of the modes' regexes goes as
-  `O3SDK_CI_TESTS` (a filtered run: not cached, no green ref; more than 30000 characters is a full run).
+  `O3SDK_CI_TESTS` (a filtered run: not cached, no green ref; more than 30000 characters is a full run). A mode whose own scope is `none`
+  in such a run goes in `O3SDK_CI_BUILD_ONLY`: it builds (warnings and mk66's image checks included) and runs no ctest, so another mode's
+  regex never reaches a ctest with no test of its own (before, `host mk66` in one call ended rc 1 on "No tests were found").
 - **Evidence for `verify_gate.py`.** When the machine ran the tests to an rc (the `tests passed|tests failed` line and `rc=` came back),
   `remote_ci.sh` touches `<git common dir>/ci-remote-last-run`; exit 3 and 255 do not. The Stop hook counts the newer of that file and the
   newest `build*/Testing/Temporary/LastTest.log` as "ctest ran after your last edit", so a remote run satisfies it; its nudge names
