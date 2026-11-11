@@ -19,17 +19,29 @@
 #                      (python3 -I tools/fetch_toolchain.py puts it there), else
 #                      ../track3r-os/.toolchains/arm-gnu-toolchain-15.3.rel1-x86_64-arm-none-eabi
 #   O3SDK_DIR          an app only: the o3sdk checkout to build against (default ../o3-sdk)
-#   O3SDK_CI_TESTS     <regex>: only the ctests whose name matches (ctest -R). Letters, digits and _ . | ^ $ * + ? ( ) - only
+#   O3SDK_CI_TESTS     <regex>: only the ctests whose name matches (ctest -R). Letters, digits and _ . | ^ $ * + ? ( ) [ ] - only
 #   O3SDK_CI_KEEP      1 (default): keep the build directory, so a run is incremental (it can hide a warning in a file that is up to
 #                      date); 0: a fresh directory, which the release workflow, the gate and a batch's last run say explicitly
-#   O3SDK_CI_SCOPE=changed  run only the tests of what changed since `git merge-base HEAD origin/main` plus the uncommitted and untracked
-#                      files, mapped to labels (below); a full run when a CMake file, a shared header, an o3sdk change an app builds
-#                      against or anything unmapped changed, or when there is no origin/main. O3SDK_CI_TESTS wins over it.
+#   O3SDK_CI_SCOPE=changed  run only the tests of what changed since the base (below), mapped to labels; a full run when a CMake file, a
+#                      shared header, an o3sdk change an app builds against or anything unmapped changed, or when there is no base.
+#                      O3SDK_CI_TESTS wins over it. Base: O3SDK_CI_BASE=<rev> when set, else refs/ci/green/<mode> (the exact tree of the
+#                      last full run that passed, below), else `git merge-base HEAD origin/main`, else a full run. The changed files are
+#                      those that differ between the base and the working tree (tracked changes, deletions, untracked files git does not
+#                      ignore); the line `scope base:` says which base was used. In an app the green base holds only while the o3sdk tree
+#                      it builds against is the one recorded with it (refs/ci/green/<mode>-sdk), else the run is full.
+#   O3SDK_CI_GREEN=0   do not record a green ref (the remote machine's runs say it: remote_ci.sh records it locally)
 #   O3SDK_CI_SLOW=0    skip the tests labelled `slow` (ctest -LE slow); default 1
 #   O3SDK_CI_JOBS      build and ctest parallelism; default min(8, max(2, threads - the 1-minute load)), so a busy machine gets fewer
 #   O3SDK_CI_NICE=0    keep the normal priority (default: nice 10)
 #   O3SDK_CI_CCACHE=0  do not compile through ccache (used when it is installed); CCACHE_BASEDIR is exported, the common parent of this
 #                      checkout and the o3sdk it builds against, so every worktree of the same trees shares hits
+#
+# Green ref: after a full run that passes (no O3SDK_CI_TESTS, no O3SDK_CI_SLOW=0, the tree unchanged while it ran) refs/ci/green/<mode> is
+# pointed at a commit of the exact working tree that passed (tracked changes and untracked files git does not ignore, a snapshot commit on
+# top of HEAD made with a temporary index, as remote_ci.sh sends it; HEAD itself when the tree is clean); an app also stores the o3sdk tree
+# it built against, as a blob, in refs/ci/green/<mode>-sdk. The refs keep the objects from gc. Helpers for remote_ci.sh, which shares the code:
+# `tools/ci.sh --snapshot <dir> <name>` prints the snapshot commit, `--scope <build dir> <mode>` the scope (a ctest -R regex, `all` or
+# `none`) of O3SDK_CI_SCOPE=changed, `--record-green <mode> <commit> [<o3sdk tree>]` sets the refs.
 #
 # Scope mapping (O3SDK_CI_SCOPE=changed): a changed tests/*_test.cpp runs that ctest; app/, apps/, units/, extras/ and scenario files run
 # every label but tools, docs, template and mk66; *.md and docs/ run the `docs` label; .claude/, .github/, LICENSE and the CI scripts
@@ -38,14 +50,18 @@ set -euo pipefail
 
 die() { echo "ci.sh: $*" >&2; exit 1; }
 need() { command -v "$1" > /dev/null 2>&1 || die "$1 not found"; }
-usage() { echo "usage: tools/ci.sh <host|mk66> [mode...]   (see the comment at the top of this file)" >&2; exit 2; }
+usage() { echo "usage: tools/ci.sh <host|mk66> [mode...]   (helpers of remote_ci.sh: --scope, --snapshot, --record-green; see the comment at the top of this file)" >&2; exit 2; }
 
-[ $# -ge 1 ] || usage
-for m in "$@"; do
-  case "$m" in host|mk66) ;; *) usage ;; esac
-done
+HELPER=
+case "${1:-}" in --scope|--snapshot|--record-green) HELPER=$1; shift ;; esac  # for remote_ci.sh: no build, no mode
+if [ -z "$HELPER" ]; then
+  [ $# -ge 1 ] || usage
+  for m in "$@"; do
+    case "$m" in host|mk66) ;; *) usage ;; esac
+  done
+fi
 case "${O3SDK_CI_TESTS:-}" in
-  *[!A-Za-z0-9_.\|^\$*+?\(\)-]*) echo "ci.sh: O3SDK_CI_TESTS may hold only letters, digits and _ . | ^ \$ * + ? ( ) -" >&2; exit 2 ;;
+  *[!][A-Za-z0-9_.\|^\$*+?\(\)-]*) echo "ci.sh: O3SDK_CI_TESTS may hold only letters, digits and _ . | ^ \$ * + ? ( ) [ ] -" >&2; exit 2 ;;
 esac
 
 ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)
@@ -105,15 +121,96 @@ elif command -v ccache > /dev/null 2>&1; then
   HOST_ARGS=("-DCMAKE_C_FLAGS=-fdebug-prefix-map=$CCACHE_BASEDIR=." "-DCMAKE_CXX_FLAGS=-fdebug-prefix-map=$CCACHE_BASEDIR=.")
 fi
 
-# scope_regex <dir>: the ctest -R regex (names, anchored) of the tests O3SDK_CI_SCOPE=changed selects, or "all" for a full run, or "none".
-# Everything it says about the choice goes to stderr.
-scope_regex() {
-  local dir=$1 base f full=0 labels="" names="" docs=0 files n code=0
-  base=$(git -C "$ROOT" merge-base HEAD origin/main 2> /dev/null) || { echo "== ci.sh: scope changed: no origin/main to take a merge-base with: full run" >&2; echo all; return; }
-  files=$({ git -C "$ROOT" diff --name-only "$base" --; git -C "$ROOT" ls-files --others --exclude-standard; } | sort -u)
-  if [ "$KIND" = app ] && [ -n "$(git -C "$SDK" diff HEAD --name-only 2> /dev/null)" ]; then
-    echo "== ci.sh: scope changed: o3sdk has uncommitted changes the app builds against: full run" >&2; echo all; return
+# work_tree <dir>: prints the tree id of <dir>'s working tree: the index of HEAD plus every tracked change (deletions too) and every untracked
+# file git does not ignore, built in a temporary index (the repository's index and the files stay as they are).
+work_tree() (
+  local top idx
+  top=$(git -C "$1" rev-parse --show-toplevel) || exit 2
+  cd "$top" || exit 2
+  idx=$(mktemp "${TMPDIR:-/tmp}/o3sdk-ci-index.XXXXXX") || exit 2
+  trap 'rm -f "$idx"' EXIT
+  cp "$(git rev-parse --git-path index)" "$idx" || exit 2
+  GIT_INDEX_FILE=$idx git add -u -- . || exit 2
+  git ls-files -z --others --exclude-standard | GIT_INDEX_FILE=$idx xargs -0 -r git add -- || exit 2
+  GIT_INDEX_FILE=$idx git write-tree || exit 2
+)
+
+# commit_for <dir> <tree>: HEAD of <dir> when <tree> is HEAD's tree, else a snapshot commit of <tree> on top of HEAD.
+commit_for() {
+  local head
+  head=$(git -C "$1" rev-parse HEAD) || return 2
+  if [ "$2" = "$(git -C "$1" rev-parse 'HEAD^{tree}')" ]; then echo "$head"; return; fi
+  git -C "$1" commit-tree "$2" -p "$head" -m "ci snapshot of $(git -C "$1" rev-parse --short HEAD)"
+}
+
+# snapshot <dir> <name>: prints the commit that holds <dir>'s working tree (commit_for of work_tree), and says so on stderr.
+snapshot() {
+  local tree sha
+  tree=$(work_tree "$1") || return 2
+  sha=$(commit_for "$1" "$tree") || return 2
+  if [ "$tree" = "$(git -C "$1" rev-parse 'HEAD^{tree}')" ]; then
+    echo "ci.sh: $2 HEAD $(git -C "$1" rev-parse --short HEAD), clean tree" >&2
+  else
+    echo "ci.sh: $2 snapshot $(git -C "$1" rev-parse --short "$sha") of HEAD $(git -C "$1" rev-parse --short HEAD) plus the working tree" >&2
   fi
+  echo "$sha"
+}
+
+# record_green <mode> <commit> [<o3sdk tree>]: refs/ci/green/<mode> to the commit of the tree that passed; in an app the o3sdk tree it built
+# against goes, as a blob, to refs/ci/green/<mode>-sdk. The base ref is set first: a crash in between leaves a recorded sdk tree that does
+# not match, which only costs a full run.
+record_green() {
+  local blob
+  git -C "$ROOT" update-ref "refs/ci/green/$1" "$2" || return 1
+  if [ "$KIND" = app ]; then
+    [ -n "${3:-}" ] || return 1
+    blob=$(printf '%s\n' "$3" | git -C "$ROOT" hash-object -w --stdin) || return 1
+    git -C "$ROOT" update-ref "refs/ci/green/$1-sdk" "$blob" || return 1
+  fi
+  echo "== ci.sh $1: green ref refs/ci/green/$1 -> $(git -C "$ROOT" rev-parse --short=12 "$2")"
+}
+
+# scope_base <mode>: sets BASE (a commit) and says which base it is on one line of stderr; returns 1 (a full run) when there is none or, in an
+# app, when the o3sdk tree is not the one the green ref was recorded with.
+BASE=
+scope_base() {
+  local mode=$1 how rec cur
+  BASE=
+  if [ -n "${O3SDK_CI_BASE:-}" ]; then
+    case "$O3SDK_CI_BASE" in -*) echo "== ci.sh: scope changed: O3SDK_CI_BASE may not start with -: full run" >&2; return 1 ;; esac
+    BASE=$(git -C "$ROOT" rev-parse --verify -q "$O3SDK_CI_BASE^{commit}") ||
+      { echo "== ci.sh: scope changed: O3SDK_CI_BASE '$O3SDK_CI_BASE' is not a commit: full run" >&2; BASE=; return 1; }
+    how="O3SDK_CI_BASE=$O3SDK_CI_BASE"
+  elif BASE=$(git -C "$ROOT" rev-parse --verify -q "refs/ci/green/$mode^{commit}"); then
+    how="green ref refs/ci/green/$mode"
+    if [ "$KIND" = app ]; then
+      rec=$(git -C "$ROOT" cat-file blob "refs/ci/green/$mode-sdk" 2> /dev/null) || rec=
+      cur=$(work_tree "$SDK") || cur=
+      if [ -z "$rec" ] || [ "$rec" != "$cur" ]; then
+        echo "== ci.sh: scope base: $how, but the o3sdk tree is not the one recorded with it ($([ -n "$rec" ] && echo differs || echo none recorded)): full run" >&2
+        BASE=; return 1
+      fi
+    fi
+  elif BASE=$(git -C "$ROOT" merge-base HEAD origin/main 2> /dev/null); then
+    how="merge-base with origin/main (no green ref refs/ci/green/$mode)"
+  else
+    echo "== ci.sh: scope base: no O3SDK_CI_BASE, no green ref refs/ci/green/$mode and no origin/main: full run" >&2
+    BASE=; return 1
+  fi
+  echo "== ci.sh: scope base: $how, $(git -C "$ROOT" rev-parse --short=12 "$BASE")" >&2
+  if [ "$KIND" = app ] && [ "${how#green}" = "$how" ] && [ -n "$(git -C "$SDK" diff HEAD --name-only 2> /dev/null)" ]; then
+    echo "== ci.sh: scope changed: o3sdk has uncommitted changes the app builds against: full run" >&2
+    BASE=; return 1
+  fi
+}
+
+# scope_regex <dir> <mode>: the ctest -R regex (names, anchored) of the tests O3SDK_CI_SCOPE=changed selects, or "all" for a full run, or
+# "none". <dir> is a configured build directory (the labels of its tests). Everything it says about the choice goes to stderr.
+scope_regex() {
+  local dir=$1 f full=0 labels="" names="" docs=0 files n code=0 tree
+  scope_base "$2" || { echo all; return; }
+  tree=$(work_tree "$ROOT") || { echo "== ci.sh: scope changed: cannot read the working tree: full run" >&2; echo all; return; }
+  files=$(git -C "$ROOT" diff-tree -r --name-only "$BASE" "$tree" | sort -u)
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     case "$f" in
@@ -127,8 +224,12 @@ scope_regex() {
     esac
     [ "$full" = 0 ] || { echo "== ci.sh: scope changed: $f is shared or unmapped: full run" >&2; echo all; return; }
   done <<< "$files"
+  if [ "$code" = 1 ] || [ "$docs" = 1 ]; then
+    [ -f "$dir/CTestTestfile.cmake" ] || { echo "== ci.sh: scope changed: $dir is not a configured build directory to take the labels from: full run" >&2; echo all; return; }
+  fi
   if [ "$code" = 1 ]; then
     labels=$(ctest --test-dir "$dir" --print-labels | sed -n 's/^  //p' | grep -Ev '^(tools|docs|template|mk66)$' | paste -sd'|')
+    [ -n "$labels" ] || { echo "== ci.sh: scope changed: $dir has no area label to map code to (stale or tests off): full run" >&2; echo all; return; }
     [ "$docs" = 0 ] || labels="$labels|docs"
   elif [ "$docs" = 1 ]; then
     labels=docs
@@ -137,7 +238,7 @@ scope_regex() {
     names="$names|$(ctest --test-dir "$dir" -N -L "^($labels)$" | sed -n 's/^ *Test *#[0-9]*: //p' | paste -sd'|')"
   fi
   names=${names#|}; names=${names%|}
-  echo "== ci.sh: scope changed: $(printf '%s\n' "$files" | grep -c .) file(s) since $(git -C "$ROOT" rev-parse --short "$base"), labels: ${labels:-none}" >&2
+  echo "== ci.sh: scope changed: $(printf '%s\n' "$files" | grep -c .) file(s) since $(git -C "$ROOT" rev-parse --short "$BASE"), labels: ${labels:-none}" >&2
   if [ -z "${names//|/}" ]; then echo none; else echo "^($names)\$"; fi
 }
 
@@ -147,6 +248,12 @@ head_of() { git -C "$1" rev-parse --short=12 HEAD 2> /dev/null || echo "(not a g
 run_mode() {
   local mode=$1; shift
   local dir="$ROOT/build-ci-$mode"
+  # The tree this run tests, taken before the build: it becomes the green ref when the run is a full one that passes and the tree has not moved.
+  local gtree="" gsdk=""
+  if [ -z "${O3SDK_CI_TESTS:-}" ] && [ "${O3SDK_CI_SLOW:-1}" != 0 ] && [ "${O3SDK_CI_GREEN:-1}" != 0 ]; then
+    gtree=$(work_tree "$ROOT") || gtree=""
+    if [ "$KIND" = app ]; then gsdk=$(work_tree "$SDK") || gtree=""; fi
+  fi
   echo "== ci.sh $mode: $(basename "$ROOT") $(head_of "$ROOT")$([ "$KIND" = sdk ] || echo ", o3sdk $SDK at $(head_of "$SDK")"); $(cmake --version | sed -n 1p), $JOBS jobs${CCACHE_BASEDIR:+, ccache}"
   if [ "${O3SDK_CI_KEEP:-1}" != 1 ]; then rm -rf "$dir"; fi
   mkdir -p "$dir"
@@ -173,7 +280,7 @@ run_mode() {
   if [ -n "${O3SDK_CI_TESTS:-}" ]; then
     sel=$O3SDK_CI_TESTS
   elif [ "${O3SDK_CI_SCOPE:-}" = changed ]; then
-    sel=$(scope_regex "$dir")
+    sel=$(scope_regex "$dir" "$mode")
     case "$sel" in
       all) sel="" ;;
       none) echo "== ci.sh $mode: scope changed: no test covers what changed; build only"; echo "== ci.sh $mode: OK"; return ;;
@@ -181,11 +288,21 @@ run_mode() {
   fi
   if [ -n "$sel" ]; then args+=(-R "$sel"); fi
   args+=(${slow[@]+"${slow[@]}"})
-  local total picked
+  local total picked now
   total=$(ctest --test-dir "$dir" -N | sed -n 's/^Total Tests: //p')
   picked=$(ctest "${args[@]}" -N | sed -n 's/^Total Tests: //p')
   echo "== ci.sh $mode: ctest${sel:+ -R '$sel'}${slow[0]+ -LE slow}: $picked of $total tests"
   ctest "${args[@]}" || die "$mode: ctest failed"
+  if [ -n "$gtree" ] && [ -z "$sel" ]; then
+    now=$(work_tree "$ROOT") || now=""
+    if [ "$now" != "$gtree" ]; then
+      echo "== ci.sh $mode: the working tree changed during the run: no green ref"
+    elif [ "$KIND" = app ] && [ "$(work_tree "$SDK" || true)" != "$gsdk" ]; then
+      echo "== ci.sh $mode: the o3sdk tree changed during the run: no green ref"
+    else
+      record_green "$mode" "$(commit_for "$ROOT" "$gtree")" "$gsdk" || echo "== ci.sh $mode: could not record the green ref"
+    fi
+  fi
   echo "== ci.sh $mode: OK"
 }
 
@@ -210,6 +327,11 @@ images() {
   fi
 }
 
+case "$HELPER" in
+  --scope) [ $# -eq 2 ] || usage; need git; need ctest; scope_regex "$1" "$2"; exit 0 ;;
+  --snapshot) [ $# -eq 2 ] || usage; need git; snapshot "$1" "$2"; exit 0 ;;
+  --record-green) [ $# -ge 2 ] || usage; need git; record_green "$@"; exit $? ;;
+esac
 case "${O3SDK_CI_SCOPE:-}" in ""|changed) ;; *) die "O3SDK_CI_SCOPE must be 'changed' (or unset)" ;; esac
 case "${O3SDK_CI_SLOW:-1}" in 0|1) ;; *) die "O3SDK_CI_SLOW must be 0 or 1" ;; esac
 need cmake; need ctest; need python3

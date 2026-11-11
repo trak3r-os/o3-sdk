@@ -34,10 +34,22 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
   any such test. **Timing tests run only on a quiet machine or on the remote**; a failure of one at a load of 16 or more is the load, until a rerun on a quiet
   machine says otherwise. A test that measures time gets `LABELS "<area>;slow;timing"` (`o3sdk_test_labels(<test> AREA <area> SLOW)` does not add `timing`).
 - `O3SDK_CI_TESTS=<regex>` (`ctest -R`) is the narrowest run: the one test you touched. `O3SDK_CI_SLOW=0` leaves the `slow` label out.
-- `O3SDK_CI_SCOPE=changed` maps the files changed since `git merge-base HEAD origin/main`, plus the uncommitted and untracked ones, to tests
-  (the table is at the top of `tools/ci.sh`): `tests/<x>_test.cpp` runs that ctest, app, unit and scenario files every label but
-  tools, docs, template and mk66, markdown and `docs/` the `docs` label. A CMake file, a shared header (`include/`), `kit/`, `sim/`,
-  `platform/`, anything unmapped, an uncommitted change in the o3sdk an app builds against, or no `origin/main`, is a full run.
+- `O3SDK_CI_SCOPE=changed` maps the files changed since the **base** to tests (the table is at the top of `tools/ci.sh`): `tests/<x>_test.cpp`
+  runs that ctest, app, unit and scenario files every label but tools, docs, template and mk66, markdown and `docs/` the `docs` label,
+  `.claude/` and the CI scripts nothing. A CMake file, a shared header (`include/`), `kit/`, `sim/`, `platform/`, anything unmapped, or no
+  base at all, is a full run. When the files map to no test, the run builds and stops ("no test covers what changed").
+- **The base**, in order: `O3SDK_CI_BASE=<rev>`; else the **green ref** `refs/ci/green/<mode>`; else `git merge-base HEAD origin/main`; else a full
+  run. Changed files are those that differ from the base in the working tree (so a change reverted since the green run counts, and a
+  deleted file does), plus the untracked files that are not ignored. One line says which base was used. In an app, a recorded green base also
+  holds the o3sdk tree (`refs/ci/green/<mode>-sdk`): a different or missing o3sdk tree is a full run, and with the other bases an uncommitted
+  change in the o3sdk is.
+- **The green ref.** After a full run that passes (`rc=0`, no `O3SDK_CI_TESTS`, no `O3SDK_CI_SCOPE` filter, `O3SDK_CI_SLOW` not 0), `ci.sh` records
+  the exact tree it tested, taken before the build, as a snapshot commit and points `refs/ci/green/<mode>` at it, only if the tree is unchanged
+  when the run ends (otherwise "no green ref"). A local run records itself; `remote_ci.sh` points the local ref at the snapshot it pushed, on a
+  green run and on a cache hit (the remote runs with `O3SDK_CI_GREEN=0`). The refs live in the git common dir, so worktrees share them, and
+  they keep the snapshot objects from `git gc`. `O3SDK_CI_GREEN=0` records nothing. The shared code is in `ci.sh`: `ci.sh --snapshot <dir> <sdk>`,
+  `--scope <dir> <mode>` and `--record-green <mode> <commit> [sdk-tree]` are its helpers for `remote_ci.sh` (not for hands).
+- `O3SDK_CI_TESTS` takes letters, digits and `_ . | ^ $ * + ? ( ) [ ] -` only.
 - Habits. **One run per checkout at a time** (two at once take 2 to 3 times as long each). **Filtered runs while iterating**
   (`O3SDK_CI_TESTS`, `O3SDK_CI_SCOPE=changed`, `ctest -L`); **one full run per batch**, not per item, the last one with
   `O3SDK_CI_KEEP=0` when the batch ends in a release or a push. **Jobs are the machine's threads divided by the runs that go at once**
@@ -66,11 +78,19 @@ its build directory: candidates go through `fw-gate-check` and the maintainer.
   incremental; `dev` and `gate` start fresh. One run per slot at a time: a second waits (a `flock` on
   `<git common dir>/remote-ci-slot-<slot>.lock`, shared by the worktrees, held for the whole run and not inherited by ssh). If the push of
   `refs/ci/<sha>` fails, `ls-remote` is checked and the run goes on when the ref already holds the sha. `O3SDK_CI_TESTS`, `O3SDK_CI_KEEP=0|1`
-  and `O3SDK_CI_SLOW=0|1` are passed on, `O3SDK_REMOTE_JOBS` as `O3SDK_CI_JOBS`; `O3SDK_CI_SCOPE` is not (the machine has no `origin/main`).
+  and `O3SDK_CI_SLOW=0|1` are passed on, `O3SDK_REMOTE_JOBS` as `O3SDK_CI_JOBS`; `O3SDK_CI_SCOPE` is not passed (see the next item).
 - **Green cache.** After `rc=0` of a full run (no `O3SDK_CI_TESTS`), `<git common dir>/ci-green.log` gets the line `<key> <mode> <date> <slot>`; the key
   is the sha1 of the snapshot tree (an app: its tree and the o3sdk tree it builds against), the mode and the environment sent to the machine (not the job
   count). A later run of the same trees skips a mode whose key is there ("already green for this tree") and exits 0 without ssh when all are skipped.
   A filtered run is never cached. `O3SDK_CI_FORCE=1` runs anyway: use it after changing the machine (toolchain, wrapper), which the key does not cover.
+- **`O3SDK_CI_SCOPE=changed`** is worked out locally, with the same code as `ci.sh` (the base above, the test names of the configured
+  `build-ci-host` or `build-host`, else a full run), once per mode, and the result is what is sent: `none` for every mode sends nothing and exits 0 with
+  the reason; `all` (any mode) is a normal full run, cacheable and green-recorded; otherwise the union of the modes' regexes goes as
+  `O3SDK_CI_TESTS` (a filtered run: not cached, no green ref; more than 30000 characters is a full run).
+- **Evidence for `verify_gate.py`.** When the machine ran the tests to an rc (the `tests passed|tests failed` line and `rc=` came back),
+  `remote_ci.sh` touches `<git common dir>/ci-remote-last-run`; exit 3 and 255 do not. The Stop hook counts the newer of that file and the
+  newest `build*/Testing/Temporary/LastTest.log` as "ctest ran after your last edit", so a remote run satisfies it; its nudge names
+  `tools/remote_ci.sh host` with `O3SDK_CI_SCOPE=changed` or `O3SDK_CI_TESTS` as the check to prefer while RAM is short.
 - **Jobs by load.** With `O3SDK_REMOTE_JOBS` unset the run asks the machine how many of its four turn locks are busy and sends
   `O3SDK_CI_JOBS=nproc/(busy+1)`, at least 4.
 

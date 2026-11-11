@@ -8,8 +8,9 @@ commands that look like a write and name a code file (sed -i, a python heredoc, 
 gets `transcript_path`, a SubagentStop hook `agent_transcript_path`. Without a transcript the hook does nothing.
 
 The evidence is the file time of ctest's own log: the newest build*/Testing/Temporary/LastTest.log of any build directory
-(build-host, build-m2-<slice>-host, build-mk66, ...). A run of any ctest after the edit satisfies it; the hook cannot tell which
-tests ran, so the final report must still quote the command and its result.
+(build-host, build-m2-<slice>-host, build-mk66, ...), or of <git common dir>/ci-remote-last-run, which tools/remote_ci.sh touches whenever the
+remote machine ran its tests to a verdict (green or red; not on exit 3 or 255, nor when the run died before ctest). A run of any ctest after
+the edit satisfies it; the hook cannot tell which tests ran, so the final report must still quote the command and its result.
 A Bash command counts only if it ran in this tree (`elsewhere`): a session opened here that works in a sibling repository names files
 that are not these.
 `stop_hook_active` guarantees a single nudge, never a loop. Fails open on anything unexpected.
@@ -19,6 +20,7 @@ import glob
 import json
 import os
 import re
+import subprocess
 import sys
 import tempfile
 
@@ -31,6 +33,7 @@ CODE_DIRS = ("kit/", "units/", "apps/", "app/", "platform/", "sim/", "tests/", "
 CODE_FILES = ("CMakeLists.txt",)
 CODE_EXT = (".c", ".cc", ".cpp", ".h", ".hh", ".hpp", ".py", ".txt", ".cmake", ".ld", ".in", ".s", ".S", ".sh")
 LOG = os.path.join("Testing", "Temporary", "LastTest.log")
+REMOTE_MARKER = "ci-remote-last-run"  # in the git common dir; tools/remote_ci.sh touches it after a remote run that reached its tests' verdict
 MAX_LINES_SCANNED = 400000
 CHDIR = re.compile(r"(?:^|[;&|(\n])\s*cd\s+(\S+)|\bgit\s+-C\s+(\S+)")
 ASSIGN = re.compile(r"(?:^|[;&|(\s])([A-Za-z_]\w*)=(/[^\s;&|]*)")
@@ -44,6 +47,19 @@ def newest(paths):
         except OSError:
             pass
     return max(times) if times else 0.0
+
+
+def remote_evidence(root):
+    """File time of <git common dir>/ci-remote-last-run, 0.0 when there is none, no git or anything fails (fail open)."""
+    try:
+        out = subprocess.run(["git", "-C", root, "rev-parse", "--git-common-dir"], capture_output=True, text=True, timeout=5,
+                             check=False)
+        common = out.stdout.strip()
+        if out.returncode != 0 or not common:
+            return 0.0
+        return newest([os.path.join(root, common, REMOTE_MARKER)])  # an absolute common dir stays as it is
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return 0.0
 
 
 def transcript_edits(transcript):
@@ -126,18 +142,20 @@ def verdict(root, transcript):
                 mine.setdefault(rel, mtime)
     if not mine:
         return None
-    evidence = newest(glob.glob(os.path.join(root, "build*", LOG)))
+    evidence = max(newest(glob.glob(os.path.join(root, "build*", LOG))), remote_evidence(root))
     stale = sorted(f for f, mtime in mine.items() if mtime > evidence)
     if not stale:
         return None
     build_system = [f for f in stale if f.endswith(("CMakeLists.txt", ".cmake")) or f.startswith("cmake/")]
     cross = [f for f in stale if f.startswith(("platform/mk66", "cmake/")) or f.endswith(".ld")]
-    steps = ["nice -n 10 cmake --build build-host -j4 && nice -n 10 ctest --test-dir build-host --output-on-failure -L <area> | -R <test>"
+    steps = ["while RAM is short, the preferred check is the remote machine: O3SDK_CI_SCOPE=changed tools/remote_ci.sh host "
+             "(or O3SDK_CI_TESTS=<regex> tools/remote_ci.sh host); its run counts as evidence once it reaches its tests' verdict",
+             "or locally: nice -n 10 cmake --build build-host -j4 && nice -n 10 ctest --test-dir build-host --output-on-failure -L <area> | -R <test>"
              "   (while iterating: only the area or the test you touched, or O3SDK_CI_SCOPE=changed tools/ci.sh host; the full ctest, "
              "no filter, is the batch run before a release or a push; an M2 slice: its own build-m2-<slice>-host directory, "
              "ctest -L mk66 -R <pattern>)"]
     if build_system:
-        steps[0] += "; a build-system change needs a fresh configure first (cmake -S . -B <dir>)"
+        steps[1] += "; a build-system change needs a fresh configure first (cmake -S . -B <dir>)"
     if cross:
         steps.append("nice -n 10 cmake --build <your mk66 build dir> -j4   (platform/mk66, linker or cmake change: the host "
                      "tests do not compile the hardware halves)")
@@ -259,6 +277,27 @@ def selftest():
             bad.append("a platform/mk66 edit should name the cross build")
         case("file outside the tree: no nudge", False,
              {"transcript_path": transcript(tool_line("Edit", file_path="/tmp/elsewhere.cpp"))})
+        # the remote marker: git common dir of the tree, touched by tools/remote_ci.sh
+        subprocess.run(["git", "init", "-q", root], check=True)
+        marker = os.path.join(root, ".git", REMOTE_MARKER)
+        at("kit/core/src/a.cpp", +10)
+        case("a git tree without a marker: nudge", True, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
+        open(marker, "w").close()
+        t = os.path.getmtime(log) + 20
+        os.utime(marker, (t, t))
+        case("a remote run after the edit: no nudge", False, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
+        t = os.path.getmtime(log) + 5
+        os.utime(marker, (t, t))
+        case("a remote run before the edit: nudge", True, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
+        why = case("the nudge names the remote run", True, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
+        total += 1
+        if not (why and "tools/remote_ci.sh host" in why and "O3SDK_CI_SCOPE=changed" in why and "O3SDK_CI_TESTS" in why):
+            bad.append("the nudge should name tools/remote_ci.sh host with the scope and the tests")
+        at("kit/core/src/a.cpp", -10)
+        t = os.path.getmtime(log) - 100
+        os.utime(marker, (t, t))
+        case("an old marker does not hide a newer log: no nudge", False, {"transcript_path": transcript(tool_line("Edit", file_path=a))})
+        os.remove(marker)
         case("empty transcript: no nudge", False, {"transcript_path": transcript()})
         case("missing transcript: no nudge", False, {"transcript_path": os.path.join(root, "missing.jsonl")})
         case("no transcript at all: no nudge", False, {})

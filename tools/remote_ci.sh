@@ -17,7 +17,10 @@
 #          incremental; the slots `dev` and `gate` start fresh.
 # O3SDK_CI_TESTS=<regex> (ctest -R; letters, digits and _ . | ^ $ * + ? ( ) - only), O3SDK_CI_KEEP=0|1 and O3SDK_CI_SLOW=0|1 are passed on
 # (tools/ci.sh); O3SDK_REMOTE_JOBS=<n> becomes O3SDK_CI_JOBS on the machine (a name of its own, so a local O3SDK_CI_JOBS never reaches it).
-# O3SDK_CI_SCOPE is not passed: the machine's worktree has no origin/main to take a merge-base with; iterate with O3SDK_CI_TESTS.
+# O3SDK_CI_SCOPE=changed is worked out here, by `tools/ci.sh --scope` (the same code as a local run: the base is O3SDK_CI_BASE, else the green
+#          ref refs/ci/green/<mode>, else the merge-base with origin/main; the test names come from a configured local build directory,
+#          build-ci-host or build-host): `none` sends nothing and exits 0; `all` is a normal full run, cacheable; otherwise the regex goes as
+#          O3SDK_CI_TESTS (a filtered run, never cached). Several modes: any `all` makes it all, else the union of the regexes.
 # One run per slot at a time: a run holds flock on <git common dir>/remote-ci-slot-<slot>.lock from before the snapshot to its exit, so two
 #          runs of one slot (same checkout, or worktrees given the same --slot) go one after the other, never checking the slot's worktree out
 #          under a running build; a waiting run prints one line. Runs of different slots go at once, and each slot builds cold the first time:
@@ -26,6 +29,12 @@
 # Green cache: after rc=0 of a full run (no O3SDK_CI_TESTS) the line `<key> <mode> <date> <slot>` goes to <git common dir>/ci-green.log, key
 #          = sha1 of the snapshot tree(s), the mode and the env sent to the machine. A later run of the same tree skips a mode whose key is
 #          there and exits 0 without ssh when all are skipped. O3SDK_CI_FORCE=1 runs anyway (after a remote toolchain change, say).
+# Green ref: a full run that is green (rc=0, no O3SDK_CI_TESTS or scope regex, no O3SDK_CI_SLOW=0), or a mode the cache skips, points the local
+#          ref refs/ci/green/<mode> at the snapshot commit pushed (an app also stores the o3sdk tree in refs/ci/green/<mode>-sdk), the base of
+#          O3SDK_CI_SCOPE=changed (tools/ci.sh). The machine's own ci.sh records nothing (O3SDK_CI_GREEN=0).
+# Evidence: whenever the machine ran its tests to an rc, green or red (a ctest summary and `rc=` in the answer), <git common dir>/ci-remote-last-run
+#          is touched, as a local ctest run writes its LastTest.log: .claude/hooks/verify_gate.py counts the newer of the two. Exit 3, 255,
+#          a failed push, a run that died before ctest and the green cache's skip touch nothing.
 # Jobs: without O3SDK_REMOTE_JOBS the run asks the machine how many of its four turns are busy and takes nproc/(busy+1), at least 4.
 # The full log is copied to build-remote/<log name> (untracked). Exit: the run's (tools/ci.sh); 2 bad usage; 3 no remote configured
 # (run tools/ci.sh locally); 255 ssh failed (the machine is off or unreachable: run tools/ci.sh locally).
@@ -63,9 +72,10 @@ case "$root" in *[!A-Za-z0-9._/-]*) echo "remote_ci: the root in O3SDK_REMOTE_CI
 envs=
 case "${O3SDK_CI_TESTS:-}" in
   "") ;;
-  *[!A-Za-z0-9_.\|^\$*+?\(\)-]*) echo "remote_ci: O3SDK_CI_TESTS may hold only letters, digits and _ . | ^ \$ * + ? ( ) -" >&2; exit 2 ;;
+  *[!][A-Za-z0-9_.\|^\$*+?\(\)-]*) echo "remote_ci: O3SDK_CI_TESTS may hold only letters, digits and _ . | ^ \$ * + ? ( ) [ ] -" >&2; exit 2 ;;
   *) envs="${envs}O3SDK_CI_TESTS='$O3SDK_CI_TESTS' " ;;
 esac
+case "${O3SDK_CI_SCOPE:-}" in ""|changed) ;; *) echo "remote_ci: O3SDK_CI_SCOPE must be 'changed' (or unset)" >&2; exit 2 ;; esac
 case "${O3SDK_CI_KEEP:-}" in
   "") ;;
   0|1) envs="${envs}O3SDK_CI_KEEP=$O3SDK_CI_KEEP " ;;
@@ -99,28 +109,10 @@ if ! flock -n 9; then
 fi
 
 ssh_opts=(-o BatchMode=yes -o ConnectTimeout=10)
-tmp=$(mktemp -d) || exit 2
-trap 'rm -rf "$tmp"' EXIT
 
-# snapshot <dir> <name>: prints the commit that holds <dir>'s working tree: HEAD when the tree is clean, else a snapshot commit on
-# top of it, made in a temporary index (HEAD's index plus every tracked change and untracked file that git does not ignore).
-snapshot() (
-  cd "$1" || exit 2
-  idx=$tmp/index.$2
-  cp "$(git rev-parse --git-path index)" "$idx" || exit 2
-  GIT_INDEX_FILE=$idx git add -u -- . || exit 2
-  git ls-files -z --others --exclude-standard | GIT_INDEX_FILE=$idx xargs -0 -r git add -- || exit 2
-  tree=$(GIT_INDEX_FILE=$idx git write-tree) || exit 2
-  head=$(git rev-parse HEAD) || exit 2
-  if [ "$tree" = "$(git rev-parse "HEAD^{tree}")" ]; then
-    echo "remote_ci: $2 HEAD $(git rev-parse --short HEAD), clean tree" >&2
-    echo "$head"
-  else
-    sha=$(git commit-tree "$tree" -p "$head" -m "remote_ci snapshot of $(git rev-parse --short HEAD)") || exit 2
-    echo "remote_ci: $2 snapshot $(git rev-parse --short "$sha") of HEAD $(git rev-parse --short HEAD) plus the working tree" >&2
-    echo "$sha"
-  fi
-)
+# snapshot <dir> <name>: prints the commit that holds <dir>'s working tree: HEAD when the tree is clean, else a snapshot commit on top of
+# it, made in a temporary index (tools/ci.sh --snapshot: the code a local run's green ref uses too).
+snapshot() { "$top/tools/ci.sh" --snapshot "$1" "$2" 9>&-; }
 
 # push <dir> <sha> <bare repository name>: the commit to refs/ci/<sha> of <root>/<name>; a new ref per commit, never forced. A second run
 # of the same commit may have pushed the ref between our snapshot and our push: then the ref holds <sha> and the push counts as done.
@@ -141,7 +133,41 @@ else
   sdk=$(git -C "$sdk" rev-parse --show-toplevel) || exit 2
   sha=$(snapshot "$top" "$(basename "$top")") || exit 2
   sdk_sha=$(snapshot "$sdk" o3-sdk) || exit 2
-  tree="$(git -C "$top" rev-parse "$sha^{tree}") $(git -C "$sdk" rev-parse "$sdk_sha^{tree}")" || exit 2
+  sdk_tree=$(git -C "$sdk" rev-parse "$sdk_sha^{tree}") || exit 2
+  tree="$(git -C "$top" rev-parse "$sha^{tree}") $sdk_tree" || exit 2
+fi
+
+# O3SDK_CI_SCOPE=changed: the scope is worked out here (the machine's worktree has no history to diff against).
+filtered=0
+[ -z "${O3SDK_CI_TESTS:-}" ] || filtered=1
+if [ "${O3SDK_CI_SCOPE:-}" = changed ] && [ $filtered = 0 ]; then
+  scopedir=$top/build-host
+  for d in build-ci-host build-host; do
+    if [ -f "$top/$d/CTestTestfile.cmake" ]; then scopedir=$top/$d; break; fi
+  done
+  scoped=
+  anym=0
+  for m in "$@"; do
+    r=$("$top/tools/ci.sh" --scope "$scopedir" "$m" 9>&-) || { echo "remote_ci: tools/ci.sh --scope failed" >&2; exit 2; }
+    case "$r" in
+      all) anym=1 ;;
+      none) ;;
+      *) r=${r#^(}; r=${r%)\$}; scoped="$scoped|$r" ;;
+    esac
+  done
+  scoped=${scoped#|}
+  if [ $anym = 1 ]; then
+    echo "remote_ci: scope changed: a full run"
+  elif [ -z "$scoped" ]; then
+    echo "remote_ci: scope changed: no test covers what changed since the base; nothing sent (exit 0)"
+    exit 0
+  elif [ ${#scoped} -gt 30000 ]; then
+    echo "remote_ci: scope changed: the regex is too long to send: a full run"
+  else
+    envs="${envs}O3SDK_CI_TESTS='^($scoped)\$' "
+    filtered=1
+    echo "remote_ci: scope changed: O3SDK_CI_TESTS sent, ${#scoped} characters (a filtered run is not cached)"
+  fi
 fi
 
 # Green cache: a mode this exact tree (the app's and, in an app, the o3sdk tree it builds against) already passed in full is skipped; when
@@ -151,7 +177,17 @@ fi
 green_log=$(git rev-parse --path-format=absolute --git-common-dir)/ci-green.log
 keyenv=$(printf '%s' "$envs" | sed 's/O3SDK_CI_JOBS=[0-9]* //g')
 cacheable=0
-[ -z "${O3SDK_CI_TESTS:-}" ] && cacheable=1
+[ $filtered = 0 ] && cacheable=1
+common=$(git rev-parse --path-format=absolute --git-common-dir)
+# record_green <mode>: the local green ref of a full, green mode (not with O3SDK_CI_SLOW=0, a run that left tests out).
+record_green() {
+  [ $cacheable = 1 ] && [ "${O3SDK_CI_SLOW:-1}" != 0 ] || return 0
+  if [ -f "$top/cmake/O3sdkPlatform.cmake" ]; then
+    "$top/tools/ci.sh" --record-green "$1" "$sha" 9>&-
+  else
+    "$top/tools/ci.sh" --record-green "$1" "$sha" "$sdk_tree" 9>&-
+  fi || echo "remote_ci: could not record the green ref of $1" >&2
+}
 modekey() { printf '%s' "$tree $1 $keyenv" | sha1sum | cut -d' ' -f1; }
 if [ $cacheable = 1 ] && [ "${O3SDK_CI_FORCE:-}" != 1 ]; then
   todo=()
@@ -160,6 +196,7 @@ if [ $cacheable = 1 ] && [ "${O3SDK_CI_FORCE:-}" != 1 ]; then
     if [ -n "$hit" ]; then
       read -r _ hmode hdate hslot <<< "$hit"
       echo "remote_ci: $hmode already green for this tree ($hdate, slot $hslot); skipped (O3SDK_CI_FORCE=1 runs it anyway)"
+      record_green "$m"
     else
       todo+=("$m")
     fi
@@ -194,12 +231,15 @@ else
 fi
 
 echo "remote_ci: slot $slot, modes $*; waiting for a CI turn if the machine's four are taken"
-out=$(ssh "${ssh_opts[@]}" "$host" "$envs$cmd" 9>&-)
+out=$(ssh "${ssh_opts[@]}" "$host" "O3SDK_CI_GREEN=0 $envs$cmd" 9>&-)
 rc=$?
 printf '%s\n' "$out"
 printed_rc=$(printf '%s\n' "$out" | sed -n 's/.*rc=\([0-9]*\) secs=.*/\1/p' | tail -1)
+if [ -n "$printed_rc" ] && printf '%s\n' "$out" | grep -Eq 'tests passed|tests failed'; then
+  touch "$common/ci-remote-last-run"  # evidence for verify_gate.py: the tests ran to a verdict
+fi
 if [ $rc -eq 0 ] && [ "$printed_rc" = 0 ] && [ $cacheable = 1 ]; then
-  for m in "$@"; do echo "$(modekey "$m") $m $(date +%F) $slot" >> "$green_log"; done
+  for m in "$@"; do echo "$(modekey "$m") $m $(date +%F) $slot" >> "$green_log"; record_green "$m"; done
 fi
 log=$(printf '%s\n' "$out" | head -1)
 case "$log" in
