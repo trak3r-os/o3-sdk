@@ -27,6 +27,16 @@
 //   set_hiss       0..1: noise at the narrowest section, only while that section is under 0.3 wide (a consonant's turbulence); it follows the
 //                  level of the source (not of the tube's own output: that would feed the noise back into itself)
 //   set_mix        0..1, a 5 ms ramp; below 1e-3 and settled the signal passes bit for bit and no state runs (bypassed())
+//   set_areas      the other way to drive the tube: n relative areas (2..kMaxAreas, section 0 the glottis, n - 1 the lips) in place of the
+//                  vowel, the bends and the shape's closures. The areas are normalised (the widest section becomes the open tract, diameter
+//                  1.5 in the shape's unit, whatever the scale the caller used), each diameter clamped to kMinDiameter..1.5, and stretched over
+//                  the tube's current N (linearly in diameter, so a different N or a size change needs no new call). The diameters follow with
+//                  the same one pole as the vowel (GLIDE), every control step, so a stream of new areas (a live analysis, one per few ms) is
+//                  smooth. A NaN, an infinity, an area <= 0, a null pointer or n < 2 makes the call a no-op: the last areas stay. The
+//                  closures still act on the wet gain (a stop silences) but no longer shape the tube; the hiss still follows the narrowest
+//                  section. use_shape() goes back: the diameters glide from the areas to the vowel's shape (GLIDE) and then the vowel path
+//                  runs as if set_areas had never been called. The vowel, the bends and the closures keep moving while the areas rule, so
+//                  the way back lands on where they are by then
 // A NaN parameter takes its default. All setters are real-time safe (a few float operations; set_glide_ms, set_res and prepare call
 // expf or sqrtf once).
 //
@@ -44,6 +54,12 @@
 //   the left-going wave stays in registers and one load of b, one of k and one store serve every lane); the half-band stages are inline; the
 //   wet gain and the control step use integer tests (sanitize) and a three-way max instead of fmax calls.
 //
+// The area path is a per-control-step branch (LT1): process() and run() are untouched, a processor never given areas takes the branch
+// `area_mode_ != 0` (one byte compared, once per 16 frames) and runs the code it always ran, bit for bit (tests/areas_test.cpp pins a digest
+// taken before the entry existed). In area mode a control step costs about 22 one-pole steps (about 90 cycles when settled) and, while the
+// areas move, the N divisions of Tube::set_diameters and the narrowest-section search [est: about 800 cycles a step, 3,200 a block of 64 at
+// Full while a live shape moves on every step; a unit measurement is owed]; set_areas itself is about 200 cycles at 13 areas.
+//
 // No heap, no double, all state is members (under 1.5 KB); the processor is not copyable on purpose (a unit holds one).
 #pragma once
 
@@ -60,6 +76,7 @@ class Processor {
 
   static constexpr unsigned kPeriod = 16;        // frames between two control steps
   static constexpr float kMakeup = 1.2f;         // the static part of the wet gain (see the level trim): the middle of the vowels at RES 0.5
+  static constexpr unsigned kMaxAreas = 24;      // the most areas set_areas takes
 
   explicit Processor(Quality q) noexcept;
   Processor(const Processor&) = delete;
@@ -76,6 +93,8 @@ class Processor {
   void set_res(float r) noexcept;
   void set_hiss(float h) noexcept;
   void set_mix(float m) noexcept;
+  void set_areas(const float* area, unsigned n) noexcept;   // drive the tube from n areas (see the header); invalid input is ignored
+  void use_shape() noexcept;                     // back to the vowel path, through a glide of the diameters
 
   // Mono, any n, `in` may equal `out`.
   void process(const float* in, float* out, std::uint32_t n) noexcept;
@@ -83,12 +102,17 @@ class Processor {
   bool bypassed() const noexcept { return mix_t_ < 1e-3f && mix_ <= 0.0f; }   // Mix 0 and settled
   unsigned sections() const noexcept { return tube_.size(); }
   Quality quality() const noexcept { return quality_; }
+  bool areas_active() const noexcept { return area_mode_ != 0; }   // set_areas rules (or the way back to the shape is still gliding)
 
  private:
   void control() noexcept;
   template <bool Lite>
   void run(const float* in, float* out, std::uint32_t n) noexcept;   // process() of one quality
   void update_shape() noexcept;
+  void shape_diameters(float* d, unsigned n) const noexcept;   // the vowel path's diameters for the current smoothed values
+  void commit_diameters(unsigned n) noexcept;    // diam_ to the tube; the narrowest section and the hiss
+  void area_step() noexcept;                     // the control step of area mode
+  void resample_areas(unsigned n) noexcept;      // src_d_ stretched over n sections into dt_
   void wake() noexcept;                          // clears the DSP state (not the smoothers' targets) and snaps the shape
   unsigned size_to_sections(int steps) const noexcept;
   void apply_ends() noexcept;
@@ -102,6 +126,10 @@ class Processor {
   HalfbandUp up_[2];
   alignas(8) float queue_[4] = {};               // the up-sampled tract sample: one value per frame of the group
   alignas(8) float diam_[Tube::kMaxSections] = {};
+  // Area mode (set_areas): the caller's diameters (normalised, clamped), their stretch over the tube, and the bookkeeping. All of it is
+  // touched from the unit's one context (set_areas and process are called from the same thread, like every setter).
+  alignas(8) float src_d_[kMaxAreas] = {};
+  alignas(8) float dt_[Tube::kMaxSections] = {};
 
   // Targets (set from the unit's thread, read in process: the unit calls both from one context) and smoothed values.
   float vowel_t_ = 0.0f, vowel_ = 0.0f;
@@ -125,7 +153,11 @@ class Processor {
   unsigned ctl_ = 0;                             // frames to the next control step
   unsigned hiss_j_ = 0;                          // the narrowest section
   unsigned n_pending_;                           // the size asked for
+  unsigned src_n_ = 0;                           // the number of areas in src_d_
+  unsigned live_n_ = 0;                          // the section count diam_ and dt_ are laid out for in area mode; 0 or another N: snap
   std::uint8_t dip_state_ = 0;                   // 0 idle, 1 falling to 0, 2 rising to 1
+  std::uint8_t area_mode_ = 0;                   // 0 the vowel path, 1 areas rule, 2 gliding back to the shape
+  bool area_new_ = false;                        // src_d_ has new values to stretch
   bool shape_dirty_ = true;
   bool dormant_ = false;                         // the last block was a bypass
 };

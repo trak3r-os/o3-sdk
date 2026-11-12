@@ -21,7 +21,18 @@ the dry signal. It is opt-in: the sdk never builds it; a project that wants it d
 `Processor(Quality::Full | Quality::Lite)`, `prepare(fs)`, `reset()`, `set_vowel(0..1)`, `set_bend(tongue, jaw, lips)`,
 `set_closure(lips | tip | back, on)`, `set_glide_ms`, `set_size(-2..+2)`, `set_res`, `set_hiss`, `set_mix`, `process(in, out, n)` (any n, in may
 equal out). A NaN parameter takes its default. Bypass (`mix 0`) passes the signal bit for bit. Every block size gives the same samples.
-The state is under 1.5 KB; there is no heap, no `double`.
+The state is under 1.5 KB (1,448 bytes on the host, `static_assert` at 1,536); there is no heap, no `double`.
+
+**Areas entry** (additive): `set_areas(area, n)` hands the tube cross-section areas, glottis first and lips last, 2 to `kMaxAreas` (24)
+values; `use_shape()` goes back to the vowel/bend path; `areas_active()` says which is in charge. The areas are in any scale (the widest is the
+open tract, each section's diameter is the square root of its area relative to the widest, clamped to `kMinDiameter`..the open diameter),
+are stretched linearly in diameter over the tube's N sections, and are followed with the vowel's own one-pole GLIDE, so a caller can hand a new
+set every block. A call with a null pointer, n < 2, or a value that is not finite, not positive or above 1e30 is ignored whole. Closures still
+silence the output (the wet gain) but do not shape the tube while the areas rule; the hiss follows the narrowest section. `use_shape()` glides to
+the vowel's shape and then runs the old path. The old path is bit for bit what it was before the entry (`tests/areas_test.cpp` pins the digest
+of a fixed run taken from the sources before it existed), and `process` is untouched: the entry adds one byte compare per control step (every
+16 frames) when unused; in use the control step re-resolves the shape, about 3,200 cycles per 64-frame block while it moves (a settled
+tube, about 90 cycles a step) [est]. A unit measurement is owed.
 
 ## What differs from the plan, and why
 
@@ -48,4 +59,5 @@ owed (skill `rt-optimize`).
 
 `tube_test.cpp` (formants of a uniform tube, the two-tube sign test, passivity under realistic motion, decay, sanitize), `shape_test.cpp`
 (the five vowels at N = 22 and 11, anchors, closures), `halfband_test.cpp` (ripple, rejection, delay, reset), `processor_test.cpp` (bypass,
-block-size independence, clicks, closure, size change, level, silence, NaN). The ear on the unit is the check no host test gives.
+block-size independence, clicks, closure, size change, level, silence, NaN), `areas_test.cpp` (the legacy digest, the areas entry: identity with
+the vowel path, stretch and size change, clamp, garbage, glide, block size, closure, bypass, the way back). The ear on the unit is the check no host test gives.

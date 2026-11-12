@@ -13,6 +13,7 @@ namespace o3sdk::extras::tract {
 namespace {
 
 constexpr float kSettle = 2e-4f;       // a one-pole lands on its target when this close
+constexpr float kAreaHuge = 1.0e30f;   // set_areas takes areas under this (its sqrt and a ratio stay finite)
 constexpr float kHissOpen = 0.3f;      // a section narrower than this makes turbulence
 constexpr float kWetMax = 8.0f;        // the wet signal is clamped here
 constexpr std::uint32_t kWetMaxBits = 0x41000000u;   // the bits of kWetMax (8.0f)
@@ -104,6 +105,8 @@ void Processor::wake() noexcept {
   dip_ = 1.0f;
   dip_state_ = 0;
   tube_.set_size(n_pending_);
+  live_n_ = 0;   // area mode: the next control step lands on the areas (the state is cleared, a glide has nothing to start from)
+  if (area_mode_ == 2) area_mode_ = 0;   // and a way back to the shape is taken at once: update_shape lands on it
   vowel_ = vowel_t_;
   for (unsigned i = 0; i < 3; ++i) {
     bend_[i] = bend_t_[i];
@@ -158,13 +161,15 @@ void Processor::set_mix(float m) noexcept {
   mix_t_ = v < 1e-3f ? 0.0f : v;
 }
 
-void Processor::update_shape() noexcept {
+void Processor::shape_diameters(float* d, unsigned n) const noexcept {
   Shape s = vowel_shape(vowel_);
   s.tongue += bend_[0];
   s.height -= bend_[1];
   s.lips += bend_[2];
-  const unsigned n = tube_.size();
-  diameters(s, clos_, n, diam_);
+  diameters(s, clos_, n, d);
+}
+
+void Processor::commit_diameters(unsigned n) noexcept {
   tube_.set_diameters(diam_);
   float dmin = diam_[0];
   unsigned j = 0;
@@ -176,7 +181,84 @@ void Processor::update_shape() noexcept {
   }
   hiss_j_ = j;
   hiss_amt_ = (hiss_ > 0.0f && dmin < kHissOpen) ? hiss_ * (kHissOpen - dmin) * (1.0f / kHissOpen) : 0.0f;
+}
+
+void Processor::update_shape() noexcept {
+  const unsigned n = tube_.size();
+  shape_diameters(diam_, n);
+  commit_diameters(n);
   shape_dirty_ = false;
+}
+
+// The areas of the caller as diameters: the widest section is the open tract (the shape model's 1.5), the others follow as sqrt of the ratio,
+// clamped to kMinDiameter..1.5. Anything that is not a finite positive area makes the call a no-op.
+void Processor::set_areas(const float* area, unsigned n) noexcept {
+  if (area == nullptr || n < 2u) return;
+  if (n > kMaxAreas) n = kMaxAreas;
+  float top = 0.0f;
+  for (unsigned i = 0; i < n; ++i) {
+    const float a = area[i];
+    if (!(a > 0.0f) || !(a < kAreaHuge)) return;   // NaN, <= 0 and infinity all fail one of the two
+    top = a > top ? a : top;
+  }
+  const float scale = kAreaModel.open_d / std::sqrt(top);
+  for (unsigned i = 0; i < n; ++i) src_d_[i] = clampf(std::sqrt(area[i]) * scale, kMinDiameter, kAreaModel.open_d);
+  src_n_ = n;
+  area_new_ = true;
+  if (area_mode_ == 0) live_n_ = shape_dirty_ ? 0u : tube_.size();   // diam_ holds the shape: glide from it, unless it is stale (snap)
+  area_mode_ = 1;
+}
+
+void Processor::use_shape() noexcept {
+  if (area_mode_ == 1) area_mode_ = 2;
+}
+
+// src_d_ (src_n_ points, section i the centre of the i-th of src_n equal parts of the tube) stretched over n sections, linear in diameter.
+void Processor::resample_areas(unsigned n) noexcept {
+  const float ratio = static_cast<float>(src_n_) / static_cast<float>(n);
+  const float last = static_cast<float>(src_n_ - 1u);
+  for (unsigned j = 0; j < n; ++j) {
+    float x = (static_cast<float>(j) + 0.5f) * ratio - 0.5f;
+    x = clampf(x, 0.0f, last);
+    unsigned i = static_cast<unsigned>(x);
+    if (i >= src_n_ - 1u) i = src_n_ - 2u;
+    const float f = x - static_cast<float>(i);
+    dt_[j] = src_d_[i] + (src_d_[i + 1u] - src_d_[i]) * f;
+  }
+}
+
+void Processor::area_step() noexcept {
+  const unsigned n = tube_.size();
+  bool refresh = shape_dirty_;
+  if (area_mode_ == 2) {
+    if (live_n_ != n) {   // the size changed under the way back (the dip hides the jump): the vowel path takes over
+      area_mode_ = 0;
+      update_shape();
+      return;
+    }
+    shape_diameters(dt_, n);
+  } else if (live_n_ != n || area_new_) {
+    resample_areas(n);
+    area_new_ = false;
+  }
+  if (live_n_ != n) {   // nothing to glide from (a wake, a size change, a stale shape): land on the target
+    live_n_ = n;
+    for (unsigned i = 0; i < n; ++i) diam_[i] = dt_[i];
+    refresh = true;
+  } else {
+    bool moved = false;
+    for (unsigned i = 0; i < n; ++i) moved |= approach(diam_[i], dt_[i], glide_a_);
+    if (!moved && area_mode_ == 2) {   // landed on the shape: the vowel path again
+      area_mode_ = 0;
+      update_shape();
+      return;
+    }
+    refresh |= moved;
+  }
+  if (refresh) {
+    commit_diameters(n);
+    shape_dirty_ = false;
+  }
 }
 
 void Processor::control() noexcept {
@@ -199,7 +281,8 @@ void Processor::control() noexcept {
   if (ed_ < 1e-20f) ed_ = 0.0f;
   if (ew_ < 1e-20f) ew_ = 0.0f;
   if (dip_state_ == 0 && n_pending_ != tube_.size()) dip_state_ = 1;
-  if (moved) update_shape();
+  if (area_mode_ != 0) area_step();
+  else if (moved) update_shape();
   if (tube_.sanitize()) {
     down_[0].reset();
     down_[1].reset();
